@@ -1,18 +1,28 @@
-# RoBugs — Game Design Doc (v0.1, prototype)
+# RoBugs — Game Design Doc (v0.2)
 
 > Build a bug. Break a bug.
 
-RoBugs is an original mobile game. You collect robotic bug parts, snap them onto a grid to build your own robo-bug, then fight it in hazard-filled arenas. Winning earns new parts and rarer upgrades.
+RoBugs is an original 3D mobile game. You collect robotic bug parts, snap them onto a grid to build your own robo-bug, then fight it in hazard-filled arenas. Winning earns new parts and rarer upgrades.
+
+## 0. Decided (Nov 2026)
+
+| Topic | Decision |
+|---|---|
+| Dimension | **3D.** `expo-gl` + `three`; the sim stays 2D on the arena floor plane and the renderer lifts it into 3D. |
+| Art style | Cartoony and chunky: blocky voxel-style parts, bright colours, toon shading and bold outlines. All our own designs. |
+| Main mode | **Single-player campaign**: a map of opponents with guaranteed first-clear drops and farmable bosses. |
+| Signature moves | Equippable, unlockable moves that **auto-proc** and play a short cutscene. See §6. |
+| PvP | **Later phase.** The sim is already deterministic (seeded RNG, fixed 60 Hz step, input-driven, no rendering) so async/online PvP can be added without a rewrite. |
 
 ## 1. Core loop
 
 ```
-Garage (build) → Arena (fight 1v1 vs AI) → Rewards (new parts) → Garage …
+Garage (build + equip moves) → Campaign map → 3D Arena (1v1 vs AI) → Rewards (guaranteed + rolled) → Garage …
 ```
 
 1. **Build** — place parts on a 5×7 grid. Your layout sets weight, speed, handling, armor and attacks.
-2. **Fight** — drive with a thumbstick. Weapons fire on their own when an enemy part is in their cone and reach. Parts get knocked off one by one.
-3. **Earn** — win to get parts up to the opponent's rarity tier and unlock the next challenger. A loss still gives one common salvage part.
+2. **Fight** — drive with a thumbstick. Weapons fire on their own when an enemy part is in their cone and reach. Basic actions fill your **proc meter**, and equipped signature moves fire on their own when they make sense. Parts get knocked off one by one.
+3. **Earn** — first clears give guaranteed parts and moves. Bosses can be re-fought for rolls on their loot table. A loss still gives one common salvage part.
 
 ## 2. Parts
 
@@ -72,7 +82,36 @@ On top of the hard cap, weight is a soft trade-off: heavier bugs are slower and 
 | **Stomper Foundry** | Central stomper (glows before it slams, then hits the 3 nearest parts hard); acid in the corners; **spiked walls** (hitting a wall fast damages the part that hits it) |
 | **The Hive Ring** | Two stompers out of sync, central acid, spiked walls |
 
-## 6. AI
+## 6. Signature moves
+
+Moves are unlocked like parts (from drops) and **equipped** in the Garage. There are **2 slots**.
+
+**Auto-proc.** The player never presses a button. A bug fires an equipped move when all of these are true:
+1. the move is off cooldown,
+2. the bug has enough **proc points** (PP) for it,
+3. the bug still has the parts the move needs (e.g. *Mandible Crusher* needs living mandibles; break them off and the move is dead), and
+4. the move's **judgement** says now is a good time (target in reach and in front, heavy damage just taken, etc.).
+
+**Proc points** (one constants table, `PROC` in `src/game/moves.ts`, max 100, reset every match):
+
+| Action | PP |
+|---|---|
+| Land a basic hit | +4 |
+| Hit absorbed by your armor | +2 |
+| Break an enemy part | +12 |
+| Take damage | +1 per 5 dmg (comeback) |
+| Survive a stomper / dodge (Skitter) | +6 |
+
+**Ultimates** (`isUltimate(id)`) play a cutscene:
+- **Sim:** casting sets `sim.ult = { id, caster, t, dur: ULT_SECONDS (1.6) }`. While it's set, the rest of the world is frozen and the caster can't be hurt. At `t ≥ dur` the move lands with hit-stop, screen shake and a white flash.
+- **Camera:** swings round to face the caster, low and close (smoothstep ease), pushes in hard over the last ~18% while the FOV narrows ~9°, with a slight handheld drift.
+- **Focus:** the background fades into fog around the caster. *(A true depth-of-field blur pass is a TODO.)*
+- **UI (`UltBanner`):** letterbox bars (~13% of screen height each), and the move name slams in from the right on a skewed stripe in the move's colour, drifts, then flies out left. The HUD hides while it plays.
+- **Charge VFX:** an aura ring with rising sparks around the caster, plus a pose (crouch → rise → rear back).
+
+Starting moves: **Mandible Crusher** (mandibles; heavy multi-part bite), **Venom Barrage** (stinger; fan of darts), **Carapace Lock** (armor; 4 s damage shield), **Skitter Dash** (legs; small, non-ultimate side-dodge).
+
+## 7. AI
 
 A simple steering AI (`aiInput` in `sim.ts`):
 - **Melee builds** charge in and aim a little ahead of where the target is going.
@@ -80,30 +119,40 @@ A simple steering AI (`aiInput` in `sim.ts`):
 - **Hurt, low-aggression** bugs circle instead of charging.
 - **All AI bugs** steer around acid and charging stompers and stay away from walls.
 
-Opponent ladder: Rustmite → Needlewisp → Snapclaw → Ironback → Queen Vexa (boss). Each one is a fixed hand-made build.
+Both bugs use the same move-judgement code.
 
-## 7. Progression
+## 8. Campaign and loot
 
-- New players start with a starter inventory and the *Sprocket* build.
-- **Win**: 2 parts rolled up to the opponent's rarity tier (weights: common 50 / uncommon 30 / rare 15 / epic 6). The **first win** against an opponent also gives one guaranteed part at their top tier.
-- **Loss**: 1 common salvage part.
-- Beating an opponent unlocks the next one. You can rematch any opponent you've unlocked to farm parts.
-- Saves are stored on the device (SQLite key-value store on native, localStorage on web).
+The campaign map (`src/game/campaign.ts`) is a path of nodes. Each node unlocks when its `requires` nodes are cleared.
 
-## 8. Prototype scope (what exists now)
+Each opponent has:
+- `guaranteed: Reward[]` — given **once**, on first clear (parts or moves).
+- `lootTable: { reward, weight }[]` — **weighted rolls, repeatable.** Normal opponents roll once per win. **Bosses** (`boss: true`) roll 3 times per win and can be farmed; their tables include their **signature parts and moves** at low weight.
+- A loss gives one common salvage part.
 
-- 2D top-down, simple geometric sprites (coloured part tiles), no audio.
-- Hub, Garage, and Arena screens; single-player ladder of 5 opponents across 3 arenas.
-- Headless balance script: `npx tsx scripts/simulate.ts`.
+A `Reward` is `{ kind: 'part' | 'move', id }`.
 
-## 9. Open decisions (for the owner)
+Saves are stored on the device (SQLite key-value store on native, localStorage on web).
 
-1. **2D vs 3D.** The prototype is 2D top-down (React Native views). That's quick to iterate and fine for phones. 3D (e.g. via `expo-gl` / three.js / a native engine) would look better, but it means more art work and harder performance tuning. *Suggestion: lock in the build/damage design in 2D first.*
-2. **Campaign vs PvP.** The prototype is a single-player ladder. Async PvP (fight AI-piloted copies of other players' bugs) is cheap to add because builds are just data. Real-time PvP needs servers and netcode.
-3. **Art style.** Options: clean "toy robot" vector look; gritty junkyard scrap-bots; or bioluminescent neon insects. This decides part silhouettes and the palette.
-4. **Controls.** Right now it's a thumbstick plus auto-fire. Alternatives: tap-to-move, manual fire buttons per weapon group, or a "boost" ability.
-5. **Part orientation.** Parts can't be rotated yet. Do we want rotatable or mirrored parts (e.g. a rear stinger that faces backward)?
-6. **Grid size and shape.** Currently 5×7. Should it grow with progression (a chassis upgrade)?
-7. **Economy.** Should there be scrap or currency to craft or upgrade parts, or only drops? Duplicates currently just stack.
-8. **Monetisation.** None, premium, or cosmetic-only? (No pay-to-win is assumed.)
-9. **Balance.** The numbers are first-pass. Melee mirror matches decide too much on who loses their weapon first, Needlewisp is easier than its ladder slot suggests, and fights often go to time.
+## 9. Determinism (for future PvP)
+
+- Fixed 60 Hz timestep and a seeded RNG (`mulberry32`) stored in sim state. The sim never calls `Math.random`.
+- Every input comes in through `step(sim, dt, inputs)`, and the AI is a pure function of sim state.
+- Rendering only reads sim state. A match can be replayed from `(seed, builds, input log)`.
+
+## 10. Roadmap
+
+1. **Milestone 1 (current):** garage, campaign map with a farmable boss, 3D arena with per-part damage, proc meter, auto-proc signature moves with cutscenes, rewards screen.
+2. Art pass: hand-made voxel models per part, arena dressing, audio.
+3. Async PvP: fight AI-piloted snapshots of other players' builds (needs a backend).
+4. Real-time PvP (netcode, server-side sim).
+
+## 11. Open decisions (for the owner)
+
+1. **Controls.** Right now it's a thumbstick plus auto-fire. Alternatives: tap-to-move, or a manual "boost".
+2. **Part orientation.** Parts can't be rotated yet. Do we want rotatable or mirrored parts (e.g. a rear-facing stinger)?
+3. **Grid size and shape.** Currently 5×7. Should it grow with progression?
+4. **Economy.** Should there be scrap or currency to craft or upgrade parts? Duplicates currently just stack.
+5. **Monetisation.** None, premium, or cosmetic-only? (No pay-to-win is assumed.)
+6. **Move slots.** 2 for now. Should more unlock through the campaign?
+7. **Balance.** First-pass numbers. Fights often go to time, and melee mirror matches can snowball.
