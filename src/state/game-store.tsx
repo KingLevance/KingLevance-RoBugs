@@ -1,31 +1,47 @@
 import { createContext, use, useCallback, useMemo, useState, type ReactNode } from 'react';
 
 import type { Build, Placement } from '@/game/build';
-import { OPPONENTS, STARTER_BUILD, STARTER_INVENTORY } from '@/game/opponents';
-import { rollRewards } from '@/game/rewards';
+import { MOVE_SLOTS, type MoveId } from '@/game/moves';
+import { getOpponent, OPPONENTS, STARTER_BUILD, STARTER_INVENTORY, STARTER_MOVES } from '@/game/opponents';
+import { rollMatchRewards, type MatchRewards } from '@/game/rewards';
 
 import { loadString, saveString } from './storage';
 
-const SAVE_KEY = 'robugs.save.v1';
+const SAVE_KEY = 'robugs.save.v2';
+
+export type LastResult = {
+  opponentId: string;
+  winner: 0 | 1 | null;
+  firstClear: boolean;
+  rewards: MatchRewards;
+};
 
 export type SaveData = {
   inventory: Record<string, number>;
   build: Build;
+  /** Signature moves owned. */
+  moves: MoveId[];
+  /** Equipped moves, in slot order (max MOVE_SLOTS). */
+  equipped: MoveId[];
   wins: number;
   losses: number;
-  /** Index into OPPONENTS of the next challenger. */
-  ladder: number;
-  /** Highest opponent index ever beaten (-1 = none). */
-  cleared: number;
+  /** Opponent ids beaten at least once. */
+  cleared: string[];
+  /** Opponent selected on the campaign map. */
+  selected: string;
+  lastResult: LastResult | null;
 };
 
 const FRESH: SaveData = {
   inventory: STARTER_INVENTORY,
   build: STARTER_BUILD,
+  moves: STARTER_MOVES,
+  equipped: STARTER_MOVES.slice(0, MOVE_SLOTS),
   wins: 0,
   losses: 0,
-  ladder: 0,
-  cleared: -1,
+  cleared: [],
+  selected: OPPONENTS[0].id,
+  lastResult: null,
 };
 
 function load(): SaveData {
@@ -41,9 +57,10 @@ function load(): SaveData {
 type GameStore = SaveData & {
   setPlacements: (placements: Placement[]) => void;
   setBugName: (name: string) => void;
-  /** Records a match result, grants rewards and returns the part ids won. */
-  recordResult: (won: boolean) => string[];
-  selectOpponent: (index: number) => void;
+  toggleEquip: (id: MoveId) => void;
+  /** Records a match result, grants rewards and stores them as `lastResult`. */
+  recordResult: (opponentId: string, winner: 0 | 1 | null) => void;
+  selectOpponent: (id: string) => void;
   resetSave: () => void;
 };
 
@@ -61,24 +78,30 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const recordResult = useCallback(
-    (won: boolean) => {
-      const opp = OPPONENTS[data.ladder];
-      const rewards = rollRewards(won, opp.rewardTier, won && data.ladder > data.cleared);
+    (opponentId: string, winner: 0 | 1 | null) => {
+      const opp = getOpponent(opponentId);
+      const won = winner === 0;
+      const firstClear = won && !data.cleared.includes(opponentId);
+      const rewards = rollMatchRewards(opp, won, firstClear);
       update((d) => {
         const inventory = { ...d.inventory };
-        for (const id of rewards) inventory[id] = (inventory[id] ?? 0) + 1;
+        const moves = [...d.moves];
+        for (const r of [...rewards.guaranteed, ...rewards.rolled]) {
+          if (r.kind === 'part') inventory[r.id] = (inventory[r.id] ?? 0) + 1;
+          else if (!moves.includes(r.id as MoveId)) moves.push(r.id as MoveId);
+        }
         return {
           ...d,
           inventory,
+          moves,
           wins: d.wins + (won ? 1 : 0),
-          losses: d.losses + (won ? 0 : 1),
-          cleared: won ? Math.max(d.cleared, d.ladder) : d.cleared,
-          ladder: won ? Math.min(d.ladder + 1, OPPONENTS.length - 1) : d.ladder,
+          losses: d.losses + (winner === 1 ? 1 : 0),
+          cleared: won && !d.cleared.includes(opponentId) ? [...d.cleared, opponentId] : d.cleared,
+          lastResult: { opponentId, winner, firstClear, rewards },
         };
       });
-      return rewards;
     },
-    [data.ladder, data.cleared, update],
+    [data.cleared, update],
   );
 
   const value = useMemo<GameStore>(
@@ -86,9 +109,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
       ...data,
       setPlacements: (placements) => update((d) => ({ ...d, build: { ...d.build, placements } })),
       setBugName: (name) => update((d) => ({ ...d, build: { ...d.build, name } })),
+      toggleEquip: (id) =>
+        update((d) => {
+          if (d.equipped.includes(id)) return { ...d, equipped: d.equipped.filter((m) => m !== id) };
+          if (d.equipped.length >= MOVE_SLOTS) return { ...d, equipped: [...d.equipped.slice(1), id] };
+          return { ...d, equipped: [...d.equipped, id] };
+        }),
       recordResult,
-      selectOpponent: (index) =>
-        update((d) => ({ ...d, ladder: Math.max(0, Math.min(index, d.cleared + 1, OPPONENTS.length - 1)) })),
+      selectOpponent: (id) => update((d) => ({ ...d, selected: id })),
       resetSave: () => update(() => FRESH),
     }),
     [data, recordResult, update],

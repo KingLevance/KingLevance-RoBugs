@@ -1,31 +1,30 @@
-import { PARTS, type Rarity } from './parts';
+import type { LootEntry, Opponent, Reward } from './opponents';
+import { PARTS } from './parts';
 
-const ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic'];
-const WEIGHT: Record<Rarity, number> = { common: 50, uncommon: 30, rare: 15, epic: 6 };
+export type MatchRewards = { guaranteed: Reward[]; rolled: Reward[] };
 
-function pick(maxTier: Rarity, minTier: Rarity = 'common'): string {
-  const lo = ORDER.indexOf(minTier);
-  const hi = ORDER.indexOf(maxTier);
-  const pool = PARTS.filter((p) => {
-    const r = ORDER.indexOf(p.rarity);
-    return r >= lo && r <= hi;
-  });
-  const total = pool.reduce((a, p) => a + WEIGHT[p.rarity], 0);
-  let roll = Math.random() * total;
-  for (const p of pool) {
-    roll -= WEIGHT[p.rarity];
-    if (roll <= 0) return p.id;
+function roll(table: LootEntry[], rng: () => number): Reward {
+  const total = table.reduce((a, e) => a + e.weight, 0);
+  let r = rng() * total;
+  for (const e of table) {
+    r -= e.weight;
+    if (r <= 0) return e.reward;
   }
-  return pool[pool.length - 1].id;
+  return table[table.length - 1].reward;
 }
 
+const SALVAGE: LootEntry[] = PARTS.filter((p) => p.rarity === 'common').map((p) => ({ reward: { kind: 'part', id: p.id }, weight: 1 }));
+
 /**
- * Win: two parts up to the opponent's tier, plus a guaranteed top-tier part
- * the first time you beat them. Loss: one common salvage part.
+ * Win: the opponent's guaranteed drops on first clear, plus rolls on its
+ * loot table (2 for normal opponents, 3 for bosses — repeatable).
+ * Loss: one common salvage part.
  */
-export function rollRewards(won: boolean, tier: Rarity, firstClear: boolean): string[] {
-  if (!won) return [pick('common')];
-  const out = [pick(tier), pick(tier)];
-  if (firstClear) out.push(pick(tier, tier));
-  return out;
+export function rollMatchRewards(opp: Opponent, won: boolean, firstClear: boolean, rng: () => number = Math.random): MatchRewards {
+  if (!won) return { guaranteed: [], rolled: [roll(SALVAGE, rng)] };
+  const rolls = opp.boss ? 3 : 2;
+  return {
+    guaranteed: firstClear ? opp.guaranteed : [],
+    rolled: Array.from({ length: rolls }, () => roll(opp.lootTable, rng)),
+  };
 }
