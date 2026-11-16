@@ -18,6 +18,8 @@ export function fromLayout(rows: string[], legend: Record<string, string>): Plac
 
 export type ArenaId = 'pit' | 'foundry' | 'hive';
 
+export const ARENA_NAMES: Record<ArenaId, string> = { pit: 'The Acid Pit', foundry: 'Stomper Foundry', hive: 'The Hive Ring' };
+
 export type Reward = { kind: 'part' | 'move'; id: string };
 export type LootEntry = { reward: Reward; weight: number };
 

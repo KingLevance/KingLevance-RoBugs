@@ -6,6 +6,7 @@ import { PartCell } from '@/components/part-cell';
 import { Button, Meter, Panel } from '@/components/ui';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
 import { computeStats, GRID_H, GRID_W, MAX_MASS, resolve, usage, validateBuild, type Placement } from '@/game/build';
+import { getMove, MOVE_SLOTS } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type PartDef } from '@/game/parts';
 import { useGame } from '@/state/game-store';
 
@@ -153,9 +154,32 @@ export default function Garage() {
         })}
       </View>
 
+      <Text style={styles.section}>
+        SIGNATURE MOVES · {game.equipped.length}/{MOVE_SLOTS} EQUIPPED
+      </Text>
+      <View style={{ gap: Spacing.sm }}>
+        {game.moves.map((id) => {
+          const m = getMove(id);
+          const on = game.equipped.includes(id);
+          const hasParts = placements.filter((p) => getPart(p.partId).category === m.requires.category).length >= m.requires.count;
+          return (
+            <Pressable key={id} onPress={() => game.toggleEquip(id)} style={[styles.moveRow, on && { borderColor: m.color, backgroundColor: Colors.panelHi }]}>
+              <View style={[styles.moveDot, { backgroundColor: on ? m.color : Colors.bg, borderColor: m.color }]} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={[styles.partName, { color: m.color, fontSize: 15 }]}>
+                  {m.name} <Text style={styles.dim}>· {m.cost} PP · {m.cooldown}s cd{m.ultimate ? ' · ultimate' : ''}</Text>
+                </Text>
+                <Text style={styles.dim}>{m.description}</Text>
+                {on && !hasParts && <Text style={styles.error}>⚠ Your build has no {m.requires.category}, so this move can never fire.</Text>}
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+
       <View style={styles.actions}>
-        <Button label="Clear" variant="secondary" onPress={() => game.setPlacements([])} style={{ flex: 1 }} />
-        <Button label="To the Arena" disabled={errors.length > 0} onPress={() => router.replace('/arena')} style={{ flex: 2 }} />
+        <Button label="Clear grid" variant="secondary" onPress={() => game.setPlacements([])} style={{ flex: 1 }} />
+        <Button label="Campaign map" disabled={errors.length > 0} onPress={() => router.dismissTo('/campaign')} style={{ flex: 2 }} />
       </View>
     </ScrollView>
   );
@@ -212,4 +236,15 @@ const styles = StyleSheet.create({
   binName: { color: Colors.text, fontSize: 10, textAlign: 'center', minHeight: 26 },
   binCount: { color: Colors.textDim, fontSize: 11, fontVariant: ['tabular-nums'] },
   actions: { flexDirection: 'row', gap: Spacing.sm },
+  moveRow: {
+    flexDirection: 'row',
+    gap: Spacing.md,
+    alignItems: 'flex-start',
+    padding: Spacing.md,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    backgroundColor: Colors.panel,
+  },
+  moveDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, marginTop: 2 },
 });

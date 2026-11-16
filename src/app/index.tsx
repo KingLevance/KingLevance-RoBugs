@@ -1,21 +1,18 @@
 import { router } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BugPreview } from '@/components/bug-preview';
 import { Button, Panel } from '@/components/ui';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
 import { validateBuild } from '@/game/build';
-import { OPPONENTS } from '@/game/opponents';
-import { RARITY_COLOR } from '@/game/parts';
+import { getOpponent, OPPONENTS } from '@/game/opponents';
 import { useGame } from '@/state/game-store';
-
-const ARENA_NAMES = { pit: 'The Acid Pit', foundry: 'Stomper Foundry', hive: 'The Hive Ring' } as const;
 
 export default function Hub() {
   const game = useGame();
   const errors = validateBuild(game.build.placements);
-  const next = OPPONENTS[game.ladder];
+  const next = getOpponent(game.selected);
   const totalParts = Object.values(game.inventory).reduce((a, n) => a + n, 0);
 
   return (
@@ -37,45 +34,27 @@ export default function Hub() {
         </Panel>
 
         <Panel style={{ gap: Spacing.sm }}>
-          <Text style={styles.label}>NEXT CHALLENGER</Text>
+          <Text style={styles.label}>CAMPAIGN</Text>
           <View style={styles.row}>
             <BugPreview placements={next.build.placements} cell={16} />
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={styles.h2}>{next.name}</Text>
+              <Text style={styles.h2}>
+                {next.name} {next.boss && <Text style={{ color: Colors.bad, fontSize: 12 }}>BOSS</Text>}
+              </Text>
               <Text style={styles.dim}>{next.blurb}</Text>
               <Text style={styles.dim}>
-                Arena: {ARENA_NAMES[next.arena]} · Drops up to{' '}
-                <Text style={{ color: RARITY_COLOR[next.rewardTier], fontWeight: '700' }}>{next.rewardTier}</Text>
+                {game.cleared.length}/{OPPONENTS.length} opponents beaten · {game.moves.length} signature moves
               </Text>
             </View>
           </View>
-          <Button label={errors.length ? 'Fix your build first' : 'Fight!'} disabled={errors.length > 0} onPress={() => router.push('/arena')} />
-        </Panel>
-
-        <Panel style={{ gap: Spacing.sm }}>
-          <Text style={styles.label}>LADDER</Text>
-          {OPPONENTS.map((o, i) => {
-            const locked = i > game.cleared + 1;
-            const selected = i === game.ladder;
-            return (
-              <Pressable
-                key={o.name}
-                disabled={locked}
-                onPress={() => game.selectOpponent(i)}
-                style={[styles.ladderRow, selected && styles.ladderSelected, locked && { opacity: 0.4 }]}>
-                <Text style={styles.ladderText}>
-                  {i + 1}. {locked ? '???' : o.name}
-                </Text>
-                <Text style={styles.dim}>{i <= game.cleared ? '✓ beaten' : locked ? 'locked' : 'open'}</Text>
-              </Pressable>
-            );
-          })}
+          <Button label="Open campaign map" onPress={() => router.push('/campaign')} />
         </Panel>
 
         <Text style={styles.howto}>
-          How to play: snap parts onto the grid in the Garage, stay inside the power and weight budget, then drag the
-          joystick in the Arena. Weapons fire on their own when an enemy is in front of them. Knock off parts — lose
-          every core or thorax and you&apos;re out.
+          How to play: snap parts onto the grid in the Garage, stay inside the power and weight budget, and equip up to two
+          signature moves. In the Arena, drag the joystick to steer. Weapons fire on their own, and landing hits fills
+          your proc meter, which powers your moves. They fire automatically when the moment is right. Knock off parts:
+          lose every core or thorax and you&apos;re out.
         </Text>
         <Button label="Reset save" variant="danger" onPress={game.resetSave} style={{ alignSelf: 'center' }} />
       </ScrollView>
@@ -93,15 +72,5 @@ const styles = StyleSheet.create({
   label: { color: Colors.accent, fontSize: 12, fontWeight: '800', letterSpacing: 1.5 },
   dim: { color: Colors.textDim, fontSize: 13 },
   bad: { color: Colors.bad, fontSize: 13 },
-  ladderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    padding: Spacing.sm,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'transparent',
-  },
-  ladderSelected: { borderColor: Colors.accent, backgroundColor: Colors.panelHi },
-  ladderText: { color: Colors.text, fontWeight: '700' },
   howto: { color: Colors.textDim, fontSize: 13, lineHeight: 19 },
 });

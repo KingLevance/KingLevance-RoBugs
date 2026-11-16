@@ -1,77 +1,45 @@
+import { GLView, type ExpoWebGLRenderingContext } from 'expo-gl';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Joystick } from '@/components/joystick';
-import { PartCell } from '@/components/part-cell';
-import { Button, Panel } from '@/components/ui';
+import { UltBanner } from '@/components/ult-banner';
 import { Colors, Spacing } from '@/constants/theme';
-import { OPPONENTS } from '@/game/opponents';
-import { getPart, RARITY_COLOR } from '@/game/parts';
-import { aiInput, ARENA_SIZE, CELL, createSim, forfeit, MATCH_SECONDS, snapshot, step, type BugView, type Input } from '@/game/sim';
+import { getMove, PROC } from '@/game/moves';
+import { getOpponent } from '@/game/opponents';
+import { aiInput, createSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug, type Input } from '@/game/sim';
+import { ArenaRenderer } from '@/render/scene';
 import { useGame } from '@/state/game-store';
 
-const DT = 1 / 60;
-
-type Result = { winner: 0 | 1 | null; rewards: string[] };
-
-function BugSprite({ bug, scale, tint }: { bug: BugView; scale: number; tint: string }) {
-  const c = CELL * scale;
+function BugHud({ bug, color, align }: { bug: HudBug; color: string; align: 'left' | 'right' }) {
+  const end = align === 'right';
   return (
-    <View
-      style={{
-        position: 'absolute',
-        left: bug.x * scale,
-        top: bug.y * scale,
-        width: 0,
-        height: 0,
-        transform: [{ rotate: `${bug.rot}rad` }],
-        opacity: bug.dead ? 0.4 : 1,
-      }}>
-      <View
-        style={{
-          position: 'absolute',
-          left: -c * 0.3,
-          top: -c * 0.3,
-          width: c * 0.6,
-          height: c * 0.6,
-          borderRadius: c,
-          backgroundColor: tint,
-          opacity: 0.35,
-        }}
-      />
-      {bug.parts.map((p, i) => (
-        <View
-          key={i}
-          style={{
-            position: 'absolute',
-            left: p.lx * scale - c / 2,
-            top: p.ly * scale - c / 2,
-            width: c,
-            height: c,
-            borderRadius: c * 0.25,
-            backgroundColor: p.flash ? '#FFFFFF' : p.color,
-            borderWidth: 1.5,
-            borderColor: tint,
-            opacity: 0.45 + 0.55 * p.hp,
-          }}
-        />
-      ))}
-    </View>
-  );
-}
-
-function HpBar({ name, hp, color, align }: { name: string; hp: number; color: string; align: 'left' | 'right' }) {
-  return (
-    <View style={{ flex: 1, gap: 4, alignItems: align === 'left' ? 'flex-start' : 'flex-end' }}>
+    <View style={{ flex: 1, gap: 3, alignItems: end ? 'flex-end' : 'flex-start' }}>
       <Text style={[styles.hudName, { color }]} numberOfLines={1}>
-        {name}
+        {bug.name}
+        {bug.shield ? ' 🛡' : ''}
       </Text>
-      <View style={styles.hpTrack}>
+      <View style={styles.track}>
+        <View style={[styles.fill, { width: `${Math.max(0, bug.hp) * 100}%`, backgroundColor: color }, end && { alignSelf: 'flex-end' }]} />
+      </View>
+      <View style={[styles.track, { height: 5 }]}>
         <View
-          style={[styles.hpFill, { width: `${Math.max(0, hp) * 100}%`, backgroundColor: color }, align === 'right' && { alignSelf: 'flex-end' }]}
+          style={[styles.fill, { width: `${(bug.proc / PROC.max) * 100}%`, backgroundColor: '#C77DFF' }, end && { alignSelf: 'flex-end' }]}
         />
+      </View>
+      <View style={{ flexDirection: 'row', gap: 4 }}>
+        {bug.moves.map((m) => {
+          const def = getMove(m.id);
+          return (
+            <View key={m.id} style={[styles.moveChip, { borderColor: def.color, opacity: m.cd > 0 ? 0.4 : 1 }, m.ready && { backgroundColor: def.color }]}>
+              <Text style={styles.moveChipText}>
+                {def.name.split(' ')[0]} {def.cost}
+              </Text>
+            </View>
+          );
+        })}
       </View>
     </View>
   );
@@ -79,12 +47,22 @@ function HpBar({ name, hp, color, align }: { name: string; hp: number; color: st
 
 export default function Arena() {
   const game = useGame();
-  const { width, height } = useWindowDimensions();
-  const [opponent] = useState(() => OPPONENTS[game.ladder]);
-  const [sim] = useState(() => createSim(game.build, opponent.build, opponent.arena));
-  const [view, setView] = useState(() => snapshot(sim));
-  const [result, setResult] = useState<Result | null>(null);
+  const [opponent] = useState(() => getOpponent(game.selected));
+  const [sim] = useState(() =>
+    createSim(
+      { build: game.build, moves: game.equipped },
+      { build: opponent.build, moves: opponent.moves },
+      opponent.arena,
+      (Math.random() * 2 ** 31) | 0,
+    ),
+  );
+  const [view, setView] = useState(() => hud(sim));
   const input = useRef<Input>({ x: 0, y: 0 });
+  const loop = useRef<{ raf: number; renderer: ArenaRenderer | null; timer: ReturnType<typeof setTimeout> | null }>({
+    raf: 0,
+    renderer: null,
+    timer: null,
+  });
   const recordRef = useRef(game.recordResult);
 
   useEffect(() => {
@@ -92,177 +70,125 @@ export default function Arena() {
   });
 
   useEffect(() => {
-    let raf = 0;
+    const l = loop.current;
+    return () => {
+      cancelAnimationFrame(l.raf);
+      if (l.timer) clearTimeout(l.timer);
+      l.renderer?.dispose();
+    };
+  }, []);
+
+  function onContextCreate(gl: ExpoWebGLRenderingContext) {
+    const renderer = new ArenaRenderer(gl, sim);
+    // Dev-only hook so browser tests can inspect the sim.
+    if (__DEV__ && Platform.OS === 'web') (globalThis as { __robugsSim?: unknown }).__robugsSim = sim;
+    loop.current.renderer = renderer;
     let last = performance.now();
     let acc = 0;
+    let frame = 0;
     let finished = false;
     const tick = (now: number) => {
-      acc += Math.min(0.1, (now - last) / 1000);
+      const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      while (acc >= DT && !sim.over) {
-        step(sim, DT, [input.current, aiInput(sim, 1, opponent.aggression)]);
-        acc -= DT;
+      acc += dt;
+      while (acc >= STEP) {
+        step(sim, STEP, [input.current, aiInput(sim, 1, opponent.aggression)]);
+        acc -= STEP;
       }
-      setView(snapshot(sim));
+      renderer.render(sim, dt);
+      frame++;
+      if (frame % 3 === 0 || sim.over) setView(hud(sim));
       if (sim.over && !finished) {
         finished = true;
-        const rewards = recordRef.current(sim.winner === 0);
-        setResult({ winner: sim.winner, rewards });
-        return;
+        recordRef.current(opponent.id, sim.winner);
+        loop.current.timer = setTimeout(() => router.replace('/rewards'), 1600);
       }
-      raf = requestAnimationFrame(tick);
+      loop.current.raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [sim, opponent]);
+    loop.current.raf = requestAnimationFrame(tick);
+  }
 
-  const size = Math.min(width - Spacing.lg * 2, height * 0.6);
-  const scale = size / ARENA_SIZE;
   const [me, foe] = view.bugs;
   const remaining = Math.max(0, Math.ceil(MATCH_SECONDS - view.time));
+  const cutscene = !!view.ult;
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.hud}>
-        <HpBar name={me.name} hp={me.hp} color={Colors.good} align="left" />
-        <Text style={styles.timer}>{remaining}</Text>
-        <HpBar name={foe.name} hp={foe.hp} color={Colors.bad} align="right" />
-      </View>
+    <View style={styles.root}>
+      <GLView style={StyleSheet.absoluteFill} onContextCreate={onContextCreate} />
 
-      <View
-        style={[
-          styles.arena,
-          { width: size, height: size, borderColor: sim.spikedWalls ? '#8A3B2E' : Colors.border },
-        ]}>
-        {view.hazards.map((h, i) => (
-          <View
-            key={i}
-            style={{
-              position: 'absolute',
-              left: (h.x - h.r) * scale,
-              top: (h.y - h.r) * scale,
-              width: h.r * 2 * scale,
-              height: h.r * 2 * scale,
-              borderRadius: h.r * scale,
-              backgroundColor: h.kind === 'acid' ? Colors.acid : h.warn ? Colors.stomperWarn : Colors.stomper,
-              borderWidth: h.kind === 'stomper' ? 2 : 0,
-              borderColor: '#FF8A3D',
-              borderStyle: 'dashed',
+      {view.flash > 0 && <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: view.flash * 0.85 }]} />}
+
+      {view.ult && (
+        <UltBanner
+          key={`${view.ult.id}-${view.ult.caster}-${view.time.toFixed(3)}`}
+          moveId={view.ult.id}
+          casterName={view.bugs[view.ult.caster].name}
+          isPlayer={view.ult.caster === 0}
+        />
+      )}
+
+      <SafeAreaView style={styles.overlay} pointerEvents="box-none">
+        {!cutscene && (
+          <View style={styles.hud}>
+            <BugHud bug={me} color={Colors.good} align="left" />
+            <Text style={styles.timer}>{remaining}</Text>
+            <BugHud bug={foe} color={Colors.bad} align="right" />
+          </View>
+        )}
+
+        {!cutscene && (
+          <View style={styles.log} pointerEvents="none">
+            {view.log.map((l, i) => (
+              <Text key={`${i}-${l}`} style={styles.logLine} numberOfLines={1}>
+                {l}
+              </Text>
+            ))}
+          </View>
+        )}
+
+        {view.over && (
+          <View style={styles.finish} pointerEvents="none">
+            <Text style={[styles.finishText, { color: view.winner === 0 ? Colors.good : view.winner === 1 ? Colors.bad : Colors.accent }]}>
+              {view.winner === 0 ? 'VICTORY' : view.winner === 1 ? 'DEFEAT' : 'DRAW'}
+            </Text>
+          </View>
+        )}
+
+        <View style={[styles.controls, cutscene && { opacity: 0 }]} pointerEvents="box-none">
+          <Joystick
+            size={140}
+            onChange={(v) => {
+              input.current = v;
             }}
           />
-        ))}
-        <BugSprite bug={foe} scale={scale} tint={Colors.bad} />
-        <BugSprite bug={me} scale={scale} tint={Colors.good} />
-        {view.projectiles.map((p, i) => (
-          <View key={i} style={[styles.dart, { left: p.x * scale - 3, top: p.y * scale - 3 }]} />
-        ))}
-        {view.effects.map((e, i) => {
-          const s = e.size * scale;
-          return (
-            <View
-              key={i}
-              pointerEvents="none"
-              style={{
-                position: 'absolute',
-                left: e.x * scale - s / 2,
-                top: e.y * scale - s / 2,
-                width: s,
-                height: s,
-                borderRadius: s / 2,
-                backgroundColor: e.color,
-                opacity: Math.min(0.8, e.ttl * 2),
-              }}
-            />
-          );
-        })}
-      </View>
-
-      <View style={styles.log}>
-        {view.log.map((l, i) => (
-          <Text key={`${i}-${l}`} style={[styles.logLine, { opacity: 0.5 + (i / 3) * 0.5 }]} numberOfLines={1}>
-            {l}
-          </Text>
-        ))}
-      </View>
-
-      <View style={styles.controls}>
-        <Button label="Forfeit" variant="danger" onPress={() => forfeit(sim, 0)} />
-        <Joystick
-          size={Math.min(150, height * 0.2)}
-          onChange={(v) => {
-            input.current = v;
-          }}
-        />
-        <Text style={styles.tip}>Weapons auto-fire when facing the enemy</Text>
-      </View>
-
-      {result && (
-        <View style={styles.overlay}>
-          <Panel style={styles.resultPanel}>
-            <Text
-              style={[
-                styles.resultTitle,
-                { color: result.winner === 0 ? Colors.good : result.winner === 1 ? Colors.bad : Colors.accent },
-              ]}>
-              {result.winner === 0 ? 'VICTORY' : result.winner === 1 ? 'DEFEAT' : 'DRAW'}
-            </Text>
-            <Text style={styles.dim}>
-              {result.winner === 0 ? `You took ${opponent.name} apart!` : 'You salvaged some scrap from the wreck.'}
-            </Text>
-            <Text style={styles.rewardHeader}>PARTS EARNED</Text>
-            {result.rewards.map((id, i) => {
-              const part = getPart(id);
-              return (
-                <View key={i} style={styles.rewardRow}>
-                  <PartCell part={part} size={30} />
-                  <Text style={[styles.rewardName, { color: RARITY_COLOR[part.rarity] }]}>{part.name}</Text>
-                  <Text style={styles.dim}>{part.rarity}</Text>
-                </View>
-              );
-            })}
-            <View style={{ flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm }}>
-              <Button label="Hub" variant="secondary" onPress={() => router.back()} style={{ flex: 1 }} />
-              <Button label="Garage" onPress={() => router.replace('/garage')} style={{ flex: 1 }} />
-            </View>
-          </Panel>
+          <View style={{ alignItems: 'flex-end', gap: Spacing.sm }}>
+            <Text style={styles.tip}>Weapons and moves fire on their own. Steer to line them up.</Text>
+            <Pressable onPress={() => forfeit(sim, 0)} style={styles.forfeit}>
+              <Text style={styles.forfeitText}>Forfeit</Text>
+            </Pressable>
+          </View>
         </View>
-      )}
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center' },
-  hud: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, padding: Spacing.md, alignSelf: 'stretch' },
-  hudName: { fontWeight: '800', fontSize: 14 },
-  hpTrack: { height: 8, alignSelf: 'stretch', backgroundColor: Colors.panel, borderRadius: 4, overflow: 'hidden' },
-  hpFill: { height: '100%', borderRadius: 4 },
-  timer: { color: Colors.text, fontSize: 22, fontWeight: '900', fontVariant: ['tabular-nums'], minWidth: 40, textAlign: 'center' },
-  arena: { backgroundColor: Colors.arenaFloor, borderWidth: 4, borderRadius: 8, overflow: 'hidden' },
-  dart: { position: 'absolute', width: 6, height: 6, borderRadius: 3, backgroundColor: '#E07BFF' },
-  log: { height: 54, justifyContent: 'flex-end', paddingHorizontal: Spacing.lg, alignSelf: 'stretch', marginTop: Spacing.xs },
-  logLine: { color: Colors.textDim, fontSize: 12 },
-  controls: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.lg,
-    gap: Spacing.md,
-  },
-  tip: { color: Colors.textDim, fontSize: 11, width: 80 },
-  overlay: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: Spacing.lg,
-  },
-  resultPanel: { width: '100%', maxWidth: 380, gap: Spacing.sm },
-  resultTitle: { fontSize: 36, fontWeight: '900', textAlign: 'center', letterSpacing: 2 },
-  dim: { color: Colors.textDim, fontSize: 13, textAlign: 'center' },
-  rewardHeader: { color: Colors.accent, fontWeight: '800', fontSize: 12, letterSpacing: 1.5, marginTop: Spacing.sm },
-  rewardRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  rewardName: { flex: 1, fontWeight: '700' },
+  root: { flex: 1, backgroundColor: Colors.bg },
+  overlay: { ...StyleSheet.absoluteFill, justifyContent: 'space-between' },
+  hud: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md, padding: Spacing.md, backgroundColor: 'rgba(20,23,28,0.55)' },
+  hudName: { fontWeight: '900', fontSize: 14 },
+  track: { height: 9, alignSelf: 'stretch', backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 4, overflow: 'hidden' },
+  fill: { height: '100%', borderRadius: 4 },
+  moveChip: { borderWidth: 1.5, borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
+  moveChipText: { color: Colors.text, fontSize: 10, fontWeight: '800' },
+  timer: { color: Colors.text, fontSize: 24, fontWeight: '900', fontVariant: ['tabular-nums'], minWidth: 40, textAlign: 'center' },
+  log: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: Spacing.lg, paddingBottom: Spacing.sm },
+  logLine: { color: Colors.text, fontSize: 12, textShadowColor: '#000', textShadowRadius: 3, textShadowOffset: { width: 0, height: 1 } },
+  finish: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  finishText: { fontSize: 54, fontWeight: '900', fontStyle: 'italic', textShadowColor: '#000', textShadowRadius: 0, textShadowOffset: { width: 4, height: 4 } },
+  controls: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', padding: Spacing.lg },
+  tip: { color: Colors.textDim, fontSize: 11, width: 130, textAlign: 'right' },
+  forfeit: { backgroundColor: '#4A1F22', borderColor: Colors.bad, borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 },
+  forfeitText: { color: Colors.text, fontWeight: '700' },
 });

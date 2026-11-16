@@ -23,7 +23,9 @@ export default function RootLayout() {
           }}>
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="garage" options={{ title: 'Garage' }} />
-          <Stack.Screen name="arena" options={{ headerShown: false, gestureEnabled: false }} />
+          <Stack.Screen name="campaign" options={{ title: 'Campaign' }} />
+          <Stack.Screen name="arena" options={{ headerShown: false, gestureEnabled: false, animation: 'fade' }} />
+          <Stack.Screen name="rewards" options={{ title: 'Results', headerBackVisible: false, gestureEnabled: false }} />
         </Stack>
       </GameProvider>
     </ThemeProvider>
