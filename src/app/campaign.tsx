@@ -75,7 +75,7 @@ export default function Campaign() {
                 },
               ]}>
               <Text style={styles.nodeIcon}>{!unlocked ? '🔒' : o.boss ? '👑' : cleared ? '✓' : '⚔'}</Text>
-              <Text style={styles.nodeLabel} numberOfLines={1}>
+              <Text style={[styles.nodeLabel, { left: (size - 6 - 110) / 2 }]} numberOfLines={1}>
                 {unlocked ? o.name : '???'}
               </Text>
             </Pressable>

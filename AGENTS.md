@@ -1,6 +1,6 @@
 # RoBugs — agent guide
 
-RoBugs is an **original** mobile game: players snap robotic bug parts together on a grid, then fight the result in a top-down arena. See `docs/GDD.md` for the design.
+RoBugs is an **original** 3D mobile game: players snap robotic bug parts together on a grid, equip auto-proc signature moves, then fight through a campaign of AI opponents. See `docs/GDD.md` for the design.
 
 ## Ground rules
 
@@ -11,7 +11,7 @@ RoBugs is an **original** mobile game: players snap robotic bug parts together o
 
 ## Stack
 
-Expo (SDK 58) + React Native + **Expo Router** + TypeScript (strict). React Compiler is on.
+Expo (SDK 58) + React Native + **Expo Router** + TypeScript (strict). React Compiler is on. 3D via `expo-gl` + `three` (renderer in `src/render/`).
 
 ### Expo has changed — do not trust your training data
 
@@ -42,23 +42,37 @@ If the Expo API is blocked by the network (`HTTP Proxy Network Error: Forbidden`
 ```
 src/app/            Expo Router routes only (every file is a screen)
   _layout.tsx       Stack navigator + GameProvider
-  index.tsx         Hub: your bug, next challenger, ladder
-  garage.tsx        Grid builder, parts bin, budget meters
-  arena.tsx         Fight screen: render loop, joystick, results/rewards
-src/game/           Pure TypeScript game logic — no React imports
+  index.tsx         Hub: your bug, campaign shortcut
+  campaign.tsx      Campaign map: nodes, unlocks, first-clear rewards, Fight
+  garage.tsx        Grid builder, parts bin, budget meters, move equip
+  arena.tsx         Fight screen: GLView + render loop, HUD, joystick, UltBanner
+  rewards.tsx       Match results: guaranteed + rolled drops
+src/game/           Pure TypeScript game logic — no React, no three
   parts.ts          Part catalog (stats, rarity, colors)
   build.ts          Grid, stat calculation, validation, connectivity
-  sim.ts            Arena simulation, damage model, hazards, AI, render snapshot
-  opponents.ts      Starter build/inventory and the AI ladder
-  rewards.ts        Loot rolls
+  moves.ts          Signature moves + PROC (proc-point) constants table
+  sim.ts            Deterministic arena sim: damage, hazards, moves/ults, AI, HUD summary
+  opponents.ts      Starter kit, opponents, loot tables, campaign map data
+  rewards.ts        Loot rolls (guaranteed + weighted table)
+src/render/         three.js only — reads sim state, never writes it
+  models.ts         Toon voxel part models with outlines
+  scene.ts          ArenaRenderer: scene, camera (incl. ult cutscene camera), VFX
 src/state/          Save data (React context) + platform storage
-src/components/     Shared UI
+src/components/     Shared UI (UltBanner, joystick, reward chips…)
 src/constants/      Theme tokens
 scripts/            Dev tools (not shipped)
 docs/GDD.md         Game design doc
 ```
 
 Keep game rules in `src/game/` (testable headlessly) and keep screens thin.
+
+### Determinism (PvP-ready)
+
+The sim must stay deterministic: fixed `STEP`, seeded RNG via `rand(sim)` only (never `Math.random` in `src/game/sim.ts`), all input via `step()`. `scripts/simulate.ts` checks this. Renderer code may use `Math.random` for cosmetics.
+
+### Browser testing
+
+`EXPO_OFFLINE=1 CI=1 npx expo start --web` — note `CI=1` disables file watching, so restart it (with `--clear`) after edits. Headless Chromium needs `--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader` for WebGL. In dev on web, the arena exposes the live sim as `globalThis.__robugsSim` for tests.
 
 ## Rules
 
