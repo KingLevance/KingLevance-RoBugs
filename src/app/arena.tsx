@@ -116,13 +116,13 @@ export default function Arena() {
     return () => cancelAnimationFrame(raf);
   }, [sim, opponent]);
 
-  const size = Math.min(width - Spacing.lg * 2, height * 0.58);
+  const size = Math.min(width - Spacing.lg * 2, height * 0.6);
   const scale = size / ARENA_SIZE;
   const [me, foe] = view.bugs;
   const remaining = Math.max(0, Math.ceil(MATCH_SECONDS - view.time));
 
   return (
-    <SafeAreaView style={styles.safe} edges={['bottom']}>
+    <SafeAreaView style={styles.safe}>
       <View style={styles.hud}>
         <HpBar name={me.name} hp={me.hp} color={Colors.good} align="left" />
         <Text style={styles.timer}>{remaining}</Text>

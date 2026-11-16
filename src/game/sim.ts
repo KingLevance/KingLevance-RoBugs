@@ -304,7 +304,7 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
   bug.pos.y += bug.vel.y * dt;
 
   // Walls
-  const r = bug.radius * 0.8;
+  const r = bug.radius * 0.95;
   const walls: [number, number, Vec][] = [
     [bug.pos.x - r, bug.vel.x, { x: 0, y: bug.pos.y }],
     [ARENA_SIZE - (bug.pos.x + r), -bug.vel.x, { x: ARENA_SIZE, y: bug.pos.y }],

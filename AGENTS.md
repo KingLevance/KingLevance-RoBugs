@@ -1,41 +1,68 @@
-This is an Expo/React Native mobile application. Prioritize mobile-first patterns, performance, and cross-platform compatibility.
+# RoBugs — agent guide
 
-## Expo has changed — do not trust your training data
+RoBugs is an **original** mobile game: players snap robotic bug parts together on a grid, then fight the result in a top-down arena. See `docs/GDD.md` for the design.
 
-Expo ships breaking changes every SDK release. APIs you remember are likely renamed, moved, or removed. Before writing any code that touches an Expo, EAS, or React Native API:
+## Ground rules
 
-1. Read the major version of the `expo` package in `package.json`.
+- **Everything must be original.** Our own names, art, parts and look. Never copy assets, names, part designs or UI from Robocraft, BattleBots, or any other existing game/show.
+- The owner often works **from a phone**. Keep updates short, and **commit + push often** so nothing is lost.
+- Do not open a pull request unless asked.
+- Open design questions live in `docs/GDD.md` → *Open decisions*. Don't silently decide them; note assumptions there.
+
+## Stack
+
+Expo (SDK 58) + React Native + **Expo Router** + TypeScript (strict). React Compiler is on.
+
+### Expo has changed — do not trust your training data
+
+Expo ships breaking changes every SDK release. Before writing code that touches an Expo, EAS or React Native API:
+
+1. Read the major version of `expo` in `package.json`.
 2. Fetch the matching versioned docs: `https://docs.expo.dev/versions/v<major>.0.0/`
-3. For anything else, fetch https://docs.expo.dev/llms.txt — an index of all Expo docs with corrections to common LLM misconceptions. Follow its links to the specific page you need; never answer from memory.
+3. For anything else, start at https://docs.expo.dev/llms.txt and follow its links. Never answer from memory.
+4. If the docs host is unreachable, read the installed package's types in `node_modules/<pkg>/build/*.d.ts` instead of guessing.
 
-## Commands
-
-Use `bunx` instead of `npx` if the project uses bun (`bun.lock` present).
+### Commands
 
 ```bash
-npx expo install <package>  # ALWAYS use instead of npm/yarn/pnpm/bun add — resolves SDK-compatible versions
-npx expo start              # start the dev server
+npx expo install <package>  # ALWAYS use instead of npm/yarn add — picks SDK-compatible versions
+npx expo start              # dev server (press w for web)
 npx expo lint               # lint
 npx tsc --noEmit            # typecheck
-npx expo-doctor             # diagnose dependency and config issues
-npx expo install --fix      # fix incompatible package versions
+npx tsx scripts/simulate.ts # headless balance check: validates builds, runs AI-vs-AI matches
+npx expo-doctor             # diagnose dependency/config issues
 ```
 
-Run lint and typecheck before declaring any task done.
+If the Expo API is blocked by the network (`HTTP Proxy Network Error: Forbidden`), prefix with `EXPO_OFFLINE=1`.
 
-## Navigation & Routing
+**Run lint and typecheck before declaring any task done.** After changing parts, opponents or sim numbers, also run the balance script.
 
-- Use **Expo Router** for all navigation. Routes live in `src/app/` — every file there is a screen, `_layout.tsx` files define navigators. Keep non-route code (components, hooks, utils) outside `src/app/`.
-- Import `Link`, `router`, and `useLocalSearchParams` from `expo-router`.
-- Docs: https://docs.expo.dev/router/introduction.md
+## Project layout
 
-## Building with EAS
+```
+src/app/            Expo Router routes only (every file is a screen)
+  _layout.tsx       Stack navigator + GameProvider
+  index.tsx         Hub: your bug, next challenger, ladder
+  garage.tsx        Grid builder, parts bin, budget meters
+  arena.tsx         Fight screen: render loop, joystick, results/rewards
+src/game/           Pure TypeScript game logic — no React imports
+  parts.ts          Part catalog (stats, rarity, colors)
+  build.ts          Grid, stat calculation, validation, connectivity
+  sim.ts            Arena simulation, damage model, hazards, AI, render snapshot
+  opponents.ts      Starter build/inventory and the AI ladder
+  rewards.ts        Loot rolls
+src/state/          Save data (React context) + platform storage
+src/components/     Shared UI
+src/constants/      Theme tokens
+scripts/            Dev tools (not shipped)
+docs/GDD.md         Game design doc
+```
 
-Use EAS to build, sign, and submit the app in the cloud (`eas build`, `eas submit`) and to ship over-the-air updates (`eas update`) — no local Xcode or Android Studio required. Run EAS CLI as `bunx eas-cli <command>` in Bun projects, or `npx eas-cli@latest <command>` otherwise; substitute that for bare `eas` in docs examples.
-Docs: https://docs.expo.dev/eas/index.md
+Keep game rules in `src/game/` (testable headlessly) and keep screens thin.
 
 ## Rules
 
-- If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
-- Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
-- Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md
+- Routes live in `src/app/`; keep non-route code out of it. Import `Link`/`router` from `expo-router`.
+- Never create or edit `ios/` / `android/` by hand (Continuous Native Generation). Configure native behaviour via `app.json` and config plugins.
+- Prefer Expo modules over third-party libraries. Adding a native library means Expo Go may no longer work → development build.
+- Persistence uses `expo-sqlite/kv-store` on native and `localStorage` on web (`src/state/storage*.ts`).
