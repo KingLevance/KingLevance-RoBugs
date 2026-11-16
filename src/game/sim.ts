@@ -429,6 +429,13 @@ export function step(sim: Sim, dt: number, inputs: [Input, Input]) {
   }
 }
 
+export function forfeit(sim: Sim, who: 0 | 1) {
+  if (sim.over) return;
+  sim.over = true;
+  sim.winner = who === 0 ? 1 : 0;
+  sim.log.push(`${sim.bugs[who].name} forfeits.`);
+}
+
 // ── AI ──────────────────────────────────────────────────────────────
 
 function inHazard(sim: Sim, at: Vec, pad: number) {
