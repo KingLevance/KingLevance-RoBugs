@@ -12,7 +12,7 @@ import type { Category, PartDef } from './parts';
 
 export const CELL = 22;
 /** Arena width/depth in world px (22 px = one grid cell). */
-export const ARENA_SIZE = 760;
+export const ARENA_SIZE = 830;
 export const MATCH_SECONDS = 90;
 export const STEP = 1 / 60;
 /** Global damage multiplier — lower = longer fights. */

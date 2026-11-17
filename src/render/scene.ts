@@ -60,6 +60,8 @@ type BugView = {
   /** Attached grid parts the shadow was last drawn for. */
   shadowCount: number;
   baseRadius: number;
+  /** Altitude tether: a faint line from a flying bug down to a ring on the floor. */
+  tether: THREE.Group;
   /** Small bobbing pointer above the player's bug only. */
   marker: THREE.Mesh | null;
   shield: THREE.Group;
@@ -387,6 +389,17 @@ export class ArenaRenderer {
       this.scene.add(marker);
     }
 
+    // Flight height cue (hidden on the ground).
+    const tether = new THREE.Group();
+    const tetherMat = new THREE.MeshBasicMaterial({ color: team, transparent: true, opacity: 0.6, depthWrite: false });
+    tether.add(new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 1, 6), tetherMat));
+    const tring = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.8, 28), new THREE.MeshBasicMaterial({ color: team, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide }));
+    tring.rotation.x = -Math.PI / 2;
+    tring.position.y = 0.05;
+    tether.add(tring);
+    tether.visible = false;
+    this.scene.add(tether);
+
     const shield = hexShell(r + 0.6);
     shield.visible = false;
     group.add(shield);
@@ -399,7 +412,7 @@ export class ArenaRenderer {
     shadow.renderOrder = 1;
     shadows.add(shadow);
     softShadow(shadow, parts);
-    return { group, pose, parts, links, rig, spine, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
+    return { group, pose, parts, links, rig, spine, tether, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
   }
 
   private fitOffset(aspect: number) {
@@ -438,6 +451,18 @@ export class ArenaRenderer {
       v.ground.position.copy(toWorld(bug.pos.x, bug.pos.y));
       v.ground.rotation.y = v.group.rotation.y;
       v.shadows.scale.setScalar(Math.max(0.45, 1 - altU * 0.18));
+      (v.shadow.material as THREE.MeshBasicMaterial).opacity = 0.42 * Math.max(0.35, 1 - altU * 0.12);
+      // Height cue for flyers: a line down to the floor and a ring where it lands.
+      v.tether.visible = altU > 0.35 && !bug.dead;
+      if (v.tether.visible) {
+        v.tether.position.copy(toWorld(bug.pos.x, bug.pos.y));
+        const line = v.tether.children[0];
+        line.scale.y = altU + 0.3;
+        line.position.y = (altU + 0.3) / 2;
+        const ring = v.tether.children[1] as THREE.Mesh;
+        ring.scale.setScalar(0.8 + Math.sin(t * 4) * 0.08);
+        (ring.material as THREE.MeshBasicMaterial).opacity = 0.35 + Math.min(0.3, altU * 0.08);
+      }
       // Carapace shell: forms during the Carapace Lock charge, then holds while the shield lasts.
       const forming = cine?.id === 'carapace-lock' && cine.caster === bi && cine.phase === 'charge' ? smooth((cine.p - 0.35) / 0.55) : 0;
       v.shield.visible = bug.shield > 0 || forming > 0;
@@ -968,8 +993,9 @@ export class ArenaRenderer {
       this.camYaw += THREE.MathUtils.clamp(turn, -0.8 * dt, 0.8 * dt);
     }
     const high = Math.max(a.alt, b.alt) / CELL;
-    const pitch = 0.72 + Math.min(0.18, high * 0.05);
-    const dist = THREE.MathUtils.clamp(sep * 0.7 + 22, 22, 34) * Math.sqrt(this.aspectK);
+    // Drop to a lower, more side-on angle while anyone's flying, so height reads.
+    const pitch = 0.72 - Math.min(0.24, high * 0.07);
+    const dist = THREE.MathUtils.clamp(sep * 0.7 + 25, 25, 38) * Math.sqrt(this.aspectK);
     const dir = new THREE.Vector3(Math.sin(this.camYaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(this.camYaw) * Math.cos(pitch));
     const followPos = target.clone().addScaledVector(dir, dist);
     const k = 1 - Math.exp(-dt * 3.5);
