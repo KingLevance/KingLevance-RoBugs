@@ -116,10 +116,14 @@ Moves are unlocked like parts (from drops) and **equipped** in the Garage. There
 
 **Ultimates** (`isUltimate(id)`) play a cutscene:
 - **Sim:** casting sets `sim.ult = { id, caster, t, dur: ULT_SECONDS (1.6) }`. While it's set, the rest of the world is frozen and the caster can't be hurt. At `t ≥ dur` the move lands with hit-stop, screen shake and a white flash.
-- **Camera:** swings round to face the caster, low and close (smoothstep ease), pushes in hard over the last ~18% while the FOV narrows ~9°, with a slight handheld drift.
+- **Choreography (renderer only, `ArenaRenderer.poseCine` / `releaseFx`):** each move has its own charge-up and payoff, followed by a 0.8 s follow-through that keeps the cinematic camera and plays the impact in brief slow motion (`timeScale`, which only paces the screen's sim loop, so the sim stays deterministic).
+  - **Mandible Crusher:** drops low with jaws spread wide, draws back shuddering while red energy streams into the jaws, then lunges (speed streaks) and the jaws slam shut: red and white bite flash, double shockwave and sparks. Camera: low front three-quarter pushing in, then cuts to a side shot framing both bugs for the bite.
+  - **Venom Barrage:** plants wide and pulses venom into a growing orb at the stinger (creeping back with each pulse); on release, a muzzle flash, recoil kick and seven glowing darts with tails. Camera: over the shoulder, looking down the barrel at the target.
+  - **Carapace Lock:** hunkers down, tucks its legs and spins a full turn while blue plates stream in and a faceted shell closes around it; the shell then holds (pulsing) for as long as the shield lasts. Camera: circles the bug.
+  - **Skitter Dash** (not an ultimate): a puff of dust and green speed streaks.
 - **Focus:** the background fades into fog around the caster. *(A true depth-of-field blur pass is a TODO.)*
 - **UI (`UltBanner`):** letterbox bars (~13% of screen height each), and the move name slams in from the right on a skewed stripe in the move's colour, drifts, then flies out left. The HUD hides while it plays.
-- **Charge VFX:** an aura ring with rising sparks around the caster, plus a pose (crouch → rise → rear back).
+- **Charge VFX:** a ring at the caster's feet in the move's colour and sparks streaming into the weapon (or onto the shell).
 
 Starting moves: **Mandible Crusher** (mandibles; heavy multi-part bite), **Venom Barrage** (stinger; fan of darts), **Carapace Lock** (armor; 4 s damage shield), **Skitter Dash** (legs; small, non-ultimate side-dodge).
 

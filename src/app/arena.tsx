@@ -190,7 +190,8 @@ export default function Arena() {
             setCount(-1);
           }
         }
-        acc += dt * speed.current;
+        // timeScale: a beat of slow motion as an ultimate lands (pacing only; the sim is unchanged).
+        acc += dt * speed.current * renderer.timeScale;
       }
       while (acc >= STEP) {
         // Both bugs fight autonomously; the player's AI plays to its build.
@@ -224,7 +225,7 @@ export default function Arena() {
       <GLView style={StyleSheet.absoluteFill} onContextCreate={onContextCreate} />
       {!cutscene && <DamageNumbers items={floaters} onDone={removeFloater} />}
 
-      {view.flash > 0 && <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: view.flash * 0.85 }]} />}
+      {view.flash > 0 && <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: view.flash * 0.35 }]} />}
 
       {view.ult && (
         <UltBanner
