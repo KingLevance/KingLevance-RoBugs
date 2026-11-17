@@ -39,10 +39,12 @@ export type WeaponStats = {
   ramBonus?: number;
   /** Lasers: the shot is a bolt of light (very fast; drawn as a beam). */
   beam?: boolean;
+  /** Vampiric: this share of the damage dealt heals the attacker's most damaged parts. */
+  drain?: number;
 };
 
 /** Special hardware a signature move can need (see MoveDef.requires). */
-export type PartTag = 'venom' | 'silk' | 'spider' | 'dig' | 'cloak' | 'laser' | 'shock';
+export type PartTag = 'venom' | 'silk' | 'spider' | 'dig' | 'cloak' | 'laser' | 'shock' | 'drain';
 
 export type PartDef = {
   id: string;
@@ -90,6 +92,7 @@ export const PARTS: readonly PartDef[] = [
   // ── Weapons ────────────────────────────────────────────────────
   { id: 'mand-gnash', name: 'Gnasher Jaws', category: 'mandibles', rarity: 'common', description: 'Chomping jaws. Short reach, steady damage.', hp: 35, mass: 4, power: 2, weapon: { damage: 9, range: 34, cooldown: 0.6, arc: deg(50) } },
   { id: 'mand-shear', name: 'Shearfang Jaws', category: 'mandibles', rarity: 'rare', description: 'Serrated scissor jaws that bite deep.', hp: 45, mass: 5, power: 3, weapon: { damage: 16, range: 36, cooldown: 0.7, arc: deg(45) } },
+  { id: 'mand-proboscis', name: 'Siphon Proboscis', category: 'mandibles', rarity: 'rare', description: 'A mosquito needle. Every hit heals your bug for 60% of the damage. Lets you use Blood Siphon.', hp: 30, mass: 3, power: 2, tag: 'drain', weapon: { damage: 11, range: 44, cooldown: 0.65, arc: deg(30), drain: 0.6 } },
   { id: 'sting-dart', name: 'Dart Stinger', category: 'stinger', rarity: 'uncommon', description: 'Fires corrosive darts at range.', hp: 25, mass: 3, power: 3, tag: 'venom', weapon: { damage: 10, range: 190, cooldown: 1.0, arc: deg(20), projectileSpeed: 320 } },
   { id: 'sting-lance', name: 'Arc Lance Stinger', category: 'stinger', rarity: 'epic', description: 'Overcharged stinger. Heavy darts, long reload.', hp: 35, mass: 4, power: 5, tag: 'venom', weapon: { damage: 18, range: 220, cooldown: 1.6, arc: deg(18), projectileSpeed: 380 } },
   { id: 'pinc-clamp', name: 'Clamp Pincers', category: 'pincers', rarity: 'common', description: 'Wide-sweeping claws that crush.', hp: 40, mass: 5, power: 2, weapon: { damage: 12, range: 40, cooldown: 0.9, arc: deg(70) } },

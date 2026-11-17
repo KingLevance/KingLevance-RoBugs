@@ -160,6 +160,19 @@ export default function Arena() {
       const items: Floater[] = [];
       for (; cursor < sim.events.length; cursor++) {
         const e = sim.events[cursor];
+        if (e.type === 'heal') {
+          if (e.amount < 2) continue;
+          const hp = renderer.project(e.x, e.y, e.h / CELL + 2.2);
+          items.push({
+            id: nextId++,
+            x: Math.min(size.current.w - 50, Math.max(50, hp.x * size.current.w)),
+            y: Math.min(size.current.h - 120, Math.max(90, hp.y * size.current.h)),
+            text: `+${Math.round(e.amount)}`,
+            color: '#7CFFB2',
+            size: 18,
+          });
+          continue;
+        }
         if (e.type !== 'hit' && e.type !== 'break' && e.type !== 'crash') continue;
         const crit = e.type === 'hit' && e.crit;
         const h = e.type === 'crash' ? 0 : e.h / CELL;

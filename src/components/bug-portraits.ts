@@ -12,6 +12,7 @@ export const BUG_PORTRAITS: Record<string, ImageSourcePropType> = {
   lattice: require('@/assets/bugs/lattice.png'),
   gravelgrub: require('@/assets/bugs/gravelgrub.png'),
   arcfly: require('@/assets/bugs/arcfly.png'),
+  bloodgnat: require('@/assets/bugs/bloodgnat.png'),
   vexa: require('@/assets/bugs/vexa.png'),
   twins: require('@/assets/bugs/twins.png'),
   glimmer: require('@/assets/bugs/glimmer.png'),

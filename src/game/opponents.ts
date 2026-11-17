@@ -99,6 +99,7 @@ const L = {
   q: 'pinc-digger',
   t: 'horn-shock',
   i: 'armor-mirage',
+  y: 'mand-proboscis',
 };
 
 const bug = (name: string, rows: string[]): Build => ({ name, placements: fromLayout(rows, L) });
@@ -247,12 +248,26 @@ export const OPPONENTS: Opponent[] = [
     map: { x: 0.72, y: 0.665 },
   },
   {
+    id: 'bloodgnat',
+    name: 'Bloodgnat',
+    blurb: 'A whining mosquito-bot. Every bite it lands patches it up, so finish it fast.',
+    arena: 'pit',
+    aggression: 0.9,
+    build: bug('Bloodgnat', ['.MyM.', 'ceHec', 'GBOBG', 'sKoKs', '.s.s.']),
+    moves: ['blood-siphon', 'overclock'],
+    boss: false,
+    guaranteed: [move('blood-siphon'), part('mand-proboscis')],
+    lootTable: [...tierTable('rare'), { reward: part('mand-proboscis'), weight: 20 }, { reward: part('wings-glass'), weight: 6 }],
+    unlockedBy: ['silkjaw'],
+    map: { x: 0.5, y: 0.665 },
+  },
+  {
     id: 'vexa',
     name: 'Queen Vexa',
     blurb: 'Hive champion. Drill horn, shear jaws, glass wings. Farmable boss.',
     arena: 'hive',
     aggression: 0.8,
-    build: bug('Queen Vexa', ['.mDM.', 'rBVBr', 'GBOBG', '.gog.']),
+    build: bug('Queen Vexa', ['.mhM.', 'rBVBr', 'GBOBG', '.gog.']),
     moves: ['mandible-crusher', 'carapace-lock'],
     boss: true,
     guaranteed: [part('wings-glass'), part('mand-shear')],
@@ -264,7 +279,7 @@ export const OPPONENTS: Opponent[] = [
       { reward: part('wings-glass'), weight: 8 },
       { reward: move('mandible-crusher'), weight: 4 },
     ],
-    unlockedBy: ['gravelgrub', 'arcfly'],
+    unlockedBy: ['gravelgrub', 'arcfly', 'bloodgnat'],
     map: { x: 0.5, y: 0.585 },
   },
 

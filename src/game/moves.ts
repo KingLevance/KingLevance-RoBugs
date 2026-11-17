@@ -27,7 +27,8 @@ export type MoveId =
   | 'sunder-beam'
   | 'static-burst'
   | 'overclock'
-  | 'gale-flap';
+  | 'gale-flap'
+  | 'blood-siphon';
 
 export type MoveDef = {
   id: MoveId;
@@ -167,6 +168,17 @@ export const MOVES: readonly MoveDef[] = [
     cooldown: 8,
     ultimate: false,
     requires: { category: 'wings', count: 1, label: 'wings' },
+  },
+  {
+    id: 'blood-siphon',
+    name: 'Blood Siphon',
+    description: 'Latches on and drinks for 2.4 seconds: drains the nearest enemy part and pours it all back into your own damaged parts. Needs a Siphon Proboscis.',
+    rarity: 'rare',
+    color: '#E8323F',
+    cost: 35,
+    cooldown: 11,
+    ultimate: false,
+    requires: { tag: 'drain', count: 1, label: 'a Siphon Proboscis' },
   },
 ];
 

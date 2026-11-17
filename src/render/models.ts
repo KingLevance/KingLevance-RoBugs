@@ -328,6 +328,7 @@ const LOOK: Record<string, number> = {
   'legs-crawler': 2,
   'wings-glass': 1,
   'mand-shear': 1,
+  'mand-proboscis': 2,
   'sting-lance': 1,
   'pinc-vise': 1,
   'horn-drill': 1,
@@ -693,6 +694,28 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
     }
 
     case 'mandibles': {
+      if (look === 2) {
+        // Mosquito proboscis: a fleshy sheath, a long needle with a blood tube that glows as it drinks.
+        root.add(at(shape(ellip(0.3, 0.22, 0.26), dark), 0, 0.5, 0.26));
+        for (const d of [-1, 1]) root.add(at(shape(ellip(0.1, 0.08, 0.12), main, 0.02), 0.2 * d, 0.56, 0.12)); // palps
+        const blood = mat(0xff8f8f, { emissive: 0xc8102e });
+        const needle = new THREE.Group();
+        needle.position.set(0, 0.5, 0.06);
+        needle.add(chain([V(0, 0, 0), V(0, -0.02, -0.4), V(0, -0.06, -0.8)], 0.1, 0.06, main));
+        for (let i = 0; i < 4; i++) needle.add(at(new THREE.Mesh(torus(0.095 - i * 0.008, 0.022), dark), 0, -0.01 - i * 0.012, -0.12 - i * 0.18));
+        const tube = seg(V(0, 0.05, -0.05), V(0, 0.0, -0.78), 0.035, blood, 0.03, 0);
+        needle.add(tube);
+        const tip = shape(cone(0.04, 0.42, 6), steel, 0.02);
+        tip.rotation.x = -Math.PI / 2 - 0.08;
+        needle.add(at(tip, 0, -0.08, -1.0));
+        root.add(needle);
+        animate = ({ t, attack }) => {
+          needle.position.z = 0.06 - attack * 0.22; // stab
+          needle.rotation.x = Math.sin(t * 2.2 + row) * 0.04 + attack * 0.06;
+          blood.emissiveIntensity = 0.5 + Math.max(0, Math.sin(t * 7)) * 0.4 + attack * 1.5; // pumping
+        };
+        break;
+      }
       root.add(at(shape(rbox(0.6, 0.32, 0.36, 0.12), dark), 0, 0.5, 0.28));
       root.add(at(shape(rbox(0.36, 0.12, 0.1, 0.04), gun, 0.02), 0, 0.5, 0.08)); // mouth recess
       for (const d of [-1, 1]) bolt(0.22 * d, 0.68, 0.3);

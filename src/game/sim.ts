@@ -77,6 +77,9 @@ export type Bug = {
   haste: number;
   /** Seconds left underground (Burrow Strike): untouchable, tunnelling at its target. */
   burrow: number;
+  /** Seconds of Blood Siphon left (latched on, draining). */
+  siphon: number;
+  siphonTick: number;
   /** Exponentially decaying recent damage taken, for move judgement. */
   recentDamage: number;
   /** Autonomous driver state (see aiInput). */
@@ -104,7 +107,9 @@ export type SimEvent =
   | { type: 'ult-release'; bug: number; move: MoveId }
   | { type: 'move'; bug: number; move: MoveId }
   /** A burrowed bug bursts out of the floor. */
-  | { type: 'erupt'; bug: number; x: number; y: number };
+  | { type: 'erupt'; bug: number; x: number; y: number }
+  /** A bug healed (vampiric hits, Blood Siphon). `from` is the bug it drank from. */
+  | { type: 'heal'; bug: number; from: number; x: number; y: number; h: number; amount: number };
 
 export type Ult = { id: MoveId; caster: number; t: number; dur: number };
 
@@ -265,6 +270,8 @@ function makeBug(index: number, team: 0 | 1, fighter: Fighter, pos: Vec, heading
     cloak: 0,
     haste: 0,
     burrow: 0,
+    siphon: 0,
+    siphonTick: 0,
     recentDamage: 0,
     alt: 0,
     vAlt: 0,
@@ -416,8 +423,9 @@ export function critChance(attacker: Bug, victim: Bug, from: Vec) {
   return Math.min(CRIT.max, CRIT.base + angle + attacker.stats.crit);
 }
 
-function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug | null, crit = false) {
-  if (!p.alive || !canBeHurt(sim, bug)) return;
+/** Damage a part; returns the damage actually done (0 if it couldn't be hurt). */
+function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug | null, crit = false): number {
+  if (!p.alive || !canBeHurt(sim, bug)) return 0;
   if (bug.cloak > 0) bug.cloak = Math.min(bug.cloak, 0.4); // a hit flushes it out of hiding
   dmg *= DAMAGE_SCALE * (0.8 + rand(sim) * 0.4) * (crit ? CRIT.mult : 1);
   if (bug.shield > 0) dmg *= 0.3;
@@ -449,7 +457,7 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
     sim.hitstop = Math.max(sim.hitstop, 0.04);
     sim.shake = Math.max(sim.shake, 0.18);
   }
-  if (p.hp > 0) return;
+  if (p.hp > 0) return dmg;
 
   p.alive = false;
   // A part breaking gets a beat of hit-stop and a proper shake.
@@ -472,8 +480,26 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
   }
   refresh(bug);
   if (bug.dead) sim.log.push(`${bug.name} is disabled!`);
+  return dmg;
 }
 
+/**
+ * Heal `bug` by `amount`, most-damaged parts first (broken parts stay broken).
+ * `from` is the bug the health was drunk from (for the effect).
+ */
+function heal(sim: Sim, bug: Bug, amount: number, from: Bug) {
+  if (bug.dead || amount <= 0) return;
+  let left = amount;
+  const hurt = bug.parts.filter((p) => p.alive && p.hp < p.part.hp).sort((a, b) => a.hp / a.part.hp - b.hp / b.part.hp);
+  for (const p of hurt) {
+    const add = Math.min(left, p.part.hp - p.hp);
+    p.hp += add;
+    left -= add;
+    if (left <= 0) break;
+  }
+  const done = amount - left;
+  if (done > 0.5) sim.events.push({ type: 'heal', bug: bug.index, from: from.index, x: bug.pos.x, y: bug.pos.y, h: bug.alt, amount: done });
+}
 function damageNear(sim: Sim, bug: Bug, at: Vec, dmg: number, attacker: Bug | null) {
   const hit = nearestPart(bug, at, true);
   if (hit) damagePart(sim, bug, hit.p, dmg, attacker);
@@ -542,6 +568,9 @@ function judge(sim: Sim, bug: Bug, id: MoveId): boolean {
       return bug.haste <= 0 && dist < 170;
     case 'gale-flap':
       return near(120, true) || (near(120) && bug.recentDamage > 10);
+    case 'blood-siphon':
+      // Latch on once hurt enough for it to matter.
+      return bug.siphon <= 0 && dist < bug.radius + foe.radius + 30 && hpFraction(bug) < 0.85 && Math.abs(foe.alt - bug.alt) < 30;
   }
 }
 
@@ -745,6 +774,10 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
     case 'overclock':
       bug.haste = 5;
       break;
+    case 'blood-siphon':
+      bug.siphon = 2.4;
+      bug.siphonTick = 0;
+      break;
     case 'gale-flap':
       for (const e of foesOf(sim, bug)) {
         const d = Math.hypot(e.pos.x - bug.pos.x, e.pos.y - bug.pos.y) || 1;
@@ -780,6 +813,18 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
   bug.stun = Math.max(0, bug.stun - dt);
   bug.cloak = Math.max(0, bug.cloak - dt);
   bug.haste = Math.max(0, bug.haste - dt);
+  // Blood Siphon: while latched on and in reach, drink from the nearest enemy part.
+  if (bug.siphon > 0) {
+    bug.siphon = Math.max(0, bug.siphon - dt);
+    bug.siphonTick -= dt;
+    const prey = foeOf(sim, bug);
+    const gap = Math.hypot(prey.pos.x - bug.pos.x, prey.pos.y - bug.pos.y);
+    if (bug.siphonTick <= 0 && !bug.dead && !prey.dead && bug.stun <= 0 && gap < bug.radius + prey.radius + 40 && Math.abs(prey.alt - bug.alt) < 35) {
+      bug.siphonTick = 0.3;
+      const near = nearestPart(prey, bug.pos, true);
+      if (near) heal(sim, bug, damagePart(sim, prey, near.p, 9, bug), prey);
+    }
+  }
   for (const id of bug.moves) bug.moveCd[id] = Math.max(0, (bug.moveCd[id] ?? 0) - dt);
   if (bug.dead) {
     bug.vel.x *= 0.9;
@@ -874,7 +919,8 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
           dmg += Math.max(0, closing) * w.ramBonus;
         }
         const crit = rand(sim) < critChance(bug, enemy, wp) || ambush;
-        damagePart(sim, enemy, strikeTarget(sim, enemy, wp, bug.alt > enemy.alt + 15) ?? target.p, dmg, bug, crit);
+        const dealt = damagePart(sim, enemy, strikeTarget(sim, enemy, wp, bug.alt > enemy.alt + 15) ?? target.p, dmg, bug, crit);
+        if (w.drain) heal(sim, bug, dealt * w.drain, enemy);
       }
     }
     tryMoves(sim, bug);
@@ -1530,7 +1576,8 @@ export function aiInput(sim: Sim, me: number, aggression: number = sim.bugs[me].
       const fragile = bug.parts.some(
         (p) => p.alive && (p.part.category === 'core' || (p.part.weapon && weapons.length <= 1)) && p.hp < p.part.hp * 0.3,
       );
-      if (ai.engaged > flurry * (fragile ? 0.65 : 1) || (losingTrade && ai.engaged > 0.4)) {
+      // (Don't break off mid-drink.)
+      if (bug.siphon <= 0 && (ai.engaged > flurry * (fragile ? 0.65 : 1) || (losingTrade && ai.engaged > 0.4))) {
         ai.engaged = 0;
         setMode('retreat');
       }
@@ -1625,7 +1672,7 @@ export function hud(sim: Sim): Hud {
     dead: bug.dead,
     hp: hpFraction(bug),
     proc: bug.proc,
-    status: `${bug.webbed > 0 ? ' 🕸' : ''}${bug.stun > 0 ? ' ⚡' : ''}${bug.cloak > 0 ? ' 👻' : ''}${bug.burrow > 0 ? ' ⛏' : ''}${bug.haste > 0 ? ' 🔥' : ''}`,
+    status: `${bug.webbed > 0 ? ' 🕸' : ''}${bug.stun > 0 ? ' ⚡' : ''}${bug.cloak > 0 ? ' 👻' : ''}${bug.burrow > 0 ? ' ⛏' : ''}${bug.haste > 0 ? ' 🔥' : ''}${bug.siphon > 0 ? ' 🩸' : ''}`,
     shield: bug.shield > 0,
     flying: bug.alt > 8,
     wings: maxStamina(bug) > 0 ? bug.stamina / maxStamina(bug) : -1,

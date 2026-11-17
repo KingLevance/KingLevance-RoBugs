@@ -681,6 +681,13 @@ export class ArenaRenderer {
         this.releaseFx(sim, e.move, e.bug);
       } else if (e.type === 'move') {
         this.moveFx(sim, e.move, e.bug);
+      } else if (e.type === 'heal') {
+        // Health flowing from the victim into the drinker: a few red droplets and a green glint.
+        const to = toWorld(e.x, e.y, e.h / CELL + 0.9);
+        const src = sim.bugs[e.from];
+        const from = toWorld(src.pos.x, src.pos.y, src.alt / CELL + 0.8);
+        this.drip(from, to, Math.min(6, 2 + Math.round(e.amount / 3)));
+        this.burst(to, 3, 0x7cffb2, 0.5);
       } else if (e.type === 'erupt') {
         // A burrower bursts out of the floor.
         const at = toWorld(e.x, e.y, 0.3);
@@ -972,6 +979,23 @@ export class ArenaRenderer {
     }
   }
 
+  /** Red droplets that fly from one point to another (vampiric healing). */
+  private drip(from: THREE.Vector3, to: THREE.Vector3, n: number) {
+    for (let i = 0; i < n; i++) {
+      const b = this.bits[this.nextBit];
+      this.nextBit = (this.nextBit + 1) % this.bits.length;
+      b.m.position.copy(from).add(new THREE.Vector3((Math.random() - 0.5) * 0.6, Math.random() * 0.4, (Math.random() - 0.5) * 0.6));
+      const life = 0.32 + Math.random() * 0.12;
+      // Aim so it arrives at `to` as gravity pulls it down (16 units/s²).
+      const v = to.clone().sub(b.m.position).divideScalar(life);
+      v.y += 8 * life;
+      b.vel.copy(v);
+      (b.m.material as THREE.MeshBasicMaterial).color.set(i % 3 === 0 ? 0xff6b6b : 0xc8102e);
+      b.life = b.max = life;
+      b.m.visible = true;
+    }
+  }
+
   /** Effects for the quick (non-cutscene) moves, fired the moment they're used. */
   private moveFx(sim: Sim, id: MoveId, bi: number) {
     const b = sim.bugs[bi];
@@ -1006,6 +1030,10 @@ export class ArenaRenderer {
         this.flash(mid, color, 1.7, 0.3);
         this.wave(mid, color, 1.2);
         this.startStreaks(bi, color, 0.5);
+        break;
+      case 'blood-siphon':
+        this.flash(mid, color, 1.4, 0.3);
+        this.burst(mid, 10, color, 0.9);
         break;
       case 'burrow-strike':
         this.burst(floor, 16, 0x8a6a45, 1.2);
@@ -1046,6 +1074,7 @@ export class ArenaRenderer {
       v.fxClock = 0;
       if (under) this.burst(toWorld(bug.pos.x, bug.pos.y, 0.2), 2, 0x8a6a45, 0.8);
       if (bug.stun > 0) this.burst(toWorld(bug.pos.x, bug.pos.y, bug.alt / CELL + 1.3), 2, 0xffe14d, 0.6);
+      if (bug.siphon > 0 && !bug.dead) this.burst(toWorld(bug.pos.x, bug.pos.y, bug.alt / CELL + 1.1), 1, 0xe8323f, 0.5);
       if (bug.haste > 0 && !bug.dead) this.burst(toWorld(bug.pos.x, bug.pos.y, bug.alt / CELL + 0.6), 1, 0xff9a2e, 0.6);
     }
   }

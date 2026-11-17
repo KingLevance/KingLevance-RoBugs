@@ -19,6 +19,7 @@ export const PART_ICONS: Record<string, ImageSourcePropType> = {
   'wings-glass': require('@/assets/parts/wings-glass.png'),
   'mand-gnash': require('@/assets/parts/mand-gnash.png'),
   'mand-shear': require('@/assets/parts/mand-shear.png'),
+  'mand-proboscis': require('@/assets/parts/mand-proboscis.png'),
   'sting-dart': require('@/assets/parts/sting-dart.png'),
   'sting-lance': require('@/assets/parts/sting-lance.png'),
   'pinc-clamp': require('@/assets/parts/pinc-clamp.png'),
