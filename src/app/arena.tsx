@@ -70,7 +70,7 @@ function BugHud({ bug, color, align }: { bug: HudBug; color: string; align: 'lef
           />
         </View>
       )}
-      <View style={{ flexDirection: 'row', gap: 4 }}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, justifyContent: end ? 'flex-end' : 'flex-start' }}>
         {bug.moves.map((m) => {
           const def = getMove(m.id);
           return (
