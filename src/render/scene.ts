@@ -7,11 +7,12 @@ import * as THREE from 'three';
 
 import { getMove } from '@/game/moves';
 import { CATEGORY_COLOR } from '@/game/parts';
-import { ARENA_SIZE, CELL, partWorld, stompWarning, type Bug, type Sim, type SimPart } from '@/game/sim';
+import { ARENA_SIZE, CELL, partWorld, type Bug, type Sim, type SimPart } from '@/game/sim';
 
 import { createRenderer } from './gl';
+import { ArenaDressing } from './arena';
 import { FlexRig, GIVE } from './flex';
-import { adjacentPairs, buildConnector, buildPart, seatHeight, stackOffset, toonMaterial, toonMesh, UNDER_LIFT, UNDER_SCALE, type Connector, type PartModel } from './models';
+import { adjacentPairs, buildConnector, buildPart, seatHeight, stackOffset, UNDER_LIFT, UNDER_SCALE, type Connector, type PartModel } from './models';
 
 const HALF = ARENA_SIZE / CELL / 2;
 const FOV = 50;
@@ -70,7 +71,7 @@ export class ArenaRenderer {
   private debris: Debris[] = [];
   private projectiles: THREE.Mesh[] = [];
   private sparks: THREE.Mesh[] = [];
-  private hazards: { obj: THREE.Object3D; ring?: THREE.Mesh; idx: number }[] = [];
+  private arena: ArenaDressing;
   private aura: THREE.Group;
   private auraSparks: THREE.Mesh[] = [];
   private camPos = new THREE.Vector3();
@@ -100,14 +101,13 @@ export class ArenaRenderer {
 
     this.camera = new THREE.PerspectiveCamera(FOV, w / h, 0.1, 200);
     this.fitOffset(w / h);
-    this.scene.fog = new THREE.Fog(BG, 55, 120);
 
     this.scene.add(new THREE.HemisphereLight(0xfff4e0, 0x30343c, 1.4));
     const sun = new THREE.DirectionalLight(0xffffff, 1.6);
     sun.position.set(-8, 20, 10);
     this.scene.add(sun);
 
-    this.buildArena(sim);
+    this.arena = new ArenaDressing(this.scene, sim);
     sim.bugs.forEach((b) => this.bugs.push(this.buildBug(b)));
 
     // Ultimate charge aura (hidden until needed).
@@ -145,138 +145,6 @@ export class ArenaRenderer {
 
     // Start the fight camera already in position (a long step snaps it there).
     this.updateCamera(sim, 10, 0);
-  }
-
-  private buildArena(sim: Sim) {
-    const size = HALF * 2;
-    const floor = toonMesh(new THREE.BoxGeometry(size, 0.4, size), toonMaterial(0x2b313a), 0);
-    floor.position.y = -0.2;
-    this.scene.add(floor);
-    // Floor tiles
-    const tileMat = toonMaterial(0x323943);
-    for (let x = 0; x < 6; x++)
-      for (let z = 0; z < 6; z++) {
-        if ((x + z) % 2) continue;
-        const t = new THREE.Mesh(new THREE.BoxGeometry(size / 6, 0.02, size / 6), tileMat);
-        t.position.set(-HALF + (x + 0.5) * (size / 6), 0.01, -HALF + (z + 0.5) * (size / 6));
-        this.scene.add(t);
-      }
-    const wallMat = toonMaterial(sim.spikedWalls ? 0x8a3b2e : 0x4b5563);
-    const spikeMat = toonMaterial(0xd9d4c7);
-    for (let i = 0; i < 4; i++) {
-      const horiz = i < 2;
-      const wall = toonMesh(new THREE.BoxGeometry(horiz ? size + 1.6 : 0.8, 1.4, horiz ? 0.8 : size), wallMat);
-      const off = HALF + 0.4;
-      wall.position.set(horiz ? 0 : i === 2 ? -off : off, 0.7, horiz ? (i === 0 ? -off : off) : 0);
-      this.scene.add(wall);
-      if (!sim.spikedWalls) continue;
-      for (let k = 0; k < 9; k++) {
-        const spike = toonMesh(new THREE.ConeGeometry(0.25, 0.8, 4), spikeMat, 0.05);
-        const along = -HALF + (k + 0.5) * (size / 9);
-        const inward = horiz ? (i === 0 ? 1 : -1) : i === 2 ? 1 : -1;
-        if (horiz) {
-          spike.position.set(along, 0.7, (i === 0 ? -HALF : HALF) + 0.05 * inward);
-          spike.rotation.x = (Math.PI / 2) * inward;
-        } else {
-          spike.position.set((i === 2 ? -HALF : HALF) + 0.05 * inward, 0.7, along);
-          spike.rotation.z = (-Math.PI / 2) * inward;
-        }
-        this.scene.add(spike);
-      }
-    }
-
-    this.buildStadium();
-
-    sim.hazards.forEach((h, idx) => {
-      const r = h.r / CELL;
-      if (h.kind === 'acid') {
-        const pool = new THREE.Mesh(
-          new THREE.CylinderGeometry(r, r, 0.08, 28),
-          toonMaterial(0x7ce654, { emissive: 0x2f7a1c, transparent: true, opacity: 0.8 }),
-        );
-        pool.position.copy(toWorld(h.x, h.y, 0.05));
-        this.scene.add(pool);
-        this.hazards.push({ obj: pool, idx });
-      } else {
-        const column = toonMesh(new THREE.CylinderGeometry(r * 0.9, r * 0.9, 1.6, 8), toonMaterial(0x6b7280));
-        const plate = toonMesh(new THREE.CylinderGeometry(r, r, 0.3, 8), toonMaterial(0xff8a3d), 0.03);
-        plate.position.y = -0.9;
-        column.add(plate);
-        column.position.copy(toWorld(h.x, h.y, 5.6));
-        const ring = new THREE.Mesh(
-          new THREE.RingGeometry(r * 0.85, r, 28),
-          new THREE.MeshBasicMaterial({ color: 0xff5a28, transparent: true, opacity: 0.3, side: THREE.DoubleSide }),
-        );
-        ring.rotation.x = -Math.PI / 2;
-        ring.position.copy(toWorld(h.x, h.y, 0.03));
-        this.scene.add(column, ring);
-        this.hazards.push({ obj: column, ring, idx });
-      }
-    });
-  }
-
-  /** Raised arena platform, outer floor, tiered stands with a crowd, and floodlights. */
-  private buildStadium() {
-    const size = HALF * 2;
-    const plinth = toonMesh(new THREE.BoxGeometry(size + 5, 1.6, size + 5), toonMaterial(0x1f242b), 0.02);
-    plinth.position.y = -1.0;
-    this.scene.add(plinth);
-    const trim = new THREE.Mesh(new THREE.BoxGeometry(size + 5.2, 0.12, size + 5.2), new THREE.MeshBasicMaterial({ color: 0xf2a93b }));
-    trim.position.y = -0.25;
-    this.scene.add(trim);
-    const outer = new THREE.Mesh(new THREE.CircleGeometry(90, 48), toonMaterial(0x161a20));
-    outer.rotation.x = -Math.PI / 2;
-    outer.position.y = -1.8;
-    this.scene.add(outer);
-
-    // Tiered stands in a bowl.
-    const tiers = 5;
-    const crowdColors = [0xf2a93b, 0x3ddc97, 0xff5d5d, 0x4fa8ff, 0xc77dff, 0xf1ede4, 0x8ed1e6];
-    const perTier = 110;
-    const crowd = new THREE.InstancedMesh(new THREE.BoxGeometry(0.7, 1.0, 0.7), new THREE.MeshToonMaterial({ color: 0xffffff }), tiers * perTier);
-    const m = new THREE.Matrix4();
-    const c = new THREE.Color();
-    let n = 0;
-    for (let i = 0; i < tiers; i++) {
-      const r = 34 + i * 3.4;
-      const top = -1.8 + 1.6 + i * 1.7;
-      // Each tier: an inward-facing riser wall plus a flat ring to stand on.
-      const mat = toonMaterial(i % 2 ? 0x2a3038 : 0x252a31);
-      const riser = new THREE.Mesh(new THREE.CylinderGeometry(r, r, top + 1.8, 56, 1, true), mat);
-      (riser.material as THREE.Material).side = THREE.DoubleSide;
-      riser.position.y = (top - 1.8) / 2;
-      const tread = new THREE.Mesh(new THREE.RingGeometry(r, r + 3.4, 56), mat);
-      tread.rotation.x = -Math.PI / 2;
-      tread.position.y = top;
-      this.scene.add(riser, tread);
-      for (let k = 0; k < perTier; k++) {
-        const a = (k / perTier) * Math.PI * 2 + i * 0.13;
-        const rr = r + 1.4 + Math.sin(k * 7.3 + i) * 0.5;
-        m.makeRotationY(-a);
-        m.setPosition(Math.cos(a) * rr, top + 0.5 + Math.abs(Math.sin(k * 3.1 + i * 2)) * 0.15, Math.sin(a) * rr);
-        crowd.setMatrixAt(n, m);
-        crowd.setColorAt(n, c.set(crowdColors[(k * 5 + i * 3) % crowdColors.length]).multiplyScalar(0.75));
-        n++;
-      }
-    }
-    crowd.instanceMatrix.needsUpdate = true;
-    if (crowd.instanceColor) crowd.instanceColor.needsUpdate = true;
-    this.scene.add(crowd);
-
-    // Floodlight towers.
-    const pole = toonMaterial(0x3a424d);
-    const lamp = new THREE.MeshBasicMaterial({ color: 0xfff1c8 });
-    for (let i = 0; i < 4; i++) {
-      const a = Math.PI / 4 + (i * Math.PI) / 2;
-      const r = 54;
-      const tower = toonMesh(new THREE.CylinderGeometry(0.5, 0.8, 26, 8), pole, 0.03);
-      tower.position.set(Math.cos(a) * r, 11, Math.sin(a) * r);
-      this.scene.add(tower);
-      const head = new THREE.Mesh(new THREE.BoxGeometry(5, 2.4, 0.6), lamp);
-      head.position.set(Math.cos(a) * r, 24.5, Math.sin(a) * r);
-      head.lookAt(0, 0, 0);
-      this.scene.add(head);
-    }
   }
 
   private buildBug(bug: Bug): BugView {
@@ -488,7 +356,7 @@ export class ArenaRenderer {
     });
 
     this.updateDebris(dt);
-    this.updateHazards(sim);
+    this.arena.update(sim, t, dt);
     this.updateProjectiles(sim);
     this.updateSparks(sim);
     this.updateAura(sim, t);
@@ -549,7 +417,10 @@ export class ArenaRenderer {
           }
         }
         this.burst(at, Math.round(3 + strength * 3), e.shielded ? 0x7fb3ff : e.dmg >= 14 ? 0xffb347 : 0xffe08a, 0.8 + strength * 0.25);
+      } else if (e.type === 'ult-release') {
+        this.arena.hype(0.9);
       } else if (e.type === 'crash') {
+        this.arena.hype(0.4);
         const at = toWorld(e.x, e.y, 0.2);
         this.burst(at, 16, 0x8c98a6, 1.3);
         const w = this.waves[this.nextWave];
@@ -559,6 +430,7 @@ export class ArenaRenderer {
         w.life = 0.45;
         w.m.visible = true;
       } else if (e.type === 'break') {
+        this.arena.hype(0.35);
         const at = toWorld(e.x, e.y, e.h / CELL + 0.6);
         this.burst(at, 12, CATEGORY_COLOR[e.category], 1.4);
         this.burst(at, 6, 0xffffff, 1.1);
@@ -636,25 +508,6 @@ export class ArenaRenderer {
     const dead = this.debris.filter((d) => d.age > 3);
     dead.forEach((d) => this.scene.remove(d.obj));
     this.debris = this.debris.filter((d) => d.age <= 3);
-  }
-
-  private updateHazards(sim: Sim) {
-    for (const hv of this.hazards) {
-      const h = sim.hazards[hv.idx];
-      if (h.kind !== 'stomper') {
-        hv.obj.scale.y = 1 + Math.sin(this.clock * 3 + hv.idx) * 0.3;
-        continue;
-      }
-      const warnStart = h.period - 1.2;
-      let y = 5.6;
-      if (h.t < 0.5) y = 0.95 + (h.t / 0.5) * 4.65;
-      else if (h.t > warnStart) y = 5.6 + ((h.t - warnStart) / 1.2) * 1.4;
-      hv.obj.position.y = y;
-      if (hv.ring) {
-        const mat = hv.ring.material as THREE.MeshBasicMaterial;
-        mat.opacity = stompWarning(h) ? 0.5 + Math.sin(this.clock * 25) * 0.3 : 0.25;
-      }
-    }
   }
 
   private updateProjectiles(sim: Sim) {
