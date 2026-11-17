@@ -23,9 +23,21 @@ const player: Fighter = { build: STARTER_BUILD, moves: STARTER_MOVES };
 function run(oppIndex: number, seed: number) {
   const opp = OPPONENTS[oppIndex];
   const sim = createSim(player, { build: opp.build, moves: opp.moves }, opp.arena, seed);
-  while (!sim.over) step(sim, STEP, [aiInput(sim, 0, 0.7), aiInput(sim, 1, opp.aggression)]);
+  let solo = 0;
+  let seen = 0;
+  while (!sim.over) {
+    step(sim, STEP, [aiInput(sim, 0, 0.7), aiInput(sim, 1, opp.aggression)]);
+    // Wall hits with the enemy nowhere near = the bug drove into the wall itself.
+    for (; seen < sim.events.length; seen++) {
+      const e = sim.events[seen];
+      if (e.type !== 'wall') continue;
+      const [a, b] = sim.bugs;
+      if (Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y) > (a.radius + b.radius) * 1.4) solo++;
+    }
+  }
   const ults = sim.events.filter((e) => e.type === 'ult-release').length;
-  return { winner: sim.winner, time: sim.time, ults, hash: `${sim.winner}:${sim.time.toFixed(4)}:${sim.rng}` };
+  const walls = sim.events.filter((e) => e.type === 'wall').length;
+  return { winner: sim.winner, time: sim.time, ults, walls, solo, hash: `${sim.winner}:${sim.time.toFixed(4)}:${sim.rng}` };
 }
 
 const a = run(1, 1234);
@@ -39,12 +51,16 @@ OPPONENTS.forEach((opp, i) => {
   let l = 0;
   let t = 0;
   let ults = 0;
+  let walls = 0;
+  let solo = 0;
   for (let k = 0; k < N; k++) {
     const r = run(i, k * 7919 + 1);
     if (r.winner === 0) w++;
     else if (r.winner === 1) l++;
     t += r.time;
     ults += r.ults;
+    walls += r.walls;
+    solo += r.solo;
   }
-  console.log(`Starter vs ${opp.name.padEnd(11)} W${w} L${l} D${N - w - l} avg ${(t / N).toFixed(1)}s ults/match ${(ults / N).toFixed(1)}`);
+  console.log(`Starter vs ${opp.name.padEnd(11)} W${w} L${l} D${N - w - l} avg ${(t / N).toFixed(1)}s ults/match ${(ults / N).toFixed(1)} wall hits/match ${(walls / N).toFixed(1)} (self-inflicted ${(solo / N).toFixed(1)})`);
 });

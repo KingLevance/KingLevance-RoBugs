@@ -82,6 +82,8 @@ export type SimEvent =
   | { type: 'break'; bug: 0 | 1; x: number; y: number; h: number; category: Category; time: number }
   /** A bug hit the floor after losing lift; `impact` is its fall speed. */
   | { type: 'crash'; bug: 0 | 1; x: number; y: number; impact: number }
+  /** A bug slammed into the arena wall (`impact` = speed into it). */
+  | { type: 'wall'; bug: 0 | 1; x: number; y: number; impact: number; spiked: boolean }
   | { type: 'ult-start'; bug: 0 | 1; move: MoveId }
   | { type: 'ult-release'; bug: 0 | 1; move: MoveId }
   | { type: 'move'; bug: 0 | 1; move: MoveId };
@@ -488,7 +490,10 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
       break;
     case 'skitter-dash': {
       // Sidestep away from danger: pick the side facing away from the foe.
-      const side = angleDiff(bug.heading, Math.atan2(foe.pos.y - bug.pos.y, foe.pos.x - bug.pos.x)) > 0 ? -1 : 1;
+      let side = angleDiff(bug.heading, Math.atan2(foe.pos.y - bug.pos.y, foe.pos.x - bug.pos.x)) > 0 ? -1 : 1;
+      // …unless that side is a wall: dash the other way.
+      const out = (k: number) => wallGap({ x: bug.pos.x - f.y * k * 120, y: bug.pos.y + f.x * k * 120 });
+      if (out(side) < bug.radius + 10 && out(-side) > out(side)) side = -side;
       bug.vel.x += -f.y * side * 340;
       bug.vel.y += f.x * side * 340;
       bug.invuln = 0.5;
@@ -610,7 +615,10 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
       bug.pos.y += wi === 2 ? -gap : gap;
       bug.vel.y *= -0.4;
     }
-    if (sim.spikedWalls && impact > 40) damageNear(sim, bug, wallPt, 4 + impact * 0.06, null);
+    if (impact > 40) {
+      sim.events.push({ type: 'wall', bug: bug.index, x: wallPt.x, y: wallPt.y, impact, spiked: sim.spikedWalls });
+      if (sim.spikedWalls) damageNear(sim, bug, wallPt, 4 + impact * 0.06, null);
+    }
   });
 
   // Acid
@@ -816,10 +824,10 @@ export function forfeit(sim: Sim, who: 0 | 1) {
 // The style comes from the build: weapons, speed and turning vs the enemy's.
 
 export type AiMode = 'approach' | 'strike' | 'retreat' | 'windup' | 'charge' | 'orbit';
-export type AiState = { mode: AiMode; t: number; side: 1 | -1; target: number; engaged: number };
+export type AiState = { mode: AiMode; t: number; side: 1 | -1; target: number; engaged: number; stuck: number };
 
 export function newAi(index: 0 | 1): AiState {
-  return { mode: 'approach', t: 0, side: index === 0 ? 1 : -1, target: -1, engaged: 0 };
+  return { mode: 'approach', t: 0, side: index === 0 ? 1 : -1, target: -1, engaged: 0, stuck: 0 };
 }
 
 /** How much we want to break each part category. */
@@ -838,10 +846,21 @@ const TARGET_VALUE: Record<Category, number> = {
   armor: 0.5,
 };
 
-function inHazard(sim: Sim, at: Vec, pad: number, airborne = false) {
-  return sim.hazards.some(
-    (h) => Math.hypot(at.x - h.x, at.y - h.y) < h.r + pad && (h.kind === 'acid' ? !airborne : h.t > h.period - 2),
-  );
+/** Distance from `p` to the nearest arena wall. */
+function wallGap(p: Vec) {
+  return Math.min(p.x, p.y, ARENA_SIZE - p.x, ARENA_SIZE - p.y);
+}
+
+/** Unit vector from `p` toward the nearest wall. */
+function wallNormal(p: Vec): Vec {
+  const g = [p.x, ARENA_SIZE - p.x, p.y, ARENA_SIZE - p.y];
+  const i = g.indexOf(Math.min(...g));
+  return [{ x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 }][i];
+}
+
+/** How open the space is `ahead` px along `d` (bigger = more room). */
+function room(bug: Bug, d: Vec, ahead: number) {
+  return wallGap({ x: bug.pos.x + d.x * ahead, y: bug.pos.y + d.y * ahead });
 }
 
 function rotate(v: Vec, a: number): Vec {
@@ -926,10 +945,36 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
   const matchFoe = flyer ? Math.min(1, foe.alt / bug.stats.maxAlt) : 0;
   let alt = flyer ? 1 : 0;
 
-  // Unarmed: survive. Circle away and dodge.
+  const away = { x: -toFoeN.x, y: -toFoeN.y };
+  /** Swing `ai.side` to whichever side of `base` (rotated by `angle`) has more open floor. */
+  const pickSide = (base: Vec, angle: number, ahead = 140) => {
+    const l = room(bug, rotate(base, angle), ahead);
+    const r = room(bug, rotate(base, -angle), ahead);
+    if (Math.abs(l - r) > 15) ai.side = l > r ? 1 : -1;
+  };
+
+  // Stuck (pinned on a wall, wedged in a corner): break out toward the middle.
+  const speed = Math.hypot(bug.vel.x, bug.vel.y);
+  const touchingFoe = dist < contact * 1.05;
+  if (speed < bug.stats.topSpeed * 0.18 && !touchingFoe && wallGap(bug.pos) < bug.radius + 40) ai.stuck += dt;
+  else ai.stuck = Math.max(0, ai.stuck - dt * 2);
+
+  // Unarmed: survive. Circle away (toward open floor) and dodge.
   if (melee.length === 0 && !ranged) {
-    const away = rotate({ x: -toFoeN.x, y: -toFoeN.y }, 0.9 * ai.side);
-    return steer(sim, bug, away, 1, alt);
+    if (ai.t > 0.5) {
+      pickSide(away, 0.9, 160);
+      ai.t = 0;
+    }
+    let flee = rotate(away, 0.9 * ai.side);
+    // Running into a corner just gets you cornered: lean back toward the middle.
+    const close = 1 - Math.min(1, (wallGap(bug.pos) - bug.radius) / 90);
+    if (close > 0) {
+      const m = ARENA_SIZE / 2;
+      const c = unit({ x: m - bug.pos.x, y: m - bug.pos.y });
+      flee = unit({ x: flee.x + c.x * close * 1.6, y: flee.y + c.y * close * 1.6 });
+    }
+    ai.mode = 'retreat';
+    return steer(sim, bug, flee, 1, alt);
   }
 
   let dir: Vec = toFoeN;
@@ -937,19 +982,34 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
   const setMode = (m: AiMode) => {
     ai.mode = m;
     ai.t = 0;
+    if (m === 'retreat') pickSide(away, 0.7);
+    if (m === 'windup') pickSide(away, 0.5, 160);
   };
+  let goalDist = Infinity;
+
+  if (ai.stuck > 0.7) {
+    ai.stuck = 0;
+    setMode('retreat');
+  }
 
   if (ranged && melee.length === 0) {
     // ── Sniper: orbit at range; turn in to shoot when a stinger is ready.
     if (ai.mode !== 'orbit') setMode('orbit');
     const want = 175;
     const ready = weapons.some((p) => p.cooldown < 0.25);
-    const tangent = rotate(toFoeN, (Math.PI / 2) * ai.side);
+    let tangent = rotate(toFoeN, (Math.PI / 2) * ai.side);
+    // Don't orbit into the wall: turn the circle round instead.
+    if (room(bug, tangent, 90) < bug.radius + 20 && room(bug, { x: -tangent.x, y: -tangent.y }, 90) > room(bug, tangent, 90)) {
+      ai.side = ai.side === 1 ? -1 : 1;
+      tangent = { x: -tangent.x, y: -tangent.y };
+      ai.t = 0;
+    }
     const radial = (dist - want) / 60;
     dir = unit({ x: tangent.x + toFoeN.x * radial, y: tangent.y + toFoeN.y * radial });
     if (ready && dist < 240) {
       dir = unit({ x: targetW.x - bug.pos.x, y: targetW.y - bug.pos.y });
       throttle = 0.25;
+      goalDist = Math.max(0, dist - contact);
     }
     alt = flyer ? 0.85 + Math.sin(sim.time * 1.3 + me) * 0.15 : 0;
     if (ai.t > 4) {
@@ -960,12 +1020,18 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
     // ── Rammer: back off to build a run-up, then charge the target part.
     if (ai.mode !== 'windup' && ai.mode !== 'charge') setMode('windup');
     if (ai.mode === 'windup') {
-      dir = rotate({ x: -toFoeN.x, y: -toFoeN.y }, 0.5 * ai.side);
-      if (dist > contact + 120 || ai.t > 1.6) setMode('charge');
+      dir = rotate(away, 0.5 * ai.side);
+      // Out of run-up room? Charge from here rather than back into the wall.
+      const blocked = room(bug, dir, bug.radius + 30) < bug.radius + 10 && ai.t > 0.4;
+      if (dist > contact + 120 || ai.t > 1.6 || blocked) setMode('charge');
     } else {
       dir = unit({ x: targetW.x - bug.pos.x, y: targetW.y - bug.pos.y });
+      goalDist = Math.max(0, dist - contact * 0.5);
       alt = matchFoe; // dive-bomb
-      if (dist < contact * 0.85 || ai.t > 2) setMode('strike');
+      // Whiffed (it sidestepped and the wall is coming up)? Pull out of the charge.
+      const ahead = forward(bug.heading);
+      const missed = ahead.x * toFoeN.x + ahead.y * toFoeN.y < 0.2 && room(bug, ahead, 80) < bug.radius + 20;
+      if (dist < contact * 0.85 || ai.t > 2 || missed) setMode('strike');
     }
   } else {
     // ── Brawler: approach (flanking the weapons) → strike → retreat → repeat.
@@ -978,9 +1044,13 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
       if (hz) {
         const push = unit({ x: foe.pos.x - hz.x, y: foe.pos.y - hz.y });
         goal = { x: foe.pos.x + push.x * contact, y: foe.pos.y + push.y * contact };
+      } else if (sim.spikedWalls && bug.stats.mass >= foe.stats.mass * 0.85 && wallGap(foe.pos) < foe.radius + 70) {
+        // Enemy near the spikes: get between it and the middle and pin it there.
+        const n = wallNormal(foe.pos);
+        goal = { x: foe.pos.x - n.x * contact, y: foe.pos.y - n.y * contact };
       }
       const toGoal = { x: goal.x - bug.pos.x, y: goal.y - bug.pos.y };
-      const goalDist = Math.hypot(toGoal.x, toGoal.y);
+      const goalDist0 = Math.hypot(toGoal.x, toGoal.y);
       // Don't walk into its weapons: circle round them first (nimble bugs try harder).
       const foeHasMelee = foe.parts.some((p) => p.alive && p.part.weapon && !p.part.weapon.projectileSpeed);
       const flankEager = foeArmed && foeHasMelee && !heavy && (nimble || aggression < 0.85);
@@ -991,8 +1061,9 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
         dir = unit({ x: tangent.x - toFoeN.x * keepOff, y: tangent.y - toFoeN.y * keepOff });
       } else {
         dir = unit(toGoal);
+        goalDist = goalDist0;
       }
-      if (goalDist < 30 || dist < contact * 0.95) setMode('strike');
+      if (goalDist0 < 30 || dist < contact * 0.95) setMode('strike');
       if (ai.t > 5) setMode('strike'); // stop dancing eventually
       // Start the dive a little before arriving.
       if (flyer && dist < contact + 60) alt = Math.max(matchFoe, 0.35);
@@ -1002,6 +1073,7 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
       const eta = Math.min(1.2, dist / Math.max(60, bug.stats.topSpeed));
       const lead = { x: targetW.x + foe.vel.x * eta - bug.pos.x, y: targetW.y + foe.vel.y * eta - bug.pos.y };
       dir = unit(lead);
+      goalDist = Math.max(0, dist - contact * 0.5);
       const touching = dist < contact * 0.95;
       if (touching) ai.engaged += dt;
       else if (ai.t > 2.2) setMode('approach'); // lost them: re-set up the attack
@@ -1014,8 +1086,13 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
         setMode('retreat');
       }
     } else if (ai.mode === 'retreat') {
-      // Peel away on an arc, then come back from the other side.
-      dir = rotate({ x: -toFoeN.x, y: -toFoeN.y }, 0.7 * ai.side);
+      // Peel away on an arc (toward open floor), then come back from the other side.
+      dir = rotate(away, 0.7 * ai.side);
+      // Backed against a wall: slide out along it toward the middle instead.
+      if (room(bug, dir, 120) < bug.radius + 20) {
+        const m = ARENA_SIZE / 2;
+        dir = unit({ x: m - bug.pos.x + away.x * 80, y: m - bug.pos.y + away.y * 80 });
+      }
       const length = 0.55 + (1 - aggression) * 0.6 + (myHp < 0.35 ? 0.4 : 0);
       if (ai.t > length) {
         ai.side = ai.side === 1 ? -1 : 1;
@@ -1025,28 +1102,65 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
     }
   }
 
-  return steer(sim, bug, dir, throttle, alt);
+  return steer(sim, bug, dir, throttle, alt, goalDist);
 }
 
-/** Final steering: dodge hazards (acid only matters near the floor) and walls. */
-function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number, alt = 0): Input {
-  let d = dir;
+/**
+ * Danger (0..1) of heading along `d` for the next moment: walls (only getting
+ * closer counts), acid near the floor, presses about to slam. Probes stop at
+ * `goalDist` so chasing an enemy that's against the wall is still allowed.
+ */
+function danger(sim: Sim, bug: Bug, d: Vec, look: number, airborne: boolean) {
+  const margin = bug.radius + 34;
+  const gapNow = wallGap(bug.pos);
+  let worst = 0;
+  for (const s of [0.4, 0.75, 1]) {
+    const p = { x: bug.pos.x + d.x * look * s, y: bug.pos.y + d.y * look * s };
+    const gap = wallGap(p);
+    if (gap < margin) {
+      let w = (margin - gap) / margin;
+      if (gap >= gapNow - 1) w *= 0.25; // sliding along / away from a wall is fine
+      worst = Math.max(worst, Math.min(1, w) * (sim.spikedWalls ? 1 : 0.75));
+    }
+    for (const h of sim.hazards) {
+      const live = h.kind === 'acid' ? !airborne : h.t > h.period - 2.2;
+      if (!live) continue;
+      const edge = Math.hypot(p.x - h.x, p.y - h.y) - h.r - bug.radius * 0.5;
+      const now = Math.hypot(bug.pos.x - h.x, bug.pos.y - h.y) - h.r - bug.radius * 0.5;
+      if (edge < 24 && edge <= now) worst = Math.max(worst, Math.min(1, (24 - edge) / 30) * 0.9);
+    }
+  }
+  return worst;
+}
+
+const STEER_DIRS = Array.from({ length: 16 }, (_, k) => ({ x: Math.cos((k * Math.PI) / 8), y: Math.sin((k * Math.PI) / 8) }));
+
+/**
+ * Final steering (context steering): score 16 directions by how well they match
+ * where we want to go minus how dangerous they are, and take the best. Slows
+ * down to turn when the bug is pointed at something it shouldn't run into.
+ */
+function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number, alt = 0, goalDist = Infinity): Input {
   const airborne = bug.alt > 10 && alt * bug.stats.maxAlt > 10;
-  const probe = { x: bug.pos.x + d.x * 70, y: bug.pos.y + d.y * 70 };
-  if (inHazard(sim, probe, bug.radius * 0.5, airborne)) {
-    const left = rotate(d, Math.PI / 2.2);
-    const right = rotate(d, -Math.PI / 2.2);
-    const pl = { x: bug.pos.x + left.x * 70, y: bug.pos.y + left.y * 70 };
-    d = inHazard(sim, pl, bug.radius * 0.5, airborne) ? right : left;
+  const speed = Math.hypot(bug.vel.x, bug.vel.y);
+  // Never look less far than we need to stop.
+  const look = Math.max(speed * 0.3, Math.min(goalDist, 45 + speed * 0.55 + bug.radius * 0.5));
+  let best = dir;
+  let bestScore = -Infinity;
+  for (const c of [dir, ...STEER_DIRS]) {
+    const want = c.x * dir.x + c.y * dir.y;
+    const score = want - danger(sim, bug, c, look, airborne) * 2.4;
+    if (score > bestScore + 1e-9) {
+      bestScore = score;
+      best = c;
+    }
   }
-  const m = ARENA_SIZE / 2;
-  const edge = Math.max(Math.abs(bug.pos.x - m), Math.abs(bug.pos.y - m));
-  if (edge > m - 60) {
-    const c = unit({ x: m - bug.pos.x, y: m - bug.pos.y });
-    const k = Math.min(1, (edge - (m - 60)) / 40) * 0.6;
-    d = unit({ x: d.x * (1 - k) + c.x * k, y: d.y * (1 - k) + c.y * k });
-  }
-  return { x: d.x * throttle, y: d.y * throttle, alt };
+  // Facing danger and needing to turn hard? Ease off so we turn on the spot
+  // (bugs move along their heading, so full throttle would carry us into it).
+  const f = forward(bug.heading);
+  const align = f.x * best.x + f.y * best.y;
+  if (align < 0.3 && danger(sim, bug, f, look, airborne) > 0.35) throttle *= 0.15;
+  return { x: best.x * throttle, y: best.y * throttle, alt };
 }
 
 // ── HUD summary (cheap, for React) ──────────────────────────────────
