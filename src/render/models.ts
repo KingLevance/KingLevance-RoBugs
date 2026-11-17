@@ -69,6 +69,24 @@ export function toonMaterial(
   return m;
 }
 
+const HIGHLIGHT = new THREE.MeshBasicMaterial({ color: 0xffb23f, side: THREE.BackSide });
+
+/** Swap a part model's black outlines for bright amber ones (selection highlight), or back. */
+export function setHighlight(root: THREE.Object3D, on: boolean) {
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    if (on && o.material === OUTLINE) {
+      o.material = HIGHLIGHT;
+      // Fatter hull so the highlight reads at a glance.
+      o.userData.hullScale = o.scale.clone();
+      o.scale.multiplyScalar(1.06);
+    } else if (!on && o.material === HIGHLIGHT) {
+      o.material = OUTLINE;
+      if (o.userData.hullScale) o.scale.copy(o.userData.hullScale as THREE.Vector3);
+    }
+  });
+}
+
 /** A toon mesh plus its black outline shell (uniform-scale hull; used for arena props). */
 export function toonMesh(geo: THREE.BufferGeometry, mat: THREE.Material, outline = 0.06) {
   const g = new THREE.Group();

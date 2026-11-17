@@ -70,23 +70,28 @@ function PartDetails({ part, onRemove }: { part: PartDef; onRemove: () => void }
   );
 }
 
+type Check = { label: string; short: string; ok: boolean; optional?: boolean };
+
 /** The things a bug needs, as ticks: clearer than a list of errors. */
-function Checklist({ placements, stats }: { placements: Placement[]; stats: BugStats }) {
+function buildChecks(placements: Placement[], stats: BugStats): Check[] {
   const parts = resolve(placements);
   const count = (c: Category) => parts.filter((p) => p.part.category === c).length;
   const linked = connectedKeys(parts).size === parts.length;
   const weapons = parts.filter((p) => p.part.weapon).length;
-  const items: { label: string; ok: boolean; optional?: boolean }[] = [
-    { label: count('head') > 1 ? 'Only 1 head' : 'Head', ok: count('head') === 1 },
-    { label: 'Middle body (thorax)', ok: count('thorax') >= 1 },
-    { label: 'Power core', ok: count('core') >= 1 },
-    { label: 'Legs or wings', ok: stats.thrust > 0 },
-    { label: 'All parts touching', ok: linked },
-    { label: `Power ${stats.powerDraw}/${stats.powerSupply}`, ok: stats.powerDraw <= stats.powerSupply },
-    { label: `Weight ${stats.mass}/${MAX_MASS}`, ok: stats.mass <= MAX_MASS },
-    { label: 'A weapon', ok: weapons > 0, optional: true },
-    { label: 'Even legs', ok: Math.abs(stats.thrustBias) <= 0.05, optional: true },
+  return [
+    { label: count('head') > 1 ? 'Only 1 head' : 'Head', short: count('head') > 1 ? 'Only 1 head' : 'A head', ok: count('head') === 1 },
+    { label: 'Middle body (thorax)', short: 'A thorax', ok: count('thorax') >= 1 },
+    { label: 'Power core', short: 'A power core', ok: count('core') >= 1 },
+    { label: 'Legs or wings', short: 'Legs or wings', ok: stats.thrust > 0 },
+    { label: 'All parts touching', short: 'All parts touching', ok: linked },
+    { label: `Power ${stats.powerDraw}/${stats.powerSupply}`, short: `Less power (${stats.powerDraw}/${stats.powerSupply})`, ok: stats.powerDraw <= stats.powerSupply },
+    { label: `Weight ${stats.mass}/${MAX_MASS}`, short: `Less weight (${stats.mass}/${MAX_MASS})`, ok: stats.mass <= MAX_MASS },
+    { label: 'A weapon', short: 'A weapon', ok: weapons > 0, optional: true },
+    { label: 'Even legs', short: 'Even legs', ok: Math.abs(stats.thrustBias) <= 0.05, optional: true },
   ];
+}
+
+function Checklist({ items }: { items: Check[] }) {
   return (
     <View style={styles.checklist}>
       {items.map((it) => {
@@ -130,6 +135,11 @@ export default function Garage() {
   const used = usage(placements);
   const stats = computeStats(resolve(placements));
   const errors = validateBuild(placements);
+  const checks = buildChecks(placements, stats);
+  // The power line is redundant while there's no core at all (adding one fixes both).
+  const noCore = !checks[2].ok;
+  const missing = checks.filter((c) => !c.ok && !c.optional && !(noCore && c.short.startsWith('Less power')));
+  const tips = checks.filter((c) => !c.ok && c.optional);
   const editorW = Math.min(width, MaxContentWidth);
   const editorH = Math.min(editorW * 1.05, height * 0.48);
   const selPart = selected ? partAt(placements, selected.x, selected.y, selected.z) : undefined;
@@ -360,15 +370,54 @@ export default function Garage() {
                 </Pressable>
               ))}
             </View>
-            <Text pointerEvents="none" style={[styles.hint, dragHint === 'remove' && { color: Colors.bad }]}>
-              {dragHint === 'remove'
-                ? 'Release to put it back in the bin'
-                : dragHint === 'move'
-                  ? 'Release to drop it here (swaps if taken)'
-                  : toast ?? 'Drag a part to move it · drag empty space to spin the view'}
-            </Text>
+            {selPart && !dragHint && !toast ? (
+              <View style={styles.selChip}>
+                <PartCell part={getPart(selPart.partId)} size={34} />
+                <View style={{ flexShrink: 1 }}>
+                  <Text style={styles.selLabel}>SELECTED</Text>
+                  <Text style={styles.selName} numberOfLines={1}>
+                    {getPart(selPart.partId).name}
+                  </Text>
+                </View>
+                <Pressable onPress={removeSelected} style={[styles.selBtn, { borderColor: Colors.bad }]}>
+                  <Text style={[styles.selBtnText, { color: Colors.bad }]}>Remove</Text>
+                </Pressable>
+                <Pressable accessibilityLabel="Deselect" onPress={() => setSelected(null)} style={styles.selBtn}>
+                  <Text style={styles.selBtnText}>✕</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <Text pointerEvents="none" style={[styles.hint, dragHint === 'remove' && { color: Colors.bad }]}>
+                {dragHint === 'remove'
+                  ? 'Release to put it back in the bin'
+                  : dragHint === 'move'
+                    ? 'Release to drop it here (swaps if taken)'
+                    : toast ?? 'Tap a part to select it · drag to move · drag empty space to spin'}
+              </Text>
+            )}
           </View>
         </View>
+        {/* Always-visible build status, so what's missing never scrolls away. */}
+        {missing.length > 0 ? (
+          <View style={[styles.status, styles.statusBad]}>
+            <Text style={[styles.statusTitle, { color: Colors.bad }]}>STILL NEEDS</Text>
+            <View style={styles.statusItems}>
+              {missing.map((c) => (
+                <Text key={c.label} style={[styles.statusItem, { color: Colors.text, borderColor: Colors.bad }]}>
+                  {c.short}
+                </Text>
+              ))}
+            </View>
+          </View>
+        ) : (
+          <View style={[styles.status, styles.statusGood]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.statusTitle, { color: Colors.good }]}>✓ READY TO FIGHT</Text>
+              {tips.length > 0 && <Text style={styles.statusTip}>Tip: {tips.map((c) => c.short.toLowerCase()).join(', ')} would help</Text>}
+            </View>
+            <Button label="Fight" size="sm" variant="go" onPress={() => router.dismissTo('/campaign')} />
+          </View>
+        )}
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
@@ -390,7 +439,7 @@ export default function Garage() {
 
         <Panel style={{ gap: Spacing.sm }}>
           <Text style={styles.section}>{errors.length ? 'YOUR BUG STILL NEEDS' : 'READY TO FIGHT'}</Text>
-          <Checklist placements={placements} stats={stats} />
+          <Checklist items={checks} />
           {!selPart && <Text style={styles.dim}>Tap a part on the bug to see what it does and where it goes.</Text>}
         </Panel>
 
@@ -521,6 +570,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
   },
+  selChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: 'rgba(12,14,18,0.9)',
+    borderColor: Colors.accent,
+    borderWidth: 1.5,
+    borderRadius: 16,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    marginHorizontal: Spacing.md,
+  },
+  selLabel: { color: Colors.accent, fontSize: 9, fontWeight: '900', letterSpacing: 1.4 },
+  selName: { color: Colors.text, fontFamily: Fonts.display, fontSize: 16 },
+  selBtn: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
+  selBtnText: { color: Colors.text, fontSize: 12, fontWeight: '800' },
+  status: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.xs,
+    paddingVertical: 7,
+    paddingHorizontal: Spacing.md,
+    borderRadius: 14,
+    borderWidth: 1.5,
+  },
+  statusBad: { borderColor: Colors.bad, backgroundColor: '#2A1719', flexWrap: 'wrap' },
+  statusGood: { borderColor: Colors.good, backgroundColor: '#13261E' },
+  statusTitle: { fontSize: 11, fontWeight: '900', letterSpacing: 1.4 },
+  statusItems: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, flexShrink: 1 },
+  statusItem: { fontSize: 12, fontWeight: '800', borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, overflow: 'hidden' },
+  statusTip: { color: Colors.textDim, fontSize: 11, marginTop: 1 },
   editorOverlay: { ...StyleSheet.absoluteFill, justifyContent: 'space-between', alignItems: 'center', paddingVertical: Spacing.sm },
   views: { flexDirection: 'row', gap: 6 },
   viewBtn: {

@@ -9,7 +9,7 @@ import { GRID_H, GRID_W, pkey, type Layer, type Placement } from '@/game/build';
 import { getPart } from '@/game/parts';
 
 import { createRenderer } from './gl';
-import { adjacentPairs, buildConnector, buildPart, IDLE, seatHeight, stackOffset, toonMaterial, toonMesh, UNDER_LIFT, UNDER_SCALE, type PartModel } from './models';
+import { adjacentPairs, buildConnector, buildPart, IDLE, seatHeight, setHighlight, stackOffset, toonMaterial, toonMesh, UNDER_LIFT, UNDER_SCALE, type PartModel } from './models';
 
 const BG = 0x12151a;
 const MIDX = (GRID_W - 1) / 2;
@@ -62,6 +62,8 @@ export class GarageRenderer {
   private hintMat = new THREE.MeshBasicMaterial({ color: 0x3ddc97, transparent: true, opacity: 0.4, depthWrite: false });
   private hover: THREE.Mesh;
   private selRing: THREE.Mesh;
+  /** Bobbing arrow over the selected part. */
+  private selArrow: THREE.Mesh;
   private raycaster = new THREE.Raycaster();
   private floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private clock = 0;
@@ -119,6 +121,11 @@ export class GarageRenderer {
     this.selRing.rotation.x = -Math.PI / 2;
     this.selRing.visible = false;
     this.scene.add(this.selRing);
+
+    this.selArrow = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.42, 4), new THREE.MeshBasicMaterial({ color: 0xffb23f }));
+    this.selArrow.geometry.rotateX(Math.PI); // point down
+    this.selArrow.visible = false;
+    this.scene.add(this.selArrow);
 
     this.scene.add(this.bug);
   }
@@ -320,7 +327,14 @@ export class GarageRenderer {
     const t = this.clock;
     for (const [k, m] of this.models) {
       m.animate({ t, ...IDLE });
-      m.tint(1, false, k === this.selected ? 0.12 + Math.sin(t * 6) * 0.08 : 0);
+      // The selected part glows and bobs; everything else dims a little so it stands out.
+      const sel = k === this.selected;
+      // Amber outline on the selected part (re-applied if its model was rebuilt).
+      if (m.root.userData.hl !== sel) {
+        setHighlight(m.root, sel);
+        m.root.userData.hl = sel;
+      }
+      m.tint(this.selected && !sel ? 0.65 : 1, false, sel ? 0.2 + Math.sin(t * 6) * 0.1 : 0);
     }
 
     this.hintMat.opacity = 0.32 + Math.sin(t * 4) * 0.14;
@@ -348,11 +362,20 @@ export class GarageRenderer {
 
     if (this.selected && !this.dragging) {
       const { x, y, z } = parseKey(this.selected);
+      const m = this.models.get(this.selected);
+      if (m) {
+        m.root.updateMatrixWorld(true);
+        const top = new THREE.Box3().setFromObject(m.root).max.y;
+        this.selArrow.position.copy(cellToWorld(x, y)).setY(top + 0.55 + Math.sin(t * 5) * 0.12);
+        this.selArrow.rotation.y = t * 2;
+      }
+      this.selArrow.visible = !!m;
       this.selRing.visible = this.models.has(this.selected);
       this.selRing.position.copy(cellToWorld(x, y)).setY(this.slotY(x, y, z) + 0.01);
       this.selRing.scale.setScalar(z === -1 ? 0.6 : 1);
     } else {
       this.selRing.visible = false;
+      this.selArrow.visible = false;
     }
 
     this.renderer.render(this.scene, this.camera);
