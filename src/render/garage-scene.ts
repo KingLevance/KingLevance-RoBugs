@@ -6,9 +6,10 @@ import type { ExpoWebGLRenderingContext } from 'expo-gl';
 import * as THREE from 'three';
 
 import { GRID_H, GRID_W, key, type Placement } from '@/game/build';
+import { getPart } from '@/game/parts';
 
 import { createRenderer } from './gl';
-import { buildPart, IDLE, toonMaterial, toonMesh, type PartModel } from './models';
+import { adjacentPairs, buildConnector, buildPart, IDLE, toonMaterial, toonMesh, type PartModel } from './models';
 
 const BG = 0x14171c;
 const MIDX = (GRID_W - 1) / 2;
@@ -40,6 +41,7 @@ export class GarageRenderer {
   private camera: THREE.PerspectiveCamera;
   private bug = new THREE.Group();
   private models = new Map<string, PartModel>();
+  private links: { a: string; b: string; obj: THREE.Group }[] = [];
   private hover: THREE.Mesh;
   private selRing: THREE.Mesh;
   private raycaster = new THREE.Raycaster();
@@ -156,6 +158,16 @@ export class GarageRenderer {
         this.models.delete(k);
       }
     }
+    // Rebuild the frame struts between neighbouring parts.
+    for (const l of this.links) this.bug.remove(l.obj);
+    this.links = adjacentPairs(placements).map(([i, j]) => {
+      const a = placements[i];
+      const b = placements[j];
+      const obj = buildConnector(getPart(a.partId).category, getPart(b.partId).category, b.x - a.x, b.y - a.y);
+      obj.position.copy(cellToWorld(a.x, a.y));
+      this.bug.add(obj);
+      return { a: key(a.x, a.y), b: key(b.x, b.y), obj };
+    });
     if (placements.length) {
       const xs = placements.map((p) => p.x - MIDX);
       const zs = placements.map((p) => p.y - MIDY);
@@ -252,6 +264,8 @@ export class GarageRenderer {
       m.tint(1, false, k === this.selected ? 0.12 + Math.sin(t * 6) * 0.08 : 0);
     }
 
+    const held = this.dragging?.key;
+    for (const l of this.links) l.obj.visible = l.a !== held && l.b !== held;
     if (this.dragging) {
       const m = this.models.get(this.dragging.key);
       const p = this.dragging.point;

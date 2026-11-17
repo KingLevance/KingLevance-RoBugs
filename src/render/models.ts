@@ -8,7 +8,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
-import { CATEGORY_COLOR, getPart } from '@/game/parts';
+import { CATEGORY_COLOR, getPart, type Category } from '@/game/parts';
 
 const OUTLINE = new THREE.MeshBasicMaterial({ color: 0x111318, side: THREE.BackSide });
 const OUTLINE_W = 0.035;
@@ -521,4 +521,49 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
   };
 
   return { root, animate, tint };
+}
+
+// ── Connectors: the frame that joins neighbouring parts ─────────────
+
+/** Height at which a part's frame mount sits. */
+const MOUNT_Y: Partial<Record<Category, number>> = { wings: 0.8, core: 0.34, sensor: 0.42, armor: 0.42 };
+const BODY: Category[] = ['head', 'thorax', 'abdomen'];
+
+let frameMat: THREE.MeshToonMaterial | null = null;
+let collarMat: THREE.MeshToonMaterial | null = null;
+
+/**
+ * A strut from part A's cell to its neighbour B, `dx`/`dz` cells away (one of them is ±1).
+ * Body-to-body links are a thick spine with a collar; everything else is a slimmer strut.
+ * Position the returned group at A's cell.
+ */
+export function buildConnector(a: Category, b: Category, dx: number, dz: number): THREE.Group {
+  frameMat ??= toonMaterial(GUNMETAL);
+  collarMat ??= toonMaterial(STEEL);
+  const spine = BODY.includes(a) && BODY.includes(b);
+  const from = V(dx * 0.1, MOUNT_Y[a] ?? 0.5, dz * 0.1);
+  const to = V(dx * 0.9, MOUNT_Y[b] ?? 0.5, dz * 0.9);
+  const g = new THREE.Group();
+  g.add(limb(from, to, spine ? 0.2 : 0.1, frameMat));
+  const collar = new THREE.Mesh(torus(spine ? 0.24 : 0.13, 0.05), collarMat);
+  collar.position.copy(from).add(to).multiplyScalar(0.5);
+  collar.quaternion.setFromUnitVectors(V(0, 0, 1), to.clone().sub(from).normalize());
+  g.add(collar);
+  return g;
+}
+
+/** Every orthogonally adjacent pair in a set of grid cells, as index pairs (each pair once). */
+export function adjacentPairs(cells: { x: number; y: number }[]): [number, number][] {
+  const index = new Map(cells.map((c, i) => [`${c.x},${c.y}`, i]));
+  const out: [number, number][] = [];
+  cells.forEach((c, i) => {
+    for (const [dx, dy] of [
+      [1, 0],
+      [0, 1],
+    ]) {
+      const j = index.get(`${c.x + dx},${c.y + dy}`);
+      if (j !== undefined) out.push([i, j]);
+    }
+  });
+  return out;
 }

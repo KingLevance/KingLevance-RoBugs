@@ -9,7 +9,7 @@ import { getMove } from '@/game/moves';
 import { ARENA_SIZE, CELL, partWorld, stompWarning, type Bug, type Sim, type SimPart } from '@/game/sim';
 
 import { createRenderer } from './gl';
-import { buildPart, toonMaterial, toonMesh, type PartModel } from './models';
+import { adjacentPairs, buildConnector, buildPart, toonMaterial, toonMesh, type PartModel } from './models';
 
 const HALF = ARENA_SIZE / CELL / 2;
 const FOV = 50;
@@ -32,6 +32,8 @@ type BugView = {
   group: THREE.Group;
   pose: THREE.Group;
   parts: PartView[];
+  /** Frame struts between neighbouring parts; hidden once either end breaks off. */
+  links: { a: PartView; b: PartView; obj: THREE.Group }[];
   /** Thin, faint team-coloured ring on the floor, scaled as the bug shrinks. */
   ground: THREE.Group;
   baseRadius: number;
@@ -192,11 +194,20 @@ export class ArenaRenderer {
       return { part: p, model, attached: true, shadow };
     });
 
+    const links = adjacentPairs(bug.parts).map(([i, j]) => {
+      const a = parts[i];
+      const b = parts[j];
+      const obj = buildConnector(a.part.part.category, b.part.part.category, b.part.x - a.part.x, b.part.y - a.part.y);
+      obj.position.copy(a.model.root.position);
+      pose.add(obj);
+      return { a, b, obj };
+    });
+
     const r = bug.radius / CELL;
     const team = bug.index === 0 ? 0x3ddc97 : 0xff5d5d;
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(r + 0.22, r + 0.29, 40),
-      new THREE.MeshBasicMaterial({ color: team, transparent: true, opacity: 0.28, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ color: team, transparent: true, opacity: 0.14, depthWrite: false }),
     );
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.03;
@@ -223,7 +234,7 @@ export class ArenaRenderer {
     shield.visible = false;
     group.add(shield);
     this.scene.add(group);
-    return { group, pose, parts, ground, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading };
+    return { group, pose, parts, links, ground, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading };
   }
 
   private followTarget(sim: Sim) {
@@ -291,6 +302,7 @@ export class ArenaRenderer {
         const bob = bug.dead ? 0 : Math.abs(Math.sin(v.walk)) * 0.05 * speed + Math.sin(t * 2.2 + bi) * 0.012;
         v.pose.position.y += (bob - v.pose.position.y) * 0.3;
       }
+      for (const l of v.links) l.obj.visible = l.a.part.alive && l.b.part.alive;
       if (bug.dead) v.pose.rotation.z = Math.min(0.5, v.pose.rotation.z + dt);
       else v.pose.rotation.z = v.lean + Math.sin(v.walk) * 0.025 * speed;
 
