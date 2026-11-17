@@ -33,7 +33,6 @@ type PartView = {
   part: SimPart;
   model: PartModel;
   attached: boolean;
-  shadow: THREE.Mesh;
   /** 1 when just hit, decays: the part pops. */
   punch: number;
   /** Index in the bug's FlexRig. */
@@ -51,6 +50,10 @@ type BugView = {
   ground: THREE.Group;
   /** Shadows only (shrink as the bug climbs). */
   shadows: THREE.Group;
+  /** One soft contact shadow shaped like the bug's footprint; rebuilt when parts break off. */
+  shadow: THREE.Mesh;
+  /** Attached grid parts the shadow was last drawn for. */
+  shadowCount: number;
   baseRadius: number;
   /** Small bobbing pointer above the player's bug only. */
   marker: THREE.Mesh | null;
@@ -62,6 +65,49 @@ type BugView = {
   kick: THREE.Vector3;
 };
 type Debris = { obj: THREE.Object3D; vel: THREE.Vector3; spin: THREE.Vector3; age: number };
+
+/**
+ * Draw a soft contact shadow under a bug: the union of a feathered disc under
+ * each attached grid part (max, not sum, so overlaps don't darken), as an
+ * alpha texture on one floor plane.
+ */
+function softShadow(mesh: THREE.Mesh, parts: { part: SimPart; attached: boolean }[]) {
+  const pts = parts.filter((p) => p.attached && !p.part.z).map((p) => ({ x: p.part.lx / CELL, y: p.part.ly / CELL }));
+  const mat = mesh.material as THREE.MeshBasicMaterial;
+  mat.alphaMap?.dispose();
+  mesh.visible = pts.length > 0;
+  if (!pts.length) return;
+  const M = 1.1;
+  const x0 = Math.min(...pts.map((p) => p.x)) - M;
+  const x1 = Math.max(...pts.map((p) => p.x)) + M;
+  const y0 = Math.min(...pts.map((p) => p.y)) - M;
+  const y1 = Math.max(...pts.map((p) => p.y)) + M;
+  const PX = 14;
+  const W = Math.ceil((x1 - x0) * PX);
+  const H = Math.ceil((y1 - y0) * PX);
+  const data = new Uint8Array(W * H * 4);
+  for (let j = 0; j < H; j++)
+    for (let i = 0; i < W; i++) {
+      const x = x0 + (i + 0.5) / PX;
+      // Texture rows run along +v, which the rotated plane maps to −z.
+      const y = y1 - (j + 0.5) / PX;
+      let d = Infinity;
+      for (const p of pts) d = Math.min(d, Math.hypot(x - p.x, y - p.y));
+      const t = Math.min(1, Math.max(0, (1.0 - d) / 0.75));
+      const a = t * t * (3 - 2 * t);
+      const o = (j * W + i) * 4;
+      data[o] = data[o + 1] = data[o + 2] = Math.round(a * 255);
+      data[o + 3] = 255;
+    }
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  mat.alphaMap = tex;
+  mat.needsUpdate = true;
+  mesh.scale.set(x1 - x0, y1 - y0, 1);
+  mesh.position.set((x0 + x1) / 2, 0.025, (y0 + y1) / 2);
+}
 
 export class ArenaRenderer {
   private renderer: THREE.WebGLRenderer;
@@ -153,10 +199,6 @@ export class ArenaRenderer {
     const group = new THREE.Group();
     const pose = new THREE.Group();
     group.add(pose);
-    // Opaque, slightly-darker-than-floor blobs under each part: a shadow that follows the bug's
-    // shape and loses pieces as parts break off (opaque so overlaps don't stack up).
-    const shadowGeo = new THREE.CircleGeometry(0.62, 16);
-    const shadowMat = new THREE.MeshBasicMaterial({ color: 0x1d2128 });
     const ground = new THREE.Group();
     const shadows = new THREE.Group();
     ground.add(shadows);
@@ -176,12 +218,7 @@ export class ArenaRenderer {
         model.root.scale.setScalar(UNDER_SCALE);
         model.root.position.y = 0.02;
       }
-      const shadow = new THREE.Mesh(shadowGeo, shadowMat);
-      shadow.rotation.x = -Math.PI / 2;
-      shadow.position.set(p.lx / CELL, 0.022, p.ly / CELL);
-      shadow.visible = !p.z;
-      if (!p.z) shadows.add(shadow);
-      return { part: p, model, attached: true, shadow, punch: 0, flex: -1 };
+      return { part: p, model, attached: true, punch: 0, flex: -1 };
     });
     // Stacked parts rest on top of the part in their cell.
     for (const pv of parts) {
@@ -259,7 +296,15 @@ export class ArenaRenderer {
     shield.visible = false;
     group.add(shield);
     this.scene.add(group);
-    return { group, pose, parts, links, rig, ground, shadows, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
+    const shadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.42, depthWrite: false }),
+    );
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.renderOrder = 1;
+    shadows.add(shadow);
+    softShadow(shadow, parts);
+    return { group, pose, parts, links, rig, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
   }
 
   private fitOffset(aspect: number) {
@@ -341,9 +386,13 @@ export class ArenaRenderer {
       if (bug.dead) v.pose.rotation.z = Math.min(0.5, v.pose.rotation.z + dt);
       else v.pose.rotation.z = v.lean + Math.sin(v.walk) * 0.025 * speed;
 
+      const attachedNow = v.parts.reduce((n, pv) => n + (pv.attached ? 1 : 0), 0);
+      if (attachedNow !== v.shadowCount) {
+        v.shadowCount = attachedNow;
+        softShadow(v.shadow, v.parts);
+      }
       for (const pv of v.parts) {
         if (pv.attached && !pv.part.alive) this.detach(bug, pv);
-        pv.shadow.visible = pv.attached && !pv.part.z;
         if (!pv.attached) continue;
         const p = pv.part;
         pv.model.tint(Math.max(0, p.hp) / p.part.hp, p.flash > 0);
