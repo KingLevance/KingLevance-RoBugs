@@ -83,7 +83,7 @@ export const GUIDE: Record<Category, { label: string; group: GuideGroup; does: s
   sensor: {
     label: 'Sensor',
     group: 'system',
-    does: 'Sharper turning and longer weapon reach. Fragile.',
+    does: 'Sharper turning, longer weapon reach and more critical hits. Fragile.',
     where: 'Stack it on top of the head (drop it onto it), like real antennae. Or use any spare spot.',
   },
 };

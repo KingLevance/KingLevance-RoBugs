@@ -40,6 +40,8 @@ export type BugStats = {
   dps: number;
   /** Multiplier on weapon range from sensors. */
   reach: number;
+  /** Extra critical-hit chance from sensors (0..1, added to the base chance). */
+  crit: number;
   /** -1..1: positive means the right side pushes harder (bug drifts left). */
   thrustBias: number;
   /** Highest it can fly (world px); 0 = can't fly. Needs lots of wing lift for its weight. */
@@ -66,6 +68,7 @@ export function computeStats(parts: PlacedPart[]): BugStats {
   let totalHp = 0;
   let dps = 0;
   let reach = 1;
+  let crit = 0;
   let left = 0;
   let right = 0;
   const midX = (GRID_W - 1) / 2;
@@ -79,7 +82,10 @@ export function computeStats(parts: PlacedPart[]): BugStats {
     grip += part.grip ?? 0;
     totalHp += part.hp;
     if (part.weapon) dps += part.weapon.damage / part.weapon.cooldown;
-    if (part.category === 'sensor') reach += part.rarity === 'common' ? 0.1 : 0.2;
+    if (part.category === 'sensor') {
+      reach += part.rarity === 'common' ? 0.1 : 0.2;
+      crit += part.rarity === 'common' ? 0.04 : 0.07;
+    }
     if (part.category === 'legs') {
       if (x < midX) left += part.thrust ?? 0;
       else if (x > midX) right += part.thrust ?? 0;
@@ -103,6 +109,7 @@ export function computeStats(parts: PlacedPart[]): BugStats {
     totalHp,
     dps,
     reach: Math.min(1.4, reach),
+    crit: Math.min(0.15, crit),
     thrustBias,
     maxAlt: flightCeiling(lift, mass),
   };

@@ -33,7 +33,7 @@ Garage (build + equip moves) → Campaign map → 3D Arena (1v1 vs AI) → Rewar
 ```
 
 1. **Build** — place parts on a 5×7 grid. Your layout sets weight, speed, handling, armor and attacks.
-2. **Fight** — after a 3-2-1-FIGHT! countdown (the bugs hold still while the camera swoops down from a high orbit), watch your bug fight on its own; its AI plays to the build. Weapons fire on their own when an enemy part is in their cone and reach. Basic actions fill your **proc meter**, and equipped signature moves fire on their own when they make sense. Parts get knocked off one by one.
+2. **Fight** — after a 3-2-1-FIGHT! countdown, which starts once the arena has drawn its first frames (the bugs hold still while the camera swoops down from a high orbit), watch your bug fight on its own; its AI plays to the build. Weapons fire on their own when an enemy part is in their cone and reach. Basic actions fill your **proc meter**, and equipped signature moves fire on their own when they make sense. Parts get knocked off one by one.
 3. **Earn** — first clears give guaranteed parts and moves. Bosses can be re-fought for rolls on their loot table. A loss still gives one common salvage part.
 
 ## 2. Parts
@@ -113,6 +113,8 @@ Moves are unlocked like parts (from drops) and **equipped** in the Garage. There
 | Break an enemy part | +12 |
 | Take damage | +1 per 5 dmg (comeback) |
 | Survive a stomper / dodge (Skitter) | +6 |
+
+**Critical hits** (`CRIT` in `sim.ts`): weapon hits (jaws, pincers, horns, stinger darts; not hazards, collisions or move volleys) can crit for ×1.6 damage. Chance = 6% base, +6% from the victim's side or +12% from behind, plus sensors (+4% Feeler Antennae, +7% Echo Array, capped at +15%), max 35%. Crits give +4 extra proc, a beat of hit-stop and shake, an orange flash, ring and sparks, and a big orange **CRIT n!** number. Flanking AI therefore pays off. The garage shows each build's crit chance. About 8–11% of hits crit in the balance script.
 
 **Ultimates** (`isUltimate(id)`) play a cutscene:
 - **Sim:** casting sets `sim.ult = { id, caster, t, dur: ULT_SECONDS (1.6) }`. While it's set, the rest of the world is frozen and the caster can't be hurt. At `t ≥ dur` the move lands with hit-stop, screen shake and a white flash.

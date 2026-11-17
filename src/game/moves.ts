@@ -9,6 +9,8 @@ export const PROC = {
   /** Points per 5 damage taken (comeback gain). */
   damageTakenPer5: 1,
   dodge: 6,
+  /** Bonus on top of hitLanded when the hit is critical. */
+  crit: 4,
 } as const;
 
 export const MOVE_SLOTS = 2;

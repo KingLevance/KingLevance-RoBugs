@@ -98,8 +98,8 @@ export default function Arena() {
   );
   const [view, setView] = useState(() => hud(sim));
   const [fast, setFast] = useState(false);
-  /** 3, 2, 1, then 0 = "FIGHT!", then −1 = gone. */
-  const [count, setCount] = useState(COUNTDOWN);
+  /** −2 = waiting for the arena's first frame; 3, 2, 1; then 0 = "FIGHT!"; then −1 = gone. */
+  const [count, setCount] = useState(-2);
   const speed = useRef(1);
   const loop = useRef<{ raf: number; renderer: ArenaRenderer | null; timer: ReturnType<typeof setTimeout> | null }>({
     raf: 0,
@@ -136,7 +136,9 @@ export default function Arena() {
     let cursor = 0;
     let nextId = 1;
     let countdown = COUNTDOWN;
-    let shown = COUNTDOWN;
+    let shown = -2;
+    // Don't start counting until the arena has actually drawn (first frames can stall on shader compiles).
+    let warmup = 3;
     let goTimer = 0;
     renderer.intro = 1;
     /** Turn new hit / break events into floating combat text at their on-screen position. */
@@ -145,6 +147,7 @@ export default function Arena() {
       for (; cursor < sim.events.length; cursor++) {
         const e = sim.events[cursor];
         if (e.type !== 'hit' && e.type !== 'break' && e.type !== 'crash') continue;
+        const crit = e.type === 'hit' && e.crit;
         const h = e.type === 'crash' ? 0 : e.h / CELL;
         const p = renderer.project(e.x, e.y, h + (e.type === 'hit' ? 1.2 : 2));
         const x = Math.min(size.current.w - 50, Math.max(50, p.x * size.current.w)) + (Math.random() - 0.5) * 22;
@@ -157,14 +160,18 @@ export default function Arena() {
         } else {
           const n = Math.max(1, Math.round(e.dmg));
           const big = e.dmg >= 14;
-          items.push({
-            id: nextId++,
-            x,
-            y,
-            text: big ? `${n}!` : `${n}`,
-            color: e.shielded ? '#7FB3FF' : mine ? '#FF8585' : big ? '#FFB347' : '#FFE08A',
-            size: big ? 26 : mine ? 16 : 19,
-          });
+          items.push(
+            crit
+              ? { id: nextId++, x, y: y - 10, text: `CRIT ${n}!`, color: mine ? '#FF5D5D' : '#FF9A2E', size: mine ? 22 : 30 }
+              : {
+                  id: nextId++,
+                  x,
+                  y,
+                  text: big ? `${n}!` : `${n}`,
+                  color: e.shielded ? '#7FB3FF' : mine ? '#FF8585' : big ? '#FFB347' : '#FFE08A',
+                  size: big ? 26 : mine ? 16 : 19,
+                },
+          );
         }
       }
       if (items.length) setFloaters((f) => [...f, ...items].slice(-16));
@@ -172,11 +179,14 @@ export default function Arena() {
     const tick = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      if (countdown > 0 && !sim.over) {
+      if (warmup > 0) {
+        warmup--;
+        renderer.intro = 1;
+      } else if (countdown > 0 && !sim.over) {
         // Hold the bugs while the camera swoops in and it counts 3-2-1.
         countdown = Math.max(0, countdown - dt);
         renderer.intro = countdown / COUNTDOWN;
-        const n = Math.ceil(countdown);
+        const n = countdown > 0 ? Math.ceil(countdown) : 0;
         if (n !== shown) {
           shown = n;
           setCount(n);

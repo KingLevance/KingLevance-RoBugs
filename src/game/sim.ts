@@ -78,7 +78,7 @@ export type Effect = { x: number; y: number; h: number; ttl: number; color: stri
 
 export type SimEvent =
   /** A part took damage. `part` indexes the victim's parts; `by` is the attacking bug (null for hazards/walls). */
-  | { type: 'hit'; bug: 0 | 1; by: 0 | 1 | null; part: number; x: number; y: number; h: number; dmg: number; broke: boolean; shielded: boolean }
+  | { type: 'hit'; bug: 0 | 1; by: 0 | 1 | null; part: number; x: number; y: number; h: number; dmg: number; broke: boolean; shielded: boolean; crit: boolean }
   | { type: 'break'; bug: 0 | 1; x: number; y: number; h: number; category: Category; time: number }
   /** A bug hit the floor after losing lift; `impact` is its fall speed. */
   | { type: 'crash'; bug: 0 | 1; x: number; y: number; impact: number }
@@ -125,6 +125,12 @@ export type Input = {
 };
 
 const STOMP_WARN = 1.2;
+
+/**
+ * Critical hits (weapon hits only): a base chance, more when striking the
+ * victim's side or rear, plus sensor bonuses (stats.crit). Crits multiply damage.
+ */
+export const CRIT = { base: 0.06, flank: 0.06, rear: 0.12, max: 0.35, mult: 1.6 } as const;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -341,19 +347,26 @@ function canBeHurt(sim: Sim, bug: Bug) {
  * Apply damage to one part. `attacker` is the bug credited with proc points
  * (null for hazards and walls).
  */
-function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug | null) {
+/** Chance that `attacker` lands a critical hit on `victim` when striking from `from`. */
+export function critChance(attacker: Bug, victim: Bug, from: Vec) {
+  const side = Math.abs(angleDiff(victim.heading, Math.atan2(from.y - victim.pos.y, from.x - victim.pos.x)));
+  const angle = side > 2.1 ? CRIT.rear : side > 1.1 ? CRIT.flank : 0;
+  return Math.min(CRIT.max, CRIT.base + angle + attacker.stats.crit);
+}
+
+function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug | null, crit = false) {
   if (!p.alive || !canBeHurt(sim, bug)) return;
-  dmg *= DAMAGE_SCALE * (0.8 + rand(sim) * 0.4);
+  dmg *= DAMAGE_SCALE * (0.8 + rand(sim) * 0.4) * (crit ? CRIT.mult : 1);
   if (bug.shield > 0) dmg *= 0.3;
   p.hp -= dmg;
   p.flash = 0.15;
   bug.recentDamage += dmg;
   gainProc(bug, (dmg / 5) * PROC.damageTakenPer5);
   if (p.part.category === 'armor') gainProc(bug, PROC.armorAbsorb);
-  if (attacker) gainProc(attacker, PROC.hitLanded);
+  if (attacker) gainProc(attacker, PROC.hitLanded + (crit ? PROC.crit : 0));
 
   const w = partWorld(bug, p);
-  sim.effects.push({ x: w.x, y: w.y, h: bug.alt, ttl: 0.25, color: '#FFE08A', size: 6 + Math.min(dmg, 20) * 0.6 });
+  sim.effects.push({ x: w.x, y: w.y, h: bug.alt, ttl: crit ? 0.35 : 0.25, color: crit ? '#FF9A2E' : '#FFE08A', size: 6 + Math.min(dmg, 20) * 0.6 + (crit ? 8 : 0) });
   sim.events.push({
     type: 'hit',
     bug: bug.index,
@@ -365,9 +378,14 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
     dmg,
     broke: p.hp <= 0,
     shielded: bug.shield > 0,
+    crit,
   });
-  // Heavier hits rattle the camera a little.
+  // Heavier hits rattle the camera a little; crits get a beat of hit-stop.
   sim.shake = Math.max(sim.shake, Math.min(0.12, dmg * 0.006));
+  if (crit) {
+    sim.hitstop = Math.max(sim.hitstop, 0.04);
+    sim.shake = Math.max(sim.shake, 0.18);
+  }
   if (p.hp > 0) return;
 
   p.alive = false;
@@ -588,7 +606,8 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
           const closing = (bug.vel.x - enemy.vel.x) * Math.cos(toward) + (bug.vel.y - enemy.vel.y) * Math.sin(toward);
           dmg += Math.max(0, closing) * w.ramBonus;
         }
-        damagePart(sim, enemy, strikeTarget(sim, enemy, wp, bug.alt > enemy.alt + 15) ?? target.p, dmg, bug);
+        const crit = rand(sim) < critChance(bug, enemy, wp);
+        damagePart(sim, enemy, strikeTarget(sim, enemy, wp, bug.alt > enemy.alt + 15) ?? target.p, dmg, bug, crit);
       }
     }
     tryMoves(sim, bug);
@@ -782,7 +801,10 @@ export function step(sim: Sim, dt: number, inputs: [Input, Input]) {
     const target = sim.bugs[other(pr.owner)];
     const hit = nearestPart(target, pr, true);
     if (hit && hit.d < CELL * 0.6 && Math.abs(pr.z - target.alt) < 20) {
-      damagePart(sim, target, strikeTarget(sim, target, pr, pr.z > target.alt + 8) ?? hit.p, pr.damage, attacker);
+      // Weapon darts can crit (judged by where they came from); move volleys can't.
+      const from = { x: pr.x - pr.vx * 0.2, y: pr.y - pr.vy * 0.2 };
+      const crit = !pr.big && rand(sim) < critChance(attacker, target, from);
+      damagePart(sim, target, strikeTarget(sim, target, pr, pr.z > target.alt + 8) ?? hit.p, pr.damage, attacker, crit);
       pr.ttl = 0;
     }
   }

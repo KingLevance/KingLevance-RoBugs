@@ -92,8 +92,8 @@ export const PARTS: readonly PartDef[] = [
   { id: 'armor-aegis', name: 'Bastion Plate', category: 'armor', rarity: 'rare', description: 'Thick slab of alloy. Heavy but nearly unbreakable.', hp: 170, mass: 10, power: 0 },
   { id: 'core-cell', name: 'Glowcell Core', category: 'core', rarity: 'common', description: 'Supplies 10 power. Lose every core and your bug shuts down.', hp: 45, mass: 5, power: -10 },
   { id: 'core-fusion', name: 'Ember Core', category: 'core', rarity: 'rare', description: 'Supplies 16 power in the same space.', hp: 55, mass: 6, power: -16 },
-  { id: 'sensor-antenna', name: 'Feeler Antennae', category: 'sensor', rarity: 'common', description: 'Improves turning and extends weapon reach by 10%.', hp: 15, mass: 1, power: 1, grip: 0.5 },
-  { id: 'sensor-radar', name: 'Echo Array', category: 'sensor', rarity: 'rare', description: 'Sweeping sensor dish. Big turning and reach bonus.', hp: 25, mass: 2, power: 2, grip: 0.9 },
+  { id: 'sensor-antenna', name: 'Feeler Antennae', category: 'sensor', rarity: 'common', description: 'Improves turning, extends weapon reach by 10% and adds 4% critical-hit chance.', hp: 15, mass: 1, power: 1, grip: 0.5 },
+  { id: 'sensor-radar', name: 'Echo Array', category: 'sensor', rarity: 'rare', description: 'Sweeping sensor dish. Big turning and reach bonus, plus 7% critical-hit chance.', hp: 25, mass: 2, power: 2, grip: 0.9 },
 ];
 
 const PART_INDEX: Record<string, PartDef> = Object.fromEntries(PARTS.map((p) => [p.id, p]));

@@ -37,7 +37,9 @@ function run(oppIndex: number, seed: number) {
   }
   const ults = sim.events.filter((e) => e.type === 'ult-release').length;
   const walls = sim.events.filter((e) => e.type === 'wall').length;
-  return { winner: sim.winner, time: sim.time, ults, walls, solo, hash: `${sim.winner}:${sim.time.toFixed(4)}:${sim.rng}` };
+  const hits = sim.events.filter((e) => e.type === 'hit' && e.by !== null);
+  const crits = hits.filter((e) => e.type === 'hit' && e.crit).length;
+  return { winner: sim.winner, time: sim.time, ults, walls, solo, crits, hits: hits.length, hash: `${sim.winner}:${sim.time.toFixed(4)}:${sim.rng}` };
 }
 
 const a = run(1, 1234);
@@ -53,6 +55,8 @@ OPPONENTS.forEach((opp, i) => {
   let ults = 0;
   let walls = 0;
   let solo = 0;
+  let crits = 0;
+  let hits = 0;
   for (let k = 0; k < N; k++) {
     const r = run(i, k * 7919 + 1);
     if (r.winner === 0) w++;
@@ -61,6 +65,8 @@ OPPONENTS.forEach((opp, i) => {
     ults += r.ults;
     walls += r.walls;
     solo += r.solo;
+    crits += r.crits;
+    hits += r.hits;
   }
-  console.log(`Starter vs ${opp.name.padEnd(11)} W${w} L${l} D${N - w - l} avg ${(t / N).toFixed(1)}s ults/match ${(ults / N).toFixed(1)} wall hits/match ${(walls / N).toFixed(1)} (self-inflicted ${(solo / N).toFixed(1)})`);
+  console.log(`Starter vs ${opp.name.padEnd(11)} W${w} L${l} D${N - w - l} avg ${(t / N).toFixed(1)}s ults/match ${(ults / N).toFixed(1)} wall hits/match ${(walls / N).toFixed(1)} (self-inflicted ${(solo / N).toFixed(1)}) crits ${((crits / Math.max(1, hits)) * 100).toFixed(0)}%`);
 });

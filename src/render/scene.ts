@@ -571,6 +571,19 @@ export class ArenaRenderer {
           }
         }
         this.burst(at, Math.round(3 + strength * 3), e.shielded ? 0x7fb3ff : e.dmg >= 14 ? 0xffb347 : 0xffe08a, 0.8 + strength * 0.25);
+        if (e.crit) {
+          // Critical: a hot flash, a ring, an extra shower of sparks and a harder flinch.
+          this.flash(at, 0xff9a2e, 0.9, 0.22);
+          this.flash(at, 0xffffff, 0.45, 0.12);
+          this.wave(at, 0xff9a2e);
+          this.burst(at, 10, 0xffffff, 1.5);
+          if (pv) pv.punch = 1.4;
+          if (e.by !== null) {
+            const from = sim.bugs[e.by].pos;
+            const dir = toWorld(e.x, e.y).sub(toWorld(from.x, from.y)).setY(0);
+            if (dir.lengthSq() > 1e-6) v.kick.addScaledVector(dir.normalize(), 0.25);
+          }
+        }
       } else if (e.type === 'ult-release') {
         this.arena.hype(0.9);
         this.finisher = { id: e.move, caster: e.bug, t: 0 };

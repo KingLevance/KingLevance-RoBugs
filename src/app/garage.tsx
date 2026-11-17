@@ -21,6 +21,7 @@ import { autoBuild, autoPlace, dropLayer, flipLayer, movePart, partAt, rankSlots
 import { GROUPS, GUIDE } from '@/game/guide';
 import { getMove, MOVE_SLOTS } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type Category, type PartDef } from '@/game/parts';
+import { CRIT } from '@/game/sim';
 import { GarageRenderer, type Cell, type ViewName } from '@/render/garage-scene';
 import { useGame } from '@/state/game-store';
 
@@ -458,6 +459,7 @@ export default function Garage() {
             <Text style={styles.stat}>HP {stats.totalHp}</Text>
             <Text style={styles.stat}>DPS {stats.dps.toFixed(1)}</Text>
             <Text style={styles.stat}>Reach ×{stats.reach.toFixed(1)}</Text>
+            <Text style={styles.stat}>Crit {Math.round((CRIT.base + stats.crit) * 100)}%</Text>
             {Math.abs(stats.thrustBias) > 0.05 && (
               <Text style={[styles.stat, { color: Colors.bad }]}>Pulls {stats.thrustBias > 0 ? 'left' : 'right'}</Text>
             )}
