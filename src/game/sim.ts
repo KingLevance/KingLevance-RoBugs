@@ -933,7 +933,7 @@ function stepFlight(sim: Sim, bug: Bug, input: Input, dt: number) {
   const max = maxStamina(bug);
   if (bug.alt > 4) bug.stamina = Math.max(0, bug.stamina - dt);
   else bug.stamina = Math.min(max, bug.stamina + dt * 0.9);
-  if (bug.stamina <= 0 && bug.alt > 4 && !bug.grounded) {
+  if (max > 0 && bug.stamina <= 0 && bug.alt > 4 && !bug.grounded) {
     bug.grounded = true;
     sim.log.push(`${bug.name}'s wings are spent!`);
   }

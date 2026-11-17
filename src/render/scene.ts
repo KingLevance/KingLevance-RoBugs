@@ -6,14 +6,14 @@ import type { ExpoWebGLRenderingContext } from 'expo-gl';
 import * as THREE from 'three';
 
 import { getMove, type MoveId } from '@/game/moves';
-import { CATEGORY_COLOR, type Category } from '@/game/parts';
+import { CATEGORY_COLOR, type Category, type PartDef } from '@/game/parts';
 import { aimHeading, ARENA_SIZE, CELL, foeOf, partWorld, type Bug, type Sim, type SimPart } from '@/game/sim';
 
 import { createRenderer } from './gl';
 import { ArenaDressing } from './arena';
 import { FlexRig, GIVE } from './flex';
 import { Spine } from './spine';
-import { adjacentPairs, buildConnector, buildPart, seatHeight, stackOffset, UNDER_LIFT, UNDER_SCALE, type Connector, type PartModel } from './models';
+import { adjacentPairs, buildConnector, buildPart, seatHeight, setGhost, stackOffset, UNDER_LIFT, UNDER_SCALE, type Connector, type PartModel } from './models';
 
 const HALF = ARENA_SIZE / CELL / 2;
 const FOV = 50;
@@ -62,6 +62,15 @@ type BugView = {
   baseRadius: number;
   /** Altitude tether: a faint line from a flying bug down to a ring on the floor. */
   tether: THREE.Group;
+  /** Silk net shown while webbed. */
+  web: THREE.LineSegments;
+  /** Mound of churned floor that travels with a burrowed bug. */
+  mound: THREE.Mesh;
+  /** 0 = on the surface .. 1 = fully underground. */
+  sink: number;
+  /** Current cloak opacity (1 = solid). */
+  ghost: number;
+  fxClock: number;
   /** Small bobbing pointer above the player's bug only. */
   marker: THREE.Mesh | null;
   shield: THREE.Group;
@@ -80,7 +89,12 @@ type Cine = { id: MoveId; caster: number; phase: 'charge' | 'strike'; p: number 
 /** Seconds of follow-through after an ultimate resolves. */
 const FINISH = 0.8;
 /** Which weapon each move channels through (for the charge glow). */
-const MOVE_PART: Partial<Record<MoveId, Category>> = { 'mandible-crusher': 'mandibles', 'venom-barrage': 'stinger', 'carapace-lock': 'armor' };
+const MOVE_PART: Partial<Record<MoveId, { is: (p: PartDef) => boolean; reach: number }>> = {
+  'mandible-crusher': { is: (p) => p.category === 'mandibles', reach: 0.9 },
+  'venom-barrage': { is: (p) => p.tag === 'venom', reach: 0.9 },
+  'sunder-beam': { is: (p) => p.tag === 'laser', reach: 0.8 },
+  'carapace-lock': { is: (p) => p.category === 'armor', reach: 0 },
+};
 
 type Debris = { obj: THREE.Object3D; vel: THREE.Vector3; spin: THREE.Vector3; age: number };
 
@@ -179,7 +193,7 @@ export class ArenaRenderer {
   private tmpV = new THREE.Vector3();
   private bits: { m: THREE.Mesh; vel: THREE.Vector3; life: number; max: number }[] = [];
   private nextBit = 0;
-  private waves: { m: THREE.Mesh; life: number }[] = [];
+  private waves: { m: THREE.Mesh; life: number; size: number }[] = [];
   private nextWave = 0;
   /** Follow-through after an ultimate resolves. */
   private finisher: { id: MoveId; caster: number; t: number } | null = null;
@@ -192,6 +206,8 @@ export class ArenaRenderer {
   private streakColor = new THREE.Color();
   /** Trails behind big venom darts (pooled alongside projectiles). */
   private trails: THREE.Mesh[] = [];
+  /** Sunder Beam: a glowing shaft (outer colour + white core), unit length along +z. */
+  private beam = new THREE.Group();
   /** Flash spheres (muzzle flash, bite flash). */
   private flashes: { m: THREE.Mesh; life: number; max: number; size: number }[] = [];
 
@@ -254,7 +270,7 @@ export class ArenaRenderer {
       m.rotation.x = -Math.PI / 2;
       m.visible = false;
       this.scene.add(m);
-      this.waves.push({ m, life: 0 });
+      this.waves.push({ m, life: 0, size: 1 });
     }
 
     this.orb = new THREE.Mesh(
@@ -263,6 +279,13 @@ export class ArenaRenderer {
     );
     this.orb.visible = false;
     this.scene.add(this.orb);
+    const shaft = new THREE.CylinderGeometry(1, 1, 1, 12).rotateX(Math.PI / 2);
+    this.beam.add(new THREE.Mesh(shaft, new THREE.MeshBasicMaterial({ color: 0x5cf2ff, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false })));
+    const core = new THREE.Mesh(shaft, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+    core.scale.set(0.4, 0.4, 1);
+    this.beam.add(core);
+    this.beam.visible = false;
+    this.scene.add(this.beam);
     const streakGeo = new THREE.BoxGeometry(0.06, 0.06, 1);
     for (let i = 0; i < 10; i++) {
       const m = new THREE.Mesh(
@@ -403,6 +426,21 @@ export class ArenaRenderer {
     const shield = hexShell(r + 0.6);
     shield.visible = false;
     group.add(shield);
+    // Silk net (Web Snare).
+    const webGeo = new THREE.IcosahedronGeometry(r + 0.35, 2);
+    webGeo.scale(1, 0.6, 1);
+    webGeo.translate(0, (r + 0.35) * 0.3, 0);
+    const web = new THREE.LineSegments(
+      new THREE.EdgesGeometry(webGeo),
+      new THREE.LineBasicMaterial({ color: 0xf4f1e6, transparent: true, opacity: 0.75, depthWrite: false }),
+    );
+    web.visible = false;
+    group.add(web);
+    // Travelling dirt mound (Burrow Strike).
+    const mound = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshToonMaterial({ color: 0x3f2c1c }));
+    mound.scale.set(r * 0.75, 0.5, r * 0.75);
+    mound.visible = false;
+    this.scene.add(mound);
     this.scene.add(group);
     const shadow = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
@@ -412,7 +450,7 @@ export class ArenaRenderer {
     shadow.renderOrder = 1;
     shadows.add(shadow);
     softShadow(shadow, parts);
-    return { group, pose, parts, links, rig, spine, tether, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
+    return { group, pose, parts, links, rig, spine, tether, web, mound, sink: 0, ghost: 1, fxClock: 0, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
   }
 
   private fitOffset(aspect: number) {
@@ -446,6 +484,7 @@ export class ArenaRenderer {
       v.kick.multiplyScalar(Math.exp(-dt * 13));
       const altU = bug.alt / CELL;
       v.group.position.copy(toWorld(bug.pos.x, bug.pos.y, altU)).add(v.kick);
+      this.statusFx(sim, bug, v, t, dt);
       v.group.rotation.y = yaw(bug.heading);
       // Floor marks stay on the floor; shadows shrink as the bug climbs.
       v.ground.position.copy(toWorld(bug.pos.x, bug.pos.y));
@@ -453,7 +492,7 @@ export class ArenaRenderer {
       v.shadows.scale.setScalar(Math.max(0.45, 1 - altU * 0.18));
       (v.shadow.material as THREE.MeshBasicMaterial).opacity = 0.42 * Math.max(0.35, 1 - altU * 0.12);
       // Height cue for flyers: a line down to the floor and a ring where it lands.
-      v.tether.visible = altU > 0.35 && !bug.dead;
+      v.tether.visible = altU > 0.35 && !bug.dead && v.ghost > 0.2;
       if (v.tether.visible) {
         v.tether.position.copy(toWorld(bug.pos.x, bug.pos.y));
         const line = v.tether.children[0];
@@ -477,7 +516,7 @@ export class ArenaRenderer {
         (fill.material as THREE.MeshBasicMaterial).opacity = 0.06 * a + snap * 0.12;
         (edges.material as THREE.LineBasicMaterial).opacity = 0.6 * a;
       }
-      v.ground.visible = !bug.dead;
+      v.ground.visible = !bug.dead && v.sink < 0.5 && v.ghost > 0.2;
       v.ground.scale.setScalar(Math.max(0.4, bug.radius / CELL / v.baseRadius));
       if (v.marker) {
         v.marker.visible = !bug.dead && !ult;
@@ -529,7 +568,7 @@ export class ArenaRenderer {
       }
       v.rig.update(dt);
       for (const l of v.links) {
-        l.c.obj.visible = l.a.attached && l.b.attached;
+        l.c.obj.visible = l.a.attached && l.b.attached && v.ghost > 0.9;
         if (l.c.obj.visible) l.c.update(l.a.model.root.position, l.b.model.root.position);
       }
       if (bug.dead) v.pose.rotation.z = Math.min(0.5, v.pose.rotation.z + dt);
@@ -640,10 +679,17 @@ export class ArenaRenderer {
         this.bugs[e.bug].pose.rotation.y = 0;
         this.bugs[e.bug].lastHeading = sim.bugs[e.bug].heading;
         this.releaseFx(sim, e.move, e.bug);
-      } else if (e.type === 'move' && e.move === 'skitter-dash') {
-        const b = sim.bugs[e.bug];
-        this.burst(toWorld(b.pos.x, b.pos.y, 0.2), 12, 0xc9c2b0, 0.9); // dust kicked up
-        this.startStreaks(e.bug, getMove(e.move).color, 0.35);
+      } else if (e.type === 'move') {
+        this.moveFx(sim, e.move, e.bug);
+      } else if (e.type === 'erupt') {
+        // A burrower bursts out of the floor.
+        const at = toWorld(e.x, e.y, 0.3);
+        this.burst(at, 26, 0x8a6a45, 1.8);
+        this.burst(at, 12, 0xd9c4a0, 1.4);
+        this.wave(at, 0xc98b4a, 1.5);
+        this.wave(at, 0xffffff, 1);
+        this.flash(at, 0xc98b4a, 1.8, 0.3);
+        this.arena.hype(0.6);
       } else if (e.type === 'crash') {
         this.arena.hype(0.4);
         const at = toWorld(e.x, e.y, 0.2);
@@ -653,6 +699,7 @@ export class ArenaRenderer {
         w.m.position.copy(at).setY(0.06);
         (w.m.material as THREE.MeshBasicMaterial).color.set(0xd9d4c7);
         w.life = 0.45;
+        w.size = 1;
         w.m.visible = true;
       } else if (e.type === 'break') {
         this.arena.hype(0.35);
@@ -664,6 +711,7 @@ export class ArenaRenderer {
         w.m.position.copy(at).setY(0.06);
         (w.m.material as THREE.MeshBasicMaterial).color.set(CATEGORY_COLOR[e.category]);
         w.life = 0.45;
+        w.size = 1;
         w.m.visible = true;
       }
     }
@@ -688,7 +736,7 @@ export class ArenaRenderer {
       if (w.life <= 0) continue;
       w.life -= dt;
       const k = 1 - w.life / 0.45;
-      w.m.scale.setScalar(0.4 + k * 2.6);
+      w.m.scale.setScalar((0.4 + k * 2.6) * w.size);
       (w.m.material as THREE.MeshBasicMaterial).opacity = 0.7 * (1 - k);
       if (w.life <= 0) w.m.visible = false;
     }
@@ -698,6 +746,7 @@ export class ArenaRenderer {
     pv.attached = false;
     this.bugs[bug.index].rig.deactivate(pv.flex);
     const root = pv.model.root;
+    setGhost(root, 1); // broken-off bits are never cloaked
     const w = partWorld(bug, pv.part);
     const v = this.bugs[bug.index];
     const height = root.position.y + v.group.position.y;
@@ -753,11 +802,20 @@ export class ArenaRenderer {
       const p = sim.projectiles[i];
       const tail = this.trails[i];
       m.visible = !!p;
-      tail.visible = !!p?.big;
+      const laser = p?.kind === 'laser';
+      const webShot = p?.kind === 'web';
+      tail.visible = !!p && (p.big || laser);
       if (!p) return;
       m.position.copy(toWorld(p.x, p.y, p.z / CELL + 0.7));
-      m.scale.setScalar(p.big ? 1.8 : 1);
-      if (p.big) {
+      m.scale.setScalar(webShot ? 2.4 + Math.sin(this.clock * 30 + i) * 0.3 : laser ? 0.7 : p.big ? 1.8 : 1);
+      (m.material as THREE.MeshBasicMaterial).color.set(webShot ? 0xf4f1e6 : laser ? 0xe9feff : 0xe07bff);
+      (tail.material as THREE.MeshBasicMaterial).color.set(webShot ? 0xf4f1e6 : laser ? 0x5cf2ff : 0xc77dff);
+      if (laser) {
+        // A bolt of light: a long thin streak.
+        tail.position.copy(m.position);
+        faceAlong(tail, new THREE.Vector3(p.vx, p.vz, p.vy));
+        tail.scale.set(0.55, 0.55, 4.2);
+      } else if (p.big) {
         // Stretch the tail back along the flight path.
         const vel = new THREE.Vector3(p.vx, p.vz, p.vy);
         tail.position.copy(m.position);
@@ -811,8 +869,9 @@ export class ArenaRenderer {
         v.pose.rotation.y = 0;
         return { weapon: 'mandibles' as Category, attack: k < 0.88 ? -1.4 * smooth(k / 0.35) : 1, glow: 0.12 * draw };
       }
+      case 'sunder-beam':
       case 'venom-barrage': {
-        // Plant wide, draw venom into the stinger (body creeps back with each pulse), then brace.
+        // Plant wide, draw power into the weapon (body creeps back with each pulse), then brace.
         const charge = smooth((k - 0.15) / 0.7);
         const pulse = Math.max(0, Math.sin(t * 22)) * charge;
         v.pose.scale.set(1 + crouch * 0.1, 1 - crouch * 0.14, 1 + crouch * 0.04);
@@ -820,7 +879,7 @@ export class ArenaRenderer {
         v.pose.rotation.x = -0.06 * crouch;
         // Swing the stinger round onto the target (the sim snaps to this heading on release).
         const caster = sim.bugs[c.caster];
-        let turn = aimHeading(caster, foeOf(sim, caster), 'venom') - caster.heading;
+        let turn = aimHeading(caster, foeOf(sim, caster), c.id === 'sunder-beam' ? 'laser' : 'venom') - caster.heading;
         while (turn > Math.PI) turn -= Math.PI * 2;
         while (turn < -Math.PI) turn += Math.PI * 2;
         v.pose.rotation.y = -turn * smooth(k / 0.6);
@@ -841,17 +900,17 @@ export class ArenaRenderer {
   }
 
   /** World position just in front of the caster's channelling weapon (or its centre). */
-  private weaponTip(bi: number, sim: Sim, cat: Category | undefined) {
+  private weaponTip(bi: number, sim: Sim, spec: { is: (p: PartDef) => boolean; reach: number } | undefined) {
     const v = this.bugs[bi];
     const bug = sim.bugs[bi];
-    const pv = cat ? v.parts.find((p) => p.attached && p.part.part.category === cat) : undefined;
+    const pv = spec ? v.parts.find((p) => p.attached && spec.is(p.part.part)) : undefined;
     // The way the weapon points (it may face sideways or backwards).
     const a = bug.heading + (pv?.part.r ?? 0) * (Math.PI / 2);
     const f = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
     const at = new THREE.Vector3();
     if (pv) pv.model.root.getWorldPosition(at).add(new THREE.Vector3(0, 0.55, 0));
     else v.group.getWorldPosition(at).add(new THREE.Vector3(0, 0.8, 0));
-    return { at: at.addScaledVector(f, cat === 'armor' ? 0 : 0.9), f };
+    return { at: at.addScaledVector(f, spec?.reach ?? 0.9), f };
   }
 
   private flash(at: THREE.Vector3, color: THREE.ColorRepresentation, size: number, life = 0.35) {
@@ -863,11 +922,12 @@ export class ArenaRenderer {
     fl.m.visible = true;
   }
 
-  private wave(at: THREE.Vector3, color: THREE.ColorRepresentation) {
+  private wave(at: THREE.Vector3, color: THREE.ColorRepresentation, size = 1) {
     const w = this.waves[this.nextWave];
     this.nextWave = (this.nextWave + 1) % this.waves.length;
     w.m.position.copy(at).setY(0.08);
     (w.m.material as THREE.MeshBasicMaterial).color.set(color);
+    w.size = size;
     w.life = 0.45;
     w.m.visible = true;
   }
@@ -893,6 +953,11 @@ export class ArenaRenderer {
       this.burst(bite, 18, color, 1.6);
       this.burst(bite, 10, 0xffffff, 1.3);
       this.startStreaks(bi, color, 0.3);
+    } else if (id === 'sunder-beam') {
+      this.flash(at, color, 1.6, 0.4);
+      this.flash(at, 0xffffff, 0.9, 0.2);
+      this.burst(at, 12, 0xffffff, 1.2);
+      v.kick.addScaledVector(f, -1.1); // recoil
     } else if (id === 'venom-barrage') {
       this.flash(at, color, 1.3, 0.3);
       this.flash(at, 0xffffff, 0.6, 0.15);
@@ -907,9 +972,97 @@ export class ArenaRenderer {
     }
   }
 
+  /** Effects for the quick (non-cutscene) moves, fired the moment they're used. */
+  private moveFx(sim: Sim, id: MoveId, bi: number) {
+    const b = sim.bugs[bi];
+    const color = getMove(id).color;
+    const floor = toWorld(b.pos.x, b.pos.y, 0.2);
+    const mid = toWorld(b.pos.x, b.pos.y, b.alt / CELL + 0.8);
+    switch (id) {
+      case 'skitter-dash':
+        this.burst(floor, 12, 0xc9c2b0, 0.9); // dust kicked up
+        this.startStreaks(bi, color, 0.35);
+        break;
+      case 'static-burst':
+        this.flash(mid, color, 2.6, 0.3);
+        this.flash(mid, 0xffffff, 1.2, 0.15);
+        this.wave(mid, color, 2.1);
+        this.wave(mid, 0xffffff, 1.5);
+        this.burst(mid, 18, color, 1.6);
+        break;
+      case 'gale-flap':
+        this.wave(mid, color, 2.6);
+        this.wave(mid, 0xffffff, 1.8);
+        this.burst(mid, 16, 0xffffff, 1.8);
+        break;
+      case 'web-snare':
+        this.burst(mid, 8, 0xf4f1e6, 0.9);
+        break;
+      case 'ghost-shell':
+        this.flash(mid, color, 1.8, 0.35);
+        this.burst(mid, 10, color, 0.9);
+        break;
+      case 'overclock':
+        this.flash(mid, color, 1.7, 0.3);
+        this.wave(mid, color, 1.2);
+        this.startStreaks(bi, color, 0.5);
+        break;
+      case 'burrow-strike':
+        this.burst(floor, 16, 0x8a6a45, 1.2);
+        this.wave(floor, 0xc98b4a, 1);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** Per-bug status visuals: burrowing, webbing, cloaking, stun sparks, overclock embers. */
+  private statusFx(sim: Sim, bug: Bug, v: BugView, t: number, dt: number) {
+    // Burrowed: the bug sinks under the floor and a mound of dirt travels with it.
+    const under = bug.burrow > 0;
+    v.sink += ((under ? 1 : 0) - v.sink) * Math.min(1, dt * (under ? 9 : 14));
+    v.group.position.y -= v.sink * 2.8;
+    v.mound.visible = v.sink > 0.05;
+    if (v.mound.visible) {
+      v.mound.position.copy(toWorld(bug.pos.x, bug.pos.y));
+      v.mound.scale.y = (0.42 + Math.sin(t * 34) * 0.1) * v.sink;
+    }
+    // Webbed: a net of silk over it.
+    v.web.visible = bug.webbed > 0 && !bug.dead;
+    if (v.web.visible) {
+      (v.web.material as THREE.LineBasicMaterial).opacity = 0.8 * Math.min(1, bug.webbed * 2);
+      v.web.rotation.y = Math.sin(t * 9) * 0.03; // strains against it
+    }
+    // Cloaked: allies fade to a ghost, enemies all but vanish.
+    const want = bug.cloak > 0 && !bug.dead ? (bug.team === 0 ? 0.3 : 0.05) : 1;
+    if (v.ghost !== want) {
+      const next = v.ghost + (want - v.ghost) * Math.min(1, dt * 7);
+      v.ghost = Math.abs(next - want) < 0.02 ? want : next;
+      for (const pv of v.parts) if (pv.attached) setGhost(pv.model.root, v.ghost);
+    }
+    // Sparks: dirt while tunnelling, static while stunned, embers while overclocked.
+    v.fxClock += dt;
+    if (v.fxClock > 0.09 && !sim.ult) {
+      v.fxClock = 0;
+      if (under) this.burst(toWorld(bug.pos.x, bug.pos.y, 0.2), 2, 0x8a6a45, 0.8);
+      if (bug.stun > 0) this.burst(toWorld(bug.pos.x, bug.pos.y, bug.alt / CELL + 1.3), 2, 0xffe14d, 0.6);
+      if (bug.haste > 0 && !bug.dead) this.burst(toWorld(bug.pos.x, bug.pos.y, bug.alt / CELL + 0.6), 1, 0xff9a2e, 0.6);
+    }
+  }
+
   /** Charge glow, converging sparks, speed streaks and flashes. */
   private updateCineFx(sim: Sim, c: Cine | null, t: number, dt: number) {
     const charging = c?.phase === 'charge' ? c : null;
+    // Sunder Beam: a lance of light for the moment after release.
+    this.beam.visible = !!c && c.id === 'sunder-beam' && c.phase === 'strike' && c.p < 0.7;
+    if (c && this.beam.visible) {
+      const { at, f } = this.weaponTip(c.caster, sim, MOVE_PART[c.id]);
+      const len = 30;
+      const w = Math.max(0.03, 0.4 * (1 - c.p / 0.7) * (0.85 + Math.sin(t * 70) * 0.15));
+      this.beam.position.copy(at).addScaledVector(f, len / 2);
+      faceAlong(this.beam, f);
+      this.beam.scale.set(w, w, len);
+    }
     this.aura.visible = !!charging;
     this.orb.visible = false;
     if (charging) {
@@ -938,7 +1091,7 @@ export class ArenaRenderer {
         const grow = smooth((k - 0.1) / 0.75) * (charging.id === 'mandible-crusher' ? 1 - smooth((k - 0.88) / 0.08) : 1);
         this.orb.visible = grow > 0.01;
         this.orb.position.copy(at);
-        this.orb.scale.setScalar(0.15 + grow * (charging.id === 'venom-barrage' ? 1.1 : 0.7) + Math.sin(t * 30) * 0.05 * grow);
+        this.orb.scale.setScalar(0.15 + grow * (charging.id === 'mandible-crusher' ? 0.7 : 1.1) + Math.sin(t * 30) * 0.05 * grow);
         const om = this.orb.material as THREE.MeshBasicMaterial;
         om.color.copy(color).lerp(new THREE.Color(0xffffff), 0.35);
         om.opacity = 0.55 + 0.35 * grow;
@@ -1056,7 +1209,7 @@ export class ArenaRenderer {
       const p = c.p;
       let shot: THREE.Vector3;
       let aim: THREE.Vector3;
-      if (c.id === 'venom-barrage') {
+      if (c.id === 'venom-barrage' || c.id === 'sunder-beam') {
         // Over the shoulder, looking down the barrel at the target.
         // (Behind = away from the target, whichever way the stinger is mounted.)
         const away = Math.atan2(caster.pos.y - foe.pos.y, caster.pos.x - foe.pos.x) + 0.45 * side;

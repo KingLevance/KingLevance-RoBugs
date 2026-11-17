@@ -47,6 +47,7 @@ function BugHud({ bug, color, align }: { bug: HudBug; color: string; align: 'lef
     <View style={{ gap: 3, alignItems: end ? 'flex-end' : 'flex-start' }}>
       <Text style={[styles.hudName, { color }]} numberOfLines={1}>
         {bug.name}
+        {bug.status}
         {bug.shield ? ' 🛡' : ''}
         {bug.flying ? ' ✈' : ''}
       </Text>

@@ -87,6 +87,33 @@ export function setHighlight(root: THREE.Object3D, on: boolean) {
   });
 }
 
+/**
+ * Fade a whole model for cloaking (1 = solid). Outlines vanish while faded.
+ * Only for models whose materials aren't shared with other models (part models).
+ */
+export function setGhost(root: THREE.Object3D, alpha: number) {
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    if (o.material === OUTLINE || o.material === HIGHLIGHT) {
+      o.visible = alpha > 0.95;
+      return;
+    }
+    const m = o.material as THREE.Material;
+    const base = (m.userData.solid ??= { transparent: m.transparent, opacity: m.opacity, depthWrite: m.depthWrite }) as {
+      transparent: boolean;
+      opacity: number;
+      depthWrite: boolean;
+    };
+    const fade = alpha < 0.999;
+    if (m.transparent !== (fade || base.transparent)) {
+      m.transparent = fade || base.transparent;
+      m.needsUpdate = true;
+    }
+    m.depthWrite = fade ? false : base.depthWrite;
+    m.opacity = base.opacity * alpha;
+  });
+}
+
 /** A toon mesh plus its black outline shell (uniform-scale hull; used for arena props). */
 export function toonMesh(geo: THREE.BufferGeometry, mat: THREE.Material, outline = 0.06) {
   const g = new THREE.Group();
@@ -308,6 +335,13 @@ const LOOK: Record<string, number> = {
   'armor-aegis': 2,
   'core-fusion': 1,
   'sensor-radar': 1,
+  'head-octo': 2,
+  'abdomen-spinner': 2,
+  'legs-weaver': 3,
+  'pinc-digger': 2,
+  'armor-mirage': 3,
+  'sting-laser': 2,
+  'horn-shock': 2,
 };
 
 const STEEL = 0x9aa6b4;
@@ -348,6 +382,7 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
       skull.add(at(shape(rbox(0.7, 0.26, 0.66, 0.1), dark), 0, 0.38, 0.02)); // jaw plate
       const glow = mat(0xa8dcff, { emissive: 0x2a8cff });
       const blinkers: THREE.Object3D[] = [];
+      let octoLens: THREE.MeshToonMaterial | null = null;
       if (look === 0) {
         skull.add(at(shape(ellip(0.42, 0.3, 0.4), main), 0, 0.6, 0.02)); // cranium
         skull.add(at(shape(rbox(0.74, 0.1, 0.24, 0.05), light, 0.025), 0, 0.84, -0.2)); // brow
@@ -366,7 +401,7 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         // Mouth grille.
         skull.add(at(shape(rbox(0.4, 0.14, 0.12, 0.05), gun, 0.025), 0, 0.42, -0.34));
         for (let i = -1; i <= 1; i++) skull.add(at(new THREE.Mesh(rbox(0.07, 0.03, 0.04, 0.01), light), i * 0.11, 0.42, -0.41));
-      } else {
+      } else if (look === 1) {
         skull.add(at(shape(ellip(0.4, 0.3, 0.46), main), 0, 0.6, 0.04)); // helmet
         skull.add(at(shape(ellip(0.36, 0.13, 0.24), mat(0xc9f6ff, { emissive: 0x15b5cf }), 0.03), 0, 0.64, -0.24)); // wraparound visor
         const scan = new THREE.Mesh(ball(0.06), new THREE.MeshBasicMaterial({ color: 0xffffff }));
@@ -378,6 +413,23 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           skull.add(at(shape(cyl(0.09, 0.11, 0.08, 12), gun, 0.02).rotateZ(Math.PI / 2), 0.41 * d, 0.6, 0.06)); // ear caps
           skull.add(seg(V(0.43 * d, 0.62, 0.06), V(0.5 * d, 0.86, 0.2), 0.025, steel, 0.015, 0));
         }
+      } else {
+        // Spider head: a low dome, eight glowing lenses in two rows, and a pair of fangs.
+        skull.add(at(shape(ellip(0.42, 0.27, 0.42), main), 0, 0.58, 0.04));
+        skull.add(at(shape(rbox(0.5, 0.08, 0.2, 0.04), dark, 0.02), 0, 0.5, -0.34));
+        const lens = mat(0xffd9d9, { emissive: 0xff3b3b });
+        const spots: [number, number, number, number][] = [
+          [0.1, 0.72, -0.37, 0.085],
+          [0.27, 0.68, -0.3, 0.06],
+          [0.09, 0.84, -0.26, 0.05],
+          [0.24, 0.8, -0.2, 0.045],
+        ];
+        for (const d of [-1, 1]) {
+          for (const [x, y, z, r] of spots) skull.add(at(shape(ball(r), lens, 0.02), x * d, y, z));
+          // Fangs.
+          skull.add(chain([V(0.12 * d, 0.44, -0.36), V(0.14 * d, 0.34, -0.5), V(0.06 * d, 0.24, -0.54)], 0.06, 0.02, mat(IVORY), 0.02));
+        }
+        octoLens = lens;
       }
       skull.add(at(shape(cyl(0.16, 0.2, 0.18, 10), gun, 0.02).rotateX(Math.PI / 2), 0, 0.46, 0.38)); // neck socket
       root.add(skull);
@@ -390,8 +442,10 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           const b = (t + row * 0.7) % 3.4;
           const open = b < 0.12 ? Math.abs(b - 0.06) / 0.06 : 1;
           for (const e of blinkers) e.scale.y = 0.15 + 0.85 * open;
-        } else {
+        } else if (look === 1) {
           blinkers[0].position.x = Math.sin(t * 2.2 + row) * 0.26; // visor scanner sweeps
+        } else if (octoLens) {
+          octoLens.emissiveIntensity = 0.7 + Math.sin(t * 3 + row) * 0.35; // the eyes smoulder
         }
       };
       break;
@@ -439,10 +493,15 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
               [0.4, 0.28, 0.2, 0.04],
               [0.31, 0.23, 0.18, 0.31],
             ]
-          : [
-              [0.46, 0.32, 0.28, -0.18],
-              [0.38, 0.28, 0.24, 0.24],
-            ];
+          : look === 1
+            ? [
+                [0.46, 0.32, 0.28, -0.18],
+                [0.38, 0.28, 0.24, 0.24],
+              ]
+            : [
+                [0.36, 0.3, 0.22, -0.3],
+                [0.48, 0.4, 0.38, 0.08],
+              ];
       rows.forEach(([rx, ry, rz, z], i) => {
         const s = new THREE.Group();
         s.add(at(shape(ellip(rx, ry, rz), i % 2 ? dark : main), 0, 0.52 - i * 0.02, 0));
@@ -456,6 +515,17 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
       const tipMat = mat(0xfff0c0, { emissive: 0xffa21f });
       const tip = new THREE.Mesh(ball(0.07), tipMat);
       segs[segs.length - 1].add(at(tip, 0, 0.5, rows[rows.length - 1][2] + 0.04));
+      if (look === 2) {
+        // Spider abdomen: a big bulb with a silk nozzle and a strand of silk at the back.
+        const silk = mat(0xf4f1e6, { emissive: 0x8a8672 });
+        const big = segs[1];
+        const nozzle = shape(cone(0.13, 0.26, 8), gun, 0.02);
+        nozzle.rotation.x = Math.PI / 2;
+        big.add(at(nozzle, 0, 0.42, 0.44));
+        big.add(at(new THREE.Mesh(ball(0.07), silk), 0, 0.42, 0.58));
+        for (const d of [-1, 1]) big.add(at(shape(ellip(0.1, 0.07, 0.16), silk, 0.02), 0.22 * d, 0.82, 0.02)); // pale markings
+        big.add(at(shape(ellip(0.09, 0.06, 0.12), silk, 0.02), 0, 0.88, -0.16));
+      }
       let fluid: THREE.Object3D[] = [];
       let fluidMat: THREE.MeshToonMaterial | null = null;
       if (look === 1) {
@@ -499,15 +569,17 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         [0.06, 0.66, 0.46],
         [0.052, 0.78, 0.46],
         [0.085, 0.58, 0.46],
+        [0.045, 0.98, 0.46],
       ][look];
+      const arch = look === 3; // spider legs: knee held high above the body
       const legs: { hip: THREE.Group; knee: THREE.Group; d: number; phase: number }[] = [];
       for (const d of sides) {
         for (const dz of [-0.2, 0.2]) {
           root.add(at(shape(cyl(0.11, 0.11, 0.1, 12), gun, 0.02).rotateZ(Math.PI / 2), 0.25 * d, 0.5, dz)); // motor drum
           const hip = new THREE.Group();
           hip.position.set(0.24 * d, 0.5, dz);
-          const kneeAt = V(reach * 0.55 * d, 0.3, dz * 0.4);
-          const footAt = V(reach * d, -drop, dz * 0.9);
+          const kneeAt = V(reach * (arch ? 0.42 : 0.55) * d, arch ? 0.78 : 0.3, dz * (arch ? 0.7 : 0.4));
+          const footAt = V(reach * d, -drop, dz * (arch ? 1.7 : 0.9));
           // Femur: armoured, chunky; a light plate on top.
           hip.add(seg(V(0, 0, 0), kneeAt, r * 1.35, main, r * 1.05));
           if (look !== 1) hip.add(seg(V(0.05 * d, 0.07, 0), kneeAt.clone().multiplyScalar(0.8).add(V(0, 0.07, 0)), r * 0.6, light, r * 0.5, 0));
@@ -669,14 +741,25 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         const claw = new THREE.Group();
         claw.position.copy(wrist);
         claw.add(shape(ball(0.12 * big), steel, 0.025));
-        // Palm and the fixed finger.
-        claw.add(at(shape(ellip(0.16 * big, 0.13 * big, 0.2 * big), main), 0.04 * d, 0, -0.2 * big));
-        claw.add(chain([V(0.1 * d, 0, -0.3 * big), V(0.1 * d, 0, -0.48 * big), V(0.0, 0, -0.62 * big)], 0.075 * big, 0.03 * big, main));
         // The moving finger (dactyl) on a hinge.
         const finger = new THREE.Group();
         finger.position.set(-0.06 * d, 0, -0.3 * big);
-        finger.add(chain([V(0, 0, 0), V(-0.06 * d, 0, -0.18 * big), V(0.0, 0, -0.32 * big)], 0.06 * big, 0.025 * big, light));
-        if (look === 1) for (let i = 0; i < 3; i++) finger.add(at(new THREE.Mesh(cone(0.025, 0.07, 4), steel), -0.0 * d, 0, -0.08 - i * 0.08).rotateZ((Math.PI / 2) * d));
+        if (look === 2) {
+          // Mole digger: a broad shovel paw tipped with digging claws.
+          claw.add(at(shape(rbox(0.34, 0.12, 0.34, 0.05), main), 0.04 * d, -0.02, -0.26));
+          claw.add(at(shape(rbox(0.36, 0.06, 0.2, 0.03), steel, 0.02), 0.04 * d, -0.06, -0.48));
+          for (let i = -1; i <= 1; i++) {
+            const nail = shape(cone(0.05, 0.22, 5), mat(IVORY), 0.02);
+            nail.rotation.x = -Math.PI / 2 - 0.25;
+            claw.add(at(nail, (0.04 + i * 0.12) * d, -0.08, -0.64));
+          }
+        } else {
+          // Palm and the fixed finger.
+          claw.add(at(shape(ellip(0.16 * big, 0.13 * big, 0.2 * big), main), 0.04 * d, 0, -0.2 * big));
+          claw.add(chain([V(0.1 * d, 0, -0.3 * big), V(0.1 * d, 0, -0.48 * big), V(0.0, 0, -0.62 * big)], 0.075 * big, 0.03 * big, main));
+          finger.add(chain([V(0, 0, 0), V(-0.06 * d, 0, -0.18 * big), V(0.0, 0, -0.32 * big)], 0.06 * big, 0.025 * big, light));
+          if (look === 1) for (let i = 0; i < 3; i++) finger.add(at(new THREE.Mesh(cone(0.025, 0.07, 4), steel), -0.0 * d, 0, -0.08 - i * 0.08).rotateZ((Math.PI / 2) * d));
+        }
         claw.add(finger);
         root.add(claw);
         claws.push({ g: claw, finger, d });
@@ -686,6 +769,7 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           const open = 0.35 + Math.sin(t * 2 + d + row) * 0.15;
           finger.rotation.y = d * (open * (1 - attack) - 0.1 * attack);
           g.rotation.y = -d * (0.12 - attack * 0.25);
+          if (look === 2) g.rotation.x = Math.sin(t * 5 + d) * 0.06 - attack * 0.5; // scooping swipe
         });
       break;
     }
@@ -693,12 +777,12 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
     case 'stinger': {
       // Venom gland: glass bulb with glowing fluid inside and banding.
       const glass = mat(0xf1dcff, { transparent: true, opacity: 0.3 });
-      const venom = mat(0xe6a6ff, { emissive: 0xa23ee0 });
+      const venom = look === 2 ? mat(0xb8fbff, { emissive: 0x19c8e0 }) : mat(0xe6a6ff, { emissive: 0xa23ee0 });
       root.add(at(new THREE.Mesh(ellip(0.25, 0.22, 0.29), venom), 0, 0.52, 0.2));
       root.add(at(new THREE.Mesh(ellip(0.3, 0.27, 0.34), glass), 0, 0.52, 0.2));
-      for (const z of [0.04, 0.36]) root.add(at(new THREE.Mesh(torus(0.26, 0.035), dark), 0, 0.52, z));
+      for (const z of [0.04, 0.36]) root.add(at(new THREE.Mesh(torus(0.26, 0.035), look === 2 ? steel : dark), 0, 0.52, z));
       root.add(at(shape(rbox(0.36, 0.14, 0.2, 0.05), gun, 0.02), 0, 0.33, 0.2)); // cradle
-      const glow = mat(0xf6d9ff, { emissive: 0xc06cff });
+      const glow = look === 2 ? mat(0xe9feff, { emissive: 0x3fe6ff }) : mat(0xf6d9ff, { emissive: 0xc06cff });
       const barrel = new THREE.Group();
       if (look === 0) {
         barrel.add(chain([V(0, 0, 0.02), V(0, 0, -0.35), V(0, 0, -0.72)], 0.15, 0.05, main));
@@ -707,11 +791,18 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         needle.rotation.x = -Math.PI / 2;
         barrel.add(at(needle, 0, 0, -0.86));
         barrel.add(at(new THREE.Mesh(ball(0.05), glow), 0, 0, -0.98));
-      } else {
+      } else if (look === 1) {
         barrel.add(seg(V(0, 0, 0.02), V(0, 0, -0.95), 0.075, main, 0.06));
         for (let i = 0; i < 4; i++) barrel.add(at(new THREE.Mesh(torus(0.13 - i * 0.012, 0.032), glow), 0, 0, -0.22 - i * 0.2));
         for (const d of [-1, 1]) barrel.add(seg(V(0.09 * d, 0, -0.86), V(0.04 * d, 0, -1.14), 0.03, steel, 0.018, 0));
         barrel.add(at(new THREE.Mesh(ball(0.045), glow), 0, 0, -1.1));
+      } else {
+        // Laser: a stubby emitter tube with focusing rings and a glowing lens.
+        barrel.add(shape(cyl(0.13, 0.15, 0.62, 12), gun).rotateX(Math.PI / 2).translateY(-0.3));
+        for (let i = 0; i < 3; i++) barrel.add(at(new THREE.Mesh(torus(0.17, 0.03), steel), 0, 0, -0.12 - i * 0.2));
+        barrel.add(at(shape(cyl(0.19, 0.16, 0.1, 14), steel, 0.02).rotateX(Math.PI / 2), 0, 0, -0.66));
+        barrel.add(at(new THREE.Mesh(ball(0.13), glow), 0, 0, -0.7));
+        for (const d of [-1, 1]) barrel.add(seg(V(0.16 * d, 0.02, -0.05), V(0.16 * d, 0.02, -0.55), 0.025, steel, 0.025, 0)); // cooling rails
       }
       barrel.position.set(0, 0.54, -0.06);
       root.add(barrel);
@@ -731,13 +822,15 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
       const horn = new THREE.Group();
       const spin = new THREE.Group();
       horn.add(spin);
+      let sparkMat: THREE.MeshToonMaterial | null = null;
+      let sparkOrb: THREE.Mesh | null = null;
       if (look === 0) {
         // A curved beetle horn that sweeps forward and up.
         const pts = [V(0, 0, 0), V(0, 0.04, -0.3), V(0, 0.16, -0.56), V(0, 0.38, -0.74), V(0, 0.62, -0.78)];
         horn.add(chain(pts, 0.17, 0.035, mat(IVORY)));
         for (let i = 0; i < 3; i++) horn.add(at(new THREE.Mesh(torus(0.155 - i * 0.025, 0.025), dark), 0, 0.03 + i * 0.05, -0.12 - i * 0.16).rotateX(-0.15 - i * 0.3));
         horn.position.set(0, 0.58, -0.06);
-      } else {
+      } else if (look === 1) {
         // Drill bit with a spiral flute.
         spin.add(at(shape(cone(0.3, 1.0, 12), steel), 0, 0.5, 0));
         const flute = mat(0x5b6574);
@@ -753,12 +846,29 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         horn.add(at(shape(cyl(0.3, 0.32, 0.12, 14), main), 0, 0.02, 0)); // chuck
         horn.position.set(0, 0.56, -0.12);
         horn.rotation.x = -Math.PI / 2 + 0.12;
+      } else {
+        // Tesla prongs: two coiled rods with a spark jumping between the tips.
+        for (const d of [-1, 1]) {
+          horn.add(seg(V(0.17 * d, 0, 0), V(0.11 * d, 0.06, -0.72), 0.06, steel, 0.028));
+          for (let i = 0; i < 4; i++) horn.add(at(new THREE.Mesh(torus(0.075 - i * 0.008, 0.022), main), (0.165 - i * 0.012) * d, 0.012 * i, -0.12 - i * 0.13));
+          horn.add(at(shape(ball(0.05), steel, 0.02), 0.11 * d, 0.06, -0.74));
+        }
+        sparkMat = mat(0xfff7c2, { emissive: 0xffd21f });
+        sparkOrb = new THREE.Mesh(ball(0.07), sparkMat);
+        horn.add(at(sparkOrb, 0, 0.06, -0.74));
+        horn.position.set(0, 0.58, -0.06);
       }
       root.add(horn);
       animate = ({ t, speed, attack }) => {
         if (look === 1) spin.rotation.y = t * (6 + speed * 18 + attack * 20);
         horn.position.z = (look === 1 ? -0.12 : -0.06) - attack * 0.12;
         if (look === 0) horn.rotation.x = -attack * 0.25;
+        if (sparkMat && sparkOrb) {
+          // The spark flickers and jumps about between the prongs.
+          sparkMat.emissiveIntensity = 0.6 + Math.abs(Math.sin(t * 23 + row)) * 0.7 + attack * 2;
+          sparkOrb.scale.setScalar(0.7 + Math.abs(Math.sin(t * 17)) * 0.6 + attack);
+          sparkOrb.position.x = Math.sin(t * 31) * 0.05;
+        }
       };
       break;
     }
@@ -778,7 +888,7 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         for (const sx of [-1, 1])
           for (const sz of [-1, 1]) root.add(at(shape(rbox(0.44, 0.16, 0.44, 0.07), tile, 0.025), 0.23 * sx, 0.52, 0.23 * sz));
         root.add(at(shape(rbox(0.22, 0.08, 0.22, 0.04), main, 0.02), 0, 0.62, 0));
-      } else {
+      } else if (look === 2) {
         const stripeA = mat(0xf2c14e);
         const stripeB = mat(0x22252b);
         root.add(at(shape(rbox(1.0, 0.68, 1.0, 0.14), main), 0, 0.48, 0));
@@ -789,6 +899,25 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         bumper.add(at(new THREE.Mesh(rbox(1.08, 0.22, 0.26, 0.06), OUTLINE), 0, 0, 0.03));
         root.add(at(bumper, 0, 0.46, -0.45));
         for (const sx of [-1, 1]) for (const sz of [-1, 1]) bolt(0.36 * sx, 0.83, 0.36 * sz, 0.06);
+      } else {
+        // Mirage plate: a dark slab studded with light-bending crystal facets.
+        root.add(at(shape(rbox(1.0, 0.26, 1.0, 0.09), gun), 0, 0.35, 0));
+        const facets = [mat(0x9ff3ee, { emissive: 0x1e9c95 }), mat(0xd7b8ff, { emissive: 0x7044c4 }), mat(0xbfe6ff, { emissive: 0x2f7fc0 })];
+        const gem = geo('mirage', () => new THREE.OctahedronGeometry(0.24, 0).scale(1, 0.55, 1));
+        const spots: [number, number, number][] = [
+          [-0.24, -0.24, 1.1],
+          [0.24, -0.22, 0.9],
+          [0, 0.02, 1.35],
+          [-0.26, 0.26, 0.95],
+          [0.26, 0.26, 1.05],
+        ];
+        spots.forEach(([x, z, sc], i) => {
+          const f = shape(gem, facets[i % 3], 0.02);
+          f.scale.setScalar(sc);
+          f.rotation.y = i * 0.9;
+          root.add(at(f, x, 0.56 + (sc - 0.9) * 0.08, z));
+        });
+        animate = ({ t }) => facets.forEach((m, i) => (m.emissiveIntensity = 0.55 + Math.sin(t * 2.2 + i * 2.1 + row) * 0.45)); // shimmer
       }
       break;
     }

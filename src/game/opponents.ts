@@ -39,9 +39,18 @@ export type Opponent = {
   lootTable: LootEntry[];
   /** Campaign map: unlocked when ANY of these opponents is cleared (empty = open from the start). */
   unlockedBy: string[];
+  /** Team fights: more enemy bugs fighting alongside `build`. */
+  team?: Teammate[];
+  /** Team fights: ids of (earlier) opponents whose bugs fight on the player's side. */
+  allies?: string[];
+  /** An optional side boss off the main path. */
+  optional?: boolean;
   /** Map position, 0..1 in both axes (y = 0 is the top of the map). */
   map: { x: number; y: number };
 };
+
+/** Another bug in a team fight. */
+export type Teammate = { build: Build; moves: MoveId[]; aggression: number };
 
 const part = (id: string): Reward => ({ kind: 'part', id });
 const move = (id: MoveId): Reward => ({ kind: 'move', id });
@@ -52,7 +61,8 @@ const ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic'];
 /** Every part up to `maxTier`, weighted by rarity. */
 function tierTable(maxTier: Rarity): LootEntry[] {
   const hi = ORDER.indexOf(maxTier);
-  return PARTS.filter((p) => ORDER.indexOf(p.rarity) <= hi).map((p) => ({ reward: part(p.id), weight: RARITY_WEIGHT[p.rarity] }));
+  // Signature hardware (silk, diggers, cloak, laser…) only drops from the bugs that use it.
+  return PARTS.filter((p) => ORDER.indexOf(p.rarity) <= hi && (!p.tag || p.tag === 'venom')).map((p) => ({ reward: part(p.id), weight: RARITY_WEIGHT[p.rarity] }));
 }
 
 const L = {
@@ -80,7 +90,18 @@ const L = {
   o: 'core-cell',
   O: 'core-fusion',
   e: 'sensor-antenna',
+  R: 'sensor-radar',
+  n: 'sting-lance',
+  C: 'head-octo',
+  v: 'legs-weaver',
+  S: 'abdomen-spinner',
+  z: 'sting-laser',
+  q: 'pinc-digger',
+  t: 'horn-shock',
+  i: 'armor-mirage',
 };
+
+const bug = (name: string, rows: string[]): Build => ({ name, placements: fromLayout(rows, L) });
 
 export const STARTER_BUILD: Build = {
   name: 'Sprocket',
@@ -88,19 +109,20 @@ export const STARTER_BUILD: Build = {
 };
 
 export const OPPONENTS: Opponent[] = [
+  // ── The Scrapyard ──────────────────────────────────────────────
   {
     id: 'rustmite',
     name: 'Rustmite',
     blurb: 'A wobbly scrap crawler. Good for warming up.',
     arena: 'pit',
     aggression: 0.5,
-    build: { name: 'Rustmite', placements: fromLayout(['..m..', '.lHl.', '.lTo.', '..A..'], L) },
+    build: bug('Rustmite', ['..m..', '.lHl.', '.lTo.', '..A..']),
     moves: [],
     boss: false,
     guaranteed: [move('carapace-lock'), part('armor-ceramic')],
     lootTable: tierTable('uncommon'),
     unlockedBy: [],
-    map: { x: 0.5, y: 0.9 },
+    map: { x: 0.5, y: 0.955 },
   },
   {
     id: 'needlewisp',
@@ -108,13 +130,13 @@ export const OPPONENTS: Opponent[] = [
     blurb: 'A flitting dart-spitter that keeps its distance.',
     arena: 'pit',
     aggression: 0.35,
-    build: { name: 'Needlewisp', placements: fromLayout(['..d..', '.eHe.', '.wTw.', '.lAl.', '.oAo.'], L) },
+    build: bug('Needlewisp', ['..d..', '.eHe.', '.wTw.', '.lAl.', '.oAo.']),
     moves: ['venom-barrage', 'skitter-dash'],
     boss: false,
     guaranteed: [part('sting-dart'), move('venom-barrage')],
     lootTable: [...tierTable('uncommon'), { reward: part('wings-foil'), weight: 40 }],
     unlockedBy: ['rustmite'],
-    map: { x: 0.22, y: 0.66 },
+    map: { x: 0.25, y: 0.895 },
   },
   {
     id: 'snapclaw',
@@ -122,13 +144,28 @@ export const OPPONENTS: Opponent[] = [
     blurb: 'Wide pincers and a stubborn shell.',
     arena: 'foundry',
     aggression: 0.7,
-    build: { name: 'Snapclaw', placements: fromLayout(['.pHp.', '.rTr.', '.lTl.', '.lAo.'], L) },
+    build: bug('Snapclaw', ['.pHp.', '.rTr.', '.lTl.', '.lAo.']),
     moves: ['carapace-lock'],
     boss: false,
     guaranteed: [move('skitter-dash'), part('legs-strider'), part('legs-strider')],
     lootTable: tierTable('rare'),
     unlockedBy: ['rustmite'],
-    map: { x: 0.78, y: 0.66 },
+    map: { x: 0.75, y: 0.895 },
+  },
+  {
+    id: 'scrapjaw',
+    name: 'Old Scrapjaw',
+    blurb: 'Optional. A battered veteran that has out-bitten every newcomer. Teaches Overclock.',
+    arena: 'pit',
+    aggression: 0.75,
+    build: bug('Old Scrapjaw', ['.mh..', '.rHr.', '.lTo.', '.lAl.']),
+    moves: ['mandible-crusher', 'skitter-dash'],
+    boss: true,
+    optional: true,
+    guaranteed: [move('overclock'), part('head-octo'), part('core-cell')],
+    lootTable: [...tierTable('rare'), { reward: part('head-octo'), weight: 20 }, { reward: part('core-cell'), weight: 20 }],
+    unlockedBy: ['snapclaw'],
+    map: { x: 0.92, y: 0.83 },
   },
   {
     id: 'ironback',
@@ -136,7 +173,7 @@ export const OPPONENTS: Opponent[] = [
     blurb: 'Foundry boss. Slow, plated, and it hits like a press. Farmable.',
     arena: 'foundry',
     aggression: 0.8,
-    build: { name: 'Ironback', placements: fromLayout(['.PhP.', 'rBVBr', 'sBOBs', '.KKK.', '.s.s.'], L) },
+    build: bug('Ironback', ['.PhP.', 'rBVBr', 'sBOBs', '.KKK.', '.s.s.']),
     moves: ['carapace-lock'],
     boss: true,
     guaranteed: [part('core-fusion'), part('pinc-vise')],
@@ -148,18 +185,74 @@ export const OPPONENTS: Opponent[] = [
       { reward: part('pinc-vise'), weight: 8 },
     ],
     unlockedBy: ['needlewisp', 'snapclaw'],
-    map: { x: 0.5, y: 0.42 },
+    map: { x: 0.5, y: 0.825 },
+  },
+
+  // ── The Undergrowth ────────────────────────────────────────────
+  {
+    id: 'silkjaw',
+    name: 'Silkjaw',
+    blurb: 'An eight-eyed weaver. Its webs pin you down while its jaws go to work.',
+    arena: 'hive',
+    aggression: 0.75,
+    build: bug('Silkjaw', ['.mMm.', '.vCv.', '.oBo.', '.vSv.']),
+    moves: ['web-snare', 'mandible-crusher'],
+    boss: false,
+    guaranteed: [move('web-snare'), part('abdomen-spinner'), part('legs-weaver'), part('legs-weaver')],
+    lootTable: [...tierTable('rare'), { reward: part('legs-weaver'), weight: 25 }, { reward: part('abdomen-spinner'), weight: 15 }],
+    unlockedBy: ['ironback'],
+    map: { x: 0.5, y: 0.745 },
+  },
+  {
+    id: 'lattice',
+    name: 'Mother Lattice',
+    blurb: 'Optional. The great weaver at the heart of the web. Six legs of pure spite.',
+    arena: 'hive',
+    aggression: 0.85,
+    build: bug('Mother Lattice', ['.MCM.', 'vBOBv', 'vKSKv', 'v.o.v']),
+    moves: ['web-snare', 'mandible-crusher', 'skitter-dash'],
+    boss: true,
+    optional: true,
+    guaranteed: [part('legs-weaver'), part('legs-weaver'), part('armor-aegis'), part('mand-shear')],
+    lootTable: [...tierTable('epic'), { reward: part('legs-weaver'), weight: 30 }, { reward: part('head-octo'), weight: 20 }, { reward: part('abdomen-spinner'), weight: 15 }],
+    unlockedBy: ['silkjaw'],
+    map: { x: 0.1, y: 0.7 },
+  },
+  {
+    id: 'gravelgrub',
+    name: 'Gravelgrub',
+    blurb: 'It vanishes under the floor, then the floor comes up to meet you.',
+    arena: 'foundry',
+    aggression: 0.8,
+    build: bug('Gravelgrub', ['.qHq.', 'rBOBr', 'sKKKs', '.s.s.']),
+    moves: ['burrow-strike', 'carapace-lock'],
+    boss: false,
+    guaranteed: [move('burrow-strike'), part('pinc-digger'), part('pinc-digger')],
+    lootTable: [...tierTable('rare'), { reward: part('pinc-digger'), weight: 25 }],
+    unlockedBy: ['silkjaw'],
+    map: { x: 0.28, y: 0.665 },
+  },
+  {
+    id: 'arcfly',
+    name: 'Arcfly',
+    blurb: 'A crackling flyer. Gets close, stuns you, and blows you into the acid.',
+    arena: 'pit',
+    aggression: 0.85,
+    build: bug('Arcfly', ['.MtM.', '.eHe.', 'wBOBw', 'sAoAs']),
+    moves: ['static-burst', 'gale-flap', 'skitter-dash'],
+    boss: false,
+    guaranteed: [move('static-burst'), move('gale-flap'), part('horn-shock'), part('wings-foil'), part('wings-foil')],
+    lootTable: [...tierTable('rare'), { reward: part('horn-shock'), weight: 20 }, { reward: part('wings-foil'), weight: 30 }],
+    unlockedBy: ['silkjaw'],
+    map: { x: 0.72, y: 0.665 },
   },
   {
     id: 'vexa',
     name: 'Queen Vexa',
     blurb: 'Hive champion. Drill horn, shear jaws, glass wings. Farmable boss.',
     arena: 'hive',
-    aggression: 0.9,
-    build: {
-      name: 'Queen Vexa',
-      placements: fromLayout(['.MDM.', 'cBVBc', 'GBOBG', 'gKoKg', '.g.g.'], L),
-    },
+    aggression: 0.8,
+    build: bug('Queen Vexa', ['.mDM.', 'rBVBr', 'GBOBG', '.gog.']),
     moves: ['mandible-crusher', 'carapace-lock'],
     boss: true,
     guaranteed: [part('wings-glass'), part('mand-shear')],
@@ -171,13 +264,153 @@ export const OPPONENTS: Opponent[] = [
       { reward: part('wings-glass'), weight: 8 },
       { reward: move('mandible-crusher'), weight: 4 },
     ],
-    unlockedBy: ['ironback'],
-    map: { x: 0.5, y: 0.12 },
+    unlockedBy: ['gravelgrub', 'arcfly'],
+    map: { x: 0.5, y: 0.585 },
+  },
+
+  // ── The Deep Hive (team fights) ────────────────────────────────
+  {
+    id: 'twins',
+    name: 'Rivet & Ratchet',
+    blurb: 'Two-on-two. The scrapyard twins never fight alone, so Snapclaw has your back.',
+    arena: 'foundry',
+    aggression: 0.75,
+    build: bug('Rivet', ['.PHP.', 'cBOBc', '.sKs.', '.s.s.']),
+    moves: ['carapace-lock'],
+    team: [{ build: bug('Ratchet', ['.MHM.', '.sBs.', '.oKo.', '.s.s.']), moves: ['mandible-crusher'], aggression: 0.85 }],
+    allies: ['snapclaw'],
+    boss: false,
+    guaranteed: [part('legs-crawler'), part('legs-crawler'), part('thorax-chitin')],
+    lootTable: tierTable('rare'),
+    unlockedBy: ['vexa'],
+    map: { x: 0.5, y: 0.505 },
+  },
+  {
+    id: 'glimmer',
+    name: 'Glimmer',
+    blurb: 'Now you see it. Then you really don’t, until its jaws are already shut.',
+    arena: 'hive',
+    aggression: 0.8,
+    build: bug('Glimmer', ['.MVM.', 'iBOBi', 'gKoKg', '.g.g.']),
+    moves: ['ghost-shell', 'mandible-crusher'],
+    boss: false,
+    guaranteed: [move('ghost-shell'), part('armor-mirage')],
+    lootTable: [...tierTable('epic'), { reward: part('armor-mirage'), weight: 20 }],
+    unlockedBy: ['twins'],
+    map: { x: 0.26, y: 0.425 },
+  },
+  {
+    id: 'nullshade',
+    name: 'Nullshade',
+    blurb: 'Optional. An assassin nobody has seen twice. Cloak, laser, and a very short fight.',
+    arena: 'foundry',
+    aggression: 0.9,
+    build: bug('Nullshade', ['.MzM.', 'iBVBi', 'gOKOg', '.g.g.']),
+    moves: ['ghost-shell', 'sunder-beam', 'mandible-crusher'],
+    boss: true,
+    optional: true,
+    guaranteed: [part('sting-lance'), part('armor-mirage'), part('head-visor')],
+    lootTable: [...tierTable('epic'), { reward: part('armor-mirage'), weight: 20 }, { reward: part('sting-lance'), weight: 14 }, { reward: part('sting-laser'), weight: 14 }],
+    unlockedBy: ['glimmer'],
+    map: { x: 0.08, y: 0.345 },
+  },
+  {
+    id: 'lenswing',
+    name: 'Lenswing',
+    blurb: 'Hovers out of reach and carves you up with light.',
+    arena: 'pit',
+    aggression: 0.45,
+    build: bug('Lenswing', ['.zVz.', 'RBOBR', 'GcAcG', '.o.o.']),
+    moves: ['sunder-beam', 'gale-flap', 'carapace-lock'],
+    boss: false,
+    guaranteed: [move('sunder-beam'), part('sting-laser'), part('sensor-radar')],
+    lootTable: [...tierTable('epic'), { reward: part('sting-laser'), weight: 18 }, { reward: part('sensor-radar'), weight: 14 }],
+    unlockedBy: ['twins'],
+    map: { x: 0.74, y: 0.425 },
+  },
+  {
+    id: 'tunnelkings',
+    name: 'The Tunnel Kings',
+    blurb: 'Two-on-two. One digs, one bites. Silkjaw joins you to even the odds.',
+    arena: 'foundry',
+    aggression: 0.85,
+    build: bug('Burrowbane', ['.qVq.', 'sBOBs', '.KKK.', '.s.s.']),
+    moves: ['burrow-strike'],
+    team: [{ build: bug('Grubjaw', ['.MHM.', 'cBOBc', '.sKs.', '.s.s.']), moves: ['mandible-crusher', 'skitter-dash'], aggression: 0.9 }],
+    allies: ['silkjaw'],
+    boss: false,
+    guaranteed: [part('abdomen-tank'), part('core-fusion')],
+    lootTable: [...tierTable('epic'), { reward: part('pinc-digger'), weight: 15 }],
+    unlockedBy: ['glimmer', 'lenswing'],
+    map: { x: 0.5, y: 0.345 },
+  },
+  {
+    id: 'hiveguard',
+    name: 'The Hive Guard',
+    blurb: 'Three-on-three. The Empress’s finest. Ironback and Arcfly march with you.',
+    arena: 'hive',
+    aggression: 0.85,
+    build: bug('Hive Warden', ['.PHP.', 'cBOBc', '.sKs.', '.s.s.']),
+    moves: ['carapace-lock'],
+    team: [
+      { build: bug('Stingwing', ['..n..', '.eVe.', '.GBG.', '.oOo.', '..A..']), moves: ['venom-barrage'], aggression: 0.4 },
+      { build: bug('Shellback', ['.mHm.', 'XBOBX', 'sKoKs', '.s.s.']), moves: ['mandible-crusher', 'carapace-lock'], aggression: 0.85 },
+    ],
+    allies: ['ironback', 'arcfly'],
+    boss: true,
+    guaranteed: [part('horn-drill'), part('armor-aegis')],
+    lootTable: [...tierTable('epic'), { reward: part('horn-drill'), weight: 10 }, { reward: part('sting-lance'), weight: 10 }],
+    unlockedBy: ['tunnelkings'],
+    map: { x: 0.5, y: 0.255 },
+  },
+  {
+    id: 'kalyx',
+    name: 'Empress Kalyx',
+    blurb: 'Three-on-three finale. Web, beam and jaws, with two royal guards. Glimmer and Lenswing fight for you. Farmable.',
+    arena: 'hive',
+    aggression: 0.95,
+    build: bug('Empress Kalyx', ['.MzM.', 'cBVBc', 'GBOBG', 'vKOKv', '.vSv.']),
+    moves: ['sunder-beam', 'web-snare', 'mandible-crusher', 'carapace-lock'],
+    team: [
+      { build: bug('Royal Guard', ['.PHP.', 'XBOBX', 'sKoKs', '.s.s.']), moves: ['carapace-lock'], aggression: 0.9 },
+      { build: bug('Royal Lancer', ['.MDM.', '.sHs.', 'cBOBc', '.oKo.']), moves: ['mandible-crusher'], aggression: 0.9 },
+    ],
+    allies: ['glimmer', 'lenswing'],
+    boss: true,
+    guaranteed: [part('mand-shear'), part('wings-glass'), part('sting-laser')],
+    lootTable: [
+      ...tierTable('epic'),
+      { reward: part('sting-laser'), weight: 12 },
+      { reward: part('armor-mirage'), weight: 12 },
+      { reward: part('legs-weaver'), weight: 12 },
+      { reward: part('horn-drill'), weight: 10 },
+      { reward: part('sting-lance'), weight: 10 },
+      { reward: part('wings-glass'), weight: 10 },
+    ],
+    unlockedBy: ['hiveguard'],
+    map: { x: 0.5, y: 0.15 },
   },
 ];
 
 export function getOpponent(id: string): Opponent {
   return OPPONENTS.find((o) => o.id === id) ?? OPPONENTS[0];
+}
+
+/** Everyone fighting on each side of an opponent's match (the player's own bug is added by the caller). */
+export function lineup(o: Opponent): { allies: Teammate[]; enemies: Teammate[] } {
+  return {
+    allies: (o.allies ?? []).map((id) => {
+      const a = getOpponent(id);
+      return { build: a.build, moves: a.moves, aggression: a.aggression };
+    }),
+    enemies: [{ build: o.build, moves: o.moves, aggression: o.aggression }, ...(o.team ?? [])],
+  };
+}
+
+/** "1v1", "2v2" or "3v3". */
+export function fightSize(o: Opponent) {
+  const n = 1 + (o.team?.length ?? 0);
+  return `${n}v${n}`;
 }
 
 export function isUnlocked(o: Opponent, cleared: string[]) {
