@@ -12,6 +12,7 @@ const SAVE_KEY = 'robugs.save.v2';
 export type LastResult = {
   opponentId: string;
   winner: 0 | 1 | null;
+  forfeited: boolean;
   firstClear: boolean;
   rewards: MatchRewards;
 };
@@ -59,7 +60,7 @@ type GameStore = SaveData & {
   setBugName: (name: string) => void;
   toggleEquip: (id: MoveId) => void;
   /** Records a match result, grants rewards and stores them as `lastResult`. */
-  recordResult: (opponentId: string, winner: 0 | 1 | null) => void;
+  recordResult: (opponentId: string, winner: 0 | 1 | null, forfeited?: boolean) => void;
   selectOpponent: (id: string) => void;
   resetSave: () => void;
 };
@@ -78,11 +79,11 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const recordResult = useCallback(
-    (opponentId: string, winner: 0 | 1 | null) => {
+    (opponentId: string, winner: 0 | 1 | null, forfeited = false) => {
       const opp = getOpponent(opponentId);
       const won = winner === 0;
       const firstClear = won && !data.cleared.includes(opponentId);
-      const rewards = rollMatchRewards(opp, won, firstClear);
+      const rewards = rollMatchRewards(opp, won, firstClear, forfeited);
       update((d) => {
         const inventory = { ...d.inventory };
         const moves = [...d.moves];
@@ -97,7 +98,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
           wins: d.wins + (won ? 1 : 0),
           losses: d.losses + (winner === 1 ? 1 : 0),
           cleared: won && !d.cleared.includes(opponentId) ? [...d.cleared, opponentId] : d.cleared,
-          lastResult: { opponentId, winner, firstClear, rewards },
+          lastResult: { opponentId, winner, forfeited, firstClear, rewards },
         };
       });
     },

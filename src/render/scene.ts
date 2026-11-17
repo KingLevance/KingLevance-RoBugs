@@ -6,6 +6,7 @@ import type { ExpoWebGLRenderingContext } from 'expo-gl';
 import * as THREE from 'three';
 
 import { getMove } from '@/game/moves';
+import { CATEGORY_COLOR } from '@/game/parts';
 import { ARENA_SIZE, CELL, partWorld, stompWarning, type Bug, type Sim, type SimPart } from '@/game/sim';
 
 import { createRenderer } from './gl';
@@ -27,7 +28,7 @@ const smooth = (x: number) => {
   return t * t * (3 - 2 * t);
 };
 
-type PartView = { part: SimPart; model: PartModel; attached: boolean; shadow: THREE.Mesh };
+type PartView = { part: SimPart; model: PartModel; attached: boolean; shadow: THREE.Mesh; /** 1 when just hit, decays: the part pops. */ punch: number };
 type BugView = {
   group: THREE.Group;
   pose: THREE.Group;
@@ -43,6 +44,8 @@ type BugView = {
   walk: number;
   lean: number;
   lastHeading: number;
+  /** Knockback flinch (world units), springs back to zero. */
+  kick: THREE.Vector3;
 };
 type Debris = { obj: THREE.Object3D; vel: THREE.Vector3; spin: THREE.Vector3; age: number };
 
@@ -66,6 +69,11 @@ export class ArenaRenderer {
   /** ≥1: how much to pull cameras back for narrow (portrait) screens. */
   private aspectK = 1;
   private ultSide = 0;
+  private eventCursor = 0;
+  private bits: { m: THREE.Mesh; vel: THREE.Vector3; life: number; max: number }[] = [];
+  private nextBit = 0;
+  private waves: { m: THREE.Mesh; life: number }[] = [];
+  private nextWave = 0;
 
   constructor(
     private gl: ExpoWebGLRenderingContext,
@@ -102,6 +110,23 @@ export class ArenaRenderer {
     }
     this.aura.visible = false;
     this.scene.add(this.aura);
+
+    // Impact particles and break shockwaves (pooled).
+    const bitGeo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
+    for (let i = 0; i < 90; i++) {
+      const m = new THREE.Mesh(bitGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      m.visible = false;
+      this.scene.add(m);
+      this.bits.push({ m, vel: new THREE.Vector3(), life: 0, max: 1 });
+    }
+    const waveGeo = new THREE.RingGeometry(0.82, 1, 28);
+    for (let i = 0; i < 6; i++) {
+      const m = new THREE.Mesh(waveGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+      m.rotation.x = -Math.PI / 2;
+      m.visible = false;
+      this.scene.add(m);
+      this.waves.push({ m, life: 0 });
+    }
 
     const start = this.followTarget(sim);
     this.camLook.copy(start);
@@ -191,7 +216,7 @@ export class ArenaRenderer {
       shadow.rotation.x = -Math.PI / 2;
       shadow.position.set(p.lx / CELL, 0.022, p.ly / CELL);
       group.add(shadow);
-      return { part: p, model, attached: true, shadow };
+      return { part: p, model, attached: true, shadow, punch: 0 };
     });
 
     const links = adjacentPairs(bug.parts).map(([i, j]) => {
@@ -234,7 +259,7 @@ export class ArenaRenderer {
     shield.visible = false;
     group.add(shield);
     this.scene.add(group);
-    return { group, pose, parts, links, ground, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading };
+    return { group, pose, parts, links, ground, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
   }
 
   private followTarget(sim: Sim) {
@@ -259,11 +284,15 @@ export class ArenaRenderer {
     const t = this.clock;
     const ult = sim.ult;
 
+    this.react(sim);
+    this.updateReactions(dt);
+
     // Bugs
     const frozen = !!ult || sim.hitstop > 0 || sim.over;
     sim.bugs.forEach((bug, bi) => {
       const v = this.bugs[bi];
-      v.group.position.copy(toWorld(bug.pos.x, bug.pos.y));
+      v.kick.multiplyScalar(Math.exp(-dt * 13));
+      v.group.position.copy(toWorld(bug.pos.x, bug.pos.y)).add(v.kick);
       v.group.rotation.y = yaw(bug.heading);
       v.shield.visible = bug.shield > 0;
       v.shield.rotation.y = t;
@@ -312,7 +341,8 @@ export class ArenaRenderer {
         if (!pv.attached) continue;
         const p = pv.part;
         pv.model.tint(Math.max(0, p.hp) / p.part.hp, p.flash > 0);
-        pv.model.root.scale.setScalar(p.flash > 0 ? 1.07 : 1);
+        pv.punch = Math.max(0, pv.punch - dt * 7);
+        pv.model.root.scale.setScalar(1 + pv.punch * pv.punch * 0.3);
         if (bug.dead) continue;
         // 1 at the moment the weapon fires, fading over ~0.28 s.
         const w = p.part.weapon;
@@ -330,6 +360,86 @@ export class ArenaRenderer {
 
     this.renderer.render(this.scene, this.camera);
     this.gl.endFrameEXP();
+  }
+
+  /** Screen position (0..1 from the top-left) of a point on the arena floor plane, `h` units up. */
+  project(x: number, y: number, h = 1): { x: number; y: number } {
+    const p = toWorld(x, y, h).project(this.camera);
+    return { x: (p.x + 1) / 2, y: (1 - p.y) / 2 };
+  }
+
+  private burst(at: THREE.Vector3, count: number, color: THREE.ColorRepresentation, power: number) {
+    for (let i = 0; i < count; i++) {
+      const b = this.bits[this.nextBit];
+      this.nextBit = (this.nextBit + 1) % this.bits.length;
+      const a = Math.random() * Math.PI * 2;
+      const up = 2 + Math.random() * 4;
+      const out = (1.5 + Math.random() * 3) * power;
+      b.vel.set(Math.cos(a) * out, up * power, Math.sin(a) * out);
+      b.m.position.copy(at);
+      (b.m.material as THREE.MeshBasicMaterial).color.set(color);
+      b.life = b.max = 0.35 + Math.random() * 0.3;
+      b.m.visible = true;
+    }
+  }
+
+  /** Turn new sim events into reactions: part pop, knockback flinch, sparks, shockwaves. */
+  private react(sim: Sim) {
+    for (; this.eventCursor < sim.events.length; this.eventCursor++) {
+      const e = sim.events[this.eventCursor];
+      if (e.type === 'hit') {
+        const v = this.bugs[e.bug];
+        const pv = v.parts[e.part];
+        if (pv) pv.punch = 1;
+        const at = toWorld(e.x, e.y, 0.7);
+        const strength = THREE.MathUtils.clamp(e.dmg / 10, 0.5, 2.2);
+        if (e.by !== null) {
+          const from = sim.bugs[e.by].pos;
+          const dir = toWorld(e.x, e.y).sub(toWorld(from.x, from.y)).setY(0);
+          if (dir.lengthSq() > 1e-6) {
+            dir.normalize();
+            v.kick.addScaledVector(dir, 0.16 * strength); // victim flinches away…
+            this.bugs[e.by].kick.addScaledVector(dir, 0.07 * strength); // …attacker follows through
+          }
+        }
+        this.burst(at, Math.round(3 + strength * 3), e.shielded ? 0x7fb3ff : e.dmg >= 14 ? 0xffb347 : 0xffe08a, 0.8 + strength * 0.25);
+      } else if (e.type === 'break') {
+        const at = toWorld(e.x, e.y, 0.6);
+        this.burst(at, 12, CATEGORY_COLOR[e.category], 1.4);
+        this.burst(at, 6, 0xffffff, 1.1);
+        const w = this.waves[this.nextWave];
+        this.nextWave = (this.nextWave + 1) % this.waves.length;
+        w.m.position.copy(at).setY(0.06);
+        (w.m.material as THREE.MeshBasicMaterial).color.set(CATEGORY_COLOR[e.category]);
+        w.life = 0.45;
+        w.m.visible = true;
+      }
+    }
+  }
+
+  private updateReactions(dt: number) {
+    for (const b of this.bits) {
+      if (b.life <= 0) continue;
+      b.life -= dt;
+      b.vel.y -= 16 * dt;
+      b.m.position.addScaledVector(b.vel, dt);
+      if (b.m.position.y < 0.05) {
+        b.m.position.y = 0.05;
+        b.vel.y *= -0.4;
+      }
+      b.m.rotation.x += dt * 12;
+      b.m.rotation.y += dt * 9;
+      b.m.scale.setScalar(Math.max(0.01, b.life / b.max));
+      if (b.life <= 0) b.m.visible = false;
+    }
+    for (const w of this.waves) {
+      if (w.life <= 0) continue;
+      w.life -= dt;
+      const k = 1 - w.life / 0.45;
+      w.m.scale.setScalar(0.4 + k * 2.6);
+      (w.m.material as THREE.MeshBasicMaterial).opacity = 0.7 * (1 - k);
+      if (w.life <= 0) w.m.visible = false;
+    }
   }
 
   private detach(bug: Bug, pv: PartView) {

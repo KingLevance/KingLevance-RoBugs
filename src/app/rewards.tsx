@@ -19,14 +19,18 @@ export default function Rewards() {
   }
   const opp = getOpponent(r.opponentId);
   const won = r.winner === 0;
-  const title = won ? 'VICTORY' : r.winner === 1 ? 'DEFEAT' : 'DRAW';
+  const title = won ? 'VICTORY' : r.forfeited ? 'FORFEIT' : r.winner === 1 ? 'DEFEAT' : 'DRAW';
   const color = won ? Colors.good : r.winner === 1 ? Colors.bad : Colors.accent;
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={[styles.title, { color }]}>{title}</Text>
       <Text style={styles.dim}>
-        {won ? `You took ${opp.name} apart!` : `${opp.name} got the better of you. You salvaged some scrap.`}
+        {won
+          ? `You took ${opp.name} apart!`
+          : r.forfeited
+            ? 'You forfeited the match. No salvage for walking away.'
+            : `${opp.name} got the better of you. You salvaged some scrap.`}
       </Text>
 
       {r.rewards.guaranteed.length > 0 && (
@@ -38,12 +42,14 @@ export default function Rewards() {
         </Panel>
       )}
 
-      <Panel style={{ gap: Spacing.sm }}>
-        <Text style={styles.label}>{won ? (opp.boss ? 'BOSS LOOT ROLLS' : 'LOOT ROLLS') : 'SALVAGE'}</Text>
-        {r.rewards.rolled.map((rw, i) => (
-          <RewardChip key={i} reward={rw} />
-        ))}
-      </Panel>
+      {r.rewards.rolled.length > 0 && (
+        <Panel style={{ gap: Spacing.sm }}>
+          <Text style={styles.label}>{won ? (opp.boss ? 'BOSS LOOT ROLLS' : 'LOOT ROLLS') : 'SALVAGE'}</Text>
+          {r.rewards.rolled.map((rw, i) => (
+            <RewardChip key={i} reward={rw} />
+          ))}
+        </Panel>
+      )}
 
       {won && opp.boss && <Text style={styles.dim}>Bosses can be re-fought for more rolls on their loot table.</Text>}
 

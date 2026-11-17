@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
+import { GUIDE } from '@/game/guide';
 import { getMove } from '@/game/moves';
 import type { Reward } from '@/game/opponents';
 import { getPart, RARITY_COLOR } from '@/game/parts';
@@ -29,7 +30,7 @@ export function RewardChip({ reward, dim, note }: { reward: Reward; dim?: boolea
       <PartCell part={p} size={40} />
       <View>
         <Text style={[styles.name, { color: RARITY_COLOR[p.rarity] }]}>{p.name}</Text>
-        <Text style={styles.sub}>{note ?? `${p.rarity} ${p.category}`}</Text>
+        <Text style={styles.sub}>{note ?? `${GUIDE[p.category].label} · ${p.rarity}`}</Text>
       </View>
     </View>
   );

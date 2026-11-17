@@ -16,6 +16,7 @@ RoBugs is an original 3D mobile game. You collect robotic bug parts, snap them o
 | Controls | **Fights are autonomous.** Your bug's AI plays to its build: melee charges, ranged kites, hurt bugs circle. The player's skill is in building and choosing moves. A 1×/2× speed toggle is available while watching. |
 | Garage | **3D editor.** The bug is shown exactly as it looks in the arena. Drag empty space to spin the view; Angle/Top/Side/Front buttons jump to preset views (eye-level views zoom to the bug). Drag a part to move it (swaps if the slot is taken), drag it off the grid to remove it, and tap a part in the bin to auto-attach it to a sensible slot. |
 | Teaching | The garage explains itself. Each part kind has a plain-language label (thorax = "middle body", abdomen = "tail body"), a "what it does" and a "where it goes" line (`src/game/guide.ts`). Selecting a part lights up its best slots in green (`rankSlots`). A checklist shows what the bug still needs. The bin is grouped into Body / Movement / Weapons / Power & defense. **Auto-build** assembles a legal, mirrored bug from the player's best parts. |
+| Hit feedback | Every hit emits a sim event. The renderer reacts: the struck part pops, the victim flinches away and the attacker follows through, sparks fly (blue if shielded, orange for heavy hits), and a part breaking gets a shockwave, a burst in its colour, a beat of hit-stop and a camera shake. Floating damage numbers and "X BROKEN!" callouts are drawn as an overlay (gold for damage you deal, red for damage you take). |
 | PvP | **Later phase.** The sim is already deterministic (seeded RNG, fixed 60 Hz step, input-driven, no rendering) so async/online PvP can be added without a rewrite. |
 
 ## 1. Core loop
@@ -141,7 +142,7 @@ The campaign map (`src/game/campaign.ts`) is a path of nodes. Each node unlocks 
 Each opponent has:
 - `guaranteed: Reward[]` — given **once**, on first clear (parts or moves).
 - `lootTable: { reward, weight }[]` — **weighted rolls, repeatable.** Normal opponents roll once per win. **Bosses** (`boss: true`) roll 3 times per win and can be farmed; their tables include their **signature parts and moves** at low weight.
-- A loss gives one common salvage part.
+- A loss gives one common salvage part. **Forfeiting gives nothing.**
 
 A `Reward` is `{ kind: 'part' | 'move', id }`.
 

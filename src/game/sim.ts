@@ -65,6 +65,8 @@ export type Projectile = { x: number; y: number; vx: number; vy: number; damage:
 export type Effect = { x: number; y: number; ttl: number; color: string; size: number };
 
 export type SimEvent =
+  /** A part took damage. `part` indexes the victim's parts; `by` is the attacking bug (null for hazards/walls). */
+  | { type: 'hit'; bug: 0 | 1; by: 0 | 1 | null; part: number; x: number; y: number; dmg: number; broke: boolean; shielded: boolean }
   | { type: 'break'; bug: 0 | 1; x: number; y: number; category: Category; time: number }
   | { type: 'ult-start'; bug: 0 | 1; move: MoveId }
   | { type: 'ult-release'; bug: 0 | 1; move: MoveId }
@@ -81,6 +83,8 @@ export type Sim = {
   effects: Effect[];
   time: number;
   over: boolean;
+  /** True if the match ended by forfeit (no rewards). */
+  forfeited: boolean;
   /** 0 = player, 1 = opponent, null = draw. */
   winner: 0 | 1 | null;
   log: string[];
@@ -230,6 +234,7 @@ export function createSim(player: Fighter, opponent: Fighter, arena: ArenaId, se
     effects: [],
     time: 0,
     over: false,
+    forfeited: false,
     winner: null,
     log: [],
     events: [],
@@ -302,9 +307,25 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
 
   const w = partWorld(bug, p);
   sim.effects.push({ x: w.x, y: w.y, ttl: 0.25, color: '#FFE08A', size: 6 + Math.min(dmg, 20) * 0.6 });
+  sim.events.push({
+    type: 'hit',
+    bug: bug.index,
+    by: attacker ? attacker.index : null,
+    part: bug.parts.indexOf(p),
+    x: w.x,
+    y: w.y,
+    dmg,
+    broke: p.hp <= 0,
+    shielded: bug.shield > 0,
+  });
+  // Heavier hits rattle the camera a little.
+  sim.shake = Math.max(sim.shake, Math.min(0.12, dmg * 0.006));
   if (p.hp > 0) return;
 
   p.alive = false;
+  // A part breaking gets a beat of hit-stop and a proper shake.
+  sim.hitstop = Math.max(sim.hitstop, 0.05);
+  sim.shake = Math.max(sim.shake, 0.24);
   if (attacker) gainProc(attacker, PROC.partBroken);
   sim.events.push({ type: 'break', bug: bug.index, x: w.x, y: w.y, category: p.part.category, time: sim.time });
   sim.log.push(`${bug.name} lost ${p.part.name}!`);
@@ -677,6 +698,7 @@ function checkOver(sim: Sim) {
 export function forfeit(sim: Sim, who: 0 | 1) {
   if (sim.over) return;
   sim.over = true;
+  sim.forfeited = true;
   sim.winner = other(who);
   sim.log.push(`${sim.bugs[who].name} forfeits.`);
 }
@@ -765,6 +787,8 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
   const bug = sim.bugs[me];
   const foe = sim.bugs[other(me)];
   if (bug.dead || foe.dead) return { x: 0, y: 0 };
+  // The world is frozen during cutscenes and hit-stop: don't let AI timers run on.
+  if (sim.ult || sim.hitstop > 0) return { x: 0, y: 0 };
   const ai = bug.ai;
   ai.t += dt;
 

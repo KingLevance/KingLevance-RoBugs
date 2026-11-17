@@ -1,11 +1,13 @@
 import { GLView, type ExpoWebGLRenderingContext } from 'expo-gl';
 import { router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { DamageNumbers, type Floater } from '@/components/damage-numbers';
 import { UltBanner } from '@/components/ult-banner';
 import { Colors, Spacing } from '@/constants/theme';
+import { GUIDE } from '@/game/guide';
 import { getMove, PROC } from '@/game/moves';
 import { getOpponent } from '@/game/opponents';
 import { aiInput, createSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug } from '@/game/sim';
@@ -64,6 +66,9 @@ export default function Arena() {
     timer: null,
   });
   const recordRef = useRef(game.recordResult);
+  const [floaters, setFloaters] = useState<Floater[]>([]);
+  const size = useRef({ w: 1, h: 1 });
+  const removeFloater = useCallback((id: number) => setFloaters((f) => f.filter((x) => x.id !== id)), []);
 
   useEffect(() => {
     recordRef.current = game.recordResult;
@@ -87,6 +92,35 @@ export default function Arena() {
     let acc = 0;
     let frame = 0;
     let finished = false;
+    let cursor = 0;
+    let nextId = 1;
+    /** Turn new hit / break events into floating combat text at their on-screen position. */
+    const combatText = () => {
+      const items: Floater[] = [];
+      for (; cursor < sim.events.length; cursor++) {
+        const e = sim.events[cursor];
+        if (e.type !== 'hit' && e.type !== 'break') continue;
+        const p = renderer.project(e.x, e.y, e.type === 'break' ? 2 : 1.2);
+        const x = Math.min(size.current.w - 50, Math.max(50, p.x * size.current.w)) + (Math.random() - 0.5) * 22;
+        const y = Math.min(size.current.h - 120, Math.max(90, p.y * size.current.h));
+        const mine = e.bug === 0;
+        if (e.type === 'break') {
+          items.push({ id: nextId++, x, y, text: `${GUIDE[e.category].label.toUpperCase()} BROKEN!`, color: mine ? '#FF5D5D' : '#7CFFB2', size: 15 });
+        } else {
+          const n = Math.max(1, Math.round(e.dmg));
+          const big = e.dmg >= 14;
+          items.push({
+            id: nextId++,
+            x,
+            y,
+            text: big ? `${n}!` : `${n}`,
+            color: e.shielded ? '#7FB3FF' : mine ? '#FF8585' : big ? '#FFB347' : '#FFE08A',
+            size: big ? 26 : mine ? 16 : 19,
+          });
+        }
+      }
+      if (items.length) setFloaters((f) => [...f, ...items].slice(-16));
+    };
     const tick = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
@@ -97,12 +131,13 @@ export default function Arena() {
         acc -= STEP;
       }
       renderer.render(sim, dt);
+      combatText();
       frame++;
       if (frame % 3 === 0 || sim.over) setView(hud(sim));
       if (sim.over && !finished) {
         finished = true;
-        recordRef.current(opponent.id, sim.winner);
-        loop.current.timer = setTimeout(() => router.replace('/rewards'), 1600);
+        recordRef.current(opponent.id, sim.winner, sim.forfeited);
+        loop.current.timer = setTimeout(() => router.replace('/rewards'), sim.forfeited ? 500 : 1600);
       }
       loop.current.raf = requestAnimationFrame(tick);
     };
@@ -114,8 +149,13 @@ export default function Arena() {
   const cutscene = !!view.ult;
 
   return (
-    <View style={styles.root}>
+    <View
+      style={styles.root}
+      onLayout={(e) => {
+        size.current = { w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height };
+      }}>
       <GLView style={StyleSheet.absoluteFill} onContextCreate={onContextCreate} />
+      {!cutscene && <DamageNumbers items={floaters} onDone={removeFloater} />}
 
       {view.flash > 0 && <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#fff', opacity: view.flash * 0.85 }]} />}
 
@@ -150,7 +190,7 @@ export default function Arena() {
         {view.over && (
           <View style={styles.finish} pointerEvents="none">
             <Text style={[styles.finishText, { color: view.winner === 0 ? Colors.good : view.winner === 1 ? Colors.bad : Colors.accent }]}>
-              {view.winner === 0 ? 'VICTORY' : view.winner === 1 ? 'DEFEAT' : 'DRAW'}
+              {view.winner === 0 ? 'VICTORY' : sim.forfeited ? 'FORFEIT' : view.winner === 1 ? 'DEFEAT' : 'DRAW'}
             </Text>
           </View>
         )}

@@ -18,9 +18,16 @@ const SALVAGE: LootEntry[] = PARTS.filter((p) => p.rarity === 'common').map((p) 
 /**
  * Win: the opponent's guaranteed drops on first clear, plus rolls on its
  * loot table (2 for normal opponents, 3 for bosses — repeatable).
- * Loss: one common salvage part.
+ * Loss: one common salvage part. Forfeit: nothing at all.
  */
-export function rollMatchRewards(opp: Opponent, won: boolean, firstClear: boolean, rng: () => number = Math.random): MatchRewards {
+export function rollMatchRewards(
+  opp: Opponent,
+  won: boolean,
+  firstClear: boolean,
+  forfeited = false,
+  rng: () => number = Math.random,
+): MatchRewards {
+  if (forfeited) return { guaranteed: [], rolled: [] };
   if (!won) return { guaranteed: [], rolled: [roll(SALVAGE, rng)] };
   const rolls = opp.boss ? 3 : 2;
   return {

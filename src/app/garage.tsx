@@ -392,10 +392,10 @@ export default function Garage() {
                           </Text>
                         </View>
                       </View>
+                      <Text style={styles.binType}>{GUIDE[part.category].label}</Text>
                       <Text style={styles.binName} numberOfLines={2}>
                         {part.name}
                       </Text>
-                      <Text style={styles.binType}>{GUIDE[part.category].label}</Text>
                       <Text style={[styles.binRarity, { color: RARITY_COLOR[part.rarity] }]}>{part.rarity.toUpperCase()}</Text>
                     </Pressable>
                   );
@@ -511,9 +511,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.panel,
   },
   binSelected: { borderColor: Colors.accent, backgroundColor: Colors.panelHi },
-  binName: { color: Colors.text, fontSize: 11, fontWeight: '600', textAlign: 'center', minHeight: 28, paddingHorizontal: 2 },
+  binName: { color: Colors.textDim, fontSize: 10, textAlign: 'center', minHeight: 26, paddingHorizontal: 2 },
   binRarity: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
-  binType: { color: Colors.textDim, fontSize: 10 },
+  binType: { color: Colors.text, fontSize: 11, fontWeight: '800' },
   groupTitle: { color: Colors.text, fontSize: 13, fontWeight: '900', letterSpacing: 1.2 },
   guideLine: { color: Colors.text, fontSize: 13, lineHeight: 18 },
   guideKey: { color: Colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
