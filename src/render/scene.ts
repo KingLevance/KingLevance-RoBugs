@@ -10,11 +10,10 @@ import { CATEGORY_COLOR } from '@/game/parts';
 import { ARENA_SIZE, CELL, partWorld, stompWarning, type Bug, type Sim, type SimPart } from '@/game/sim';
 
 import { createRenderer } from './gl';
-import { adjacentPairs, buildConnector, buildPart, seatHeight, stackOffset, toonMaterial, toonMesh, type PartModel } from './models';
+import { adjacentPairs, buildConnector, buildPart, seatHeight, stackOffset, toonMaterial, toonMesh, UNDER_LIFT, UNDER_SCALE, type PartModel } from './models';
 
 const HALF = ARENA_SIZE / CELL / 2;
 const FOV = 50;
-const BASE_OFFSET = new THREE.Vector3(0, 15, 10.5);
 const BG = 0x14171c;
 
 /** Sim floor (x, y) → three world (x, 0, z). One grid cell = 1 unit. */
@@ -35,8 +34,10 @@ type BugView = {
   parts: PartView[];
   /** Frame struts between neighbouring parts; hidden once either end breaks off. */
   links: { a: PartView; b: PartView; obj: THREE.Group }[];
-  /** Thin, faint team-coloured ring on the floor, scaled as the bug shrinks. */
+  /** On the floor (stays down when the bug flies): part shadows + thin team ring. */
   ground: THREE.Group;
+  /** Shadows only (shrink as the bug climbs). */
+  shadows: THREE.Group;
   baseRadius: number;
   /** Small bobbing pointer above the player's bug only. */
   marker: THREE.Mesh | null;
@@ -65,10 +66,11 @@ export class ArenaRenderer {
   private clock = 0;
   private ultWeight = 0;
   /** Pulled further back on tall (portrait) screens so the arena fits. */
-  private followOffset = BASE_OFFSET.clone();
   /** ≥1: how much to pull cameras back for narrow (portrait) screens. */
   private aspectK = 1;
   private ultSide = 0;
+  /** Direction the camera looks from (radians around +y; 0 = from the south side). */
+  private camYaw = 0;
   private eventCursor = 0;
   private bits: { m: THREE.Mesh; vel: THREE.Vector3; life: number; max: number }[] = [];
   private nextBit = 0;
@@ -85,7 +87,7 @@ export class ArenaRenderer {
 
     this.camera = new THREE.PerspectiveCamera(FOV, w / h, 0.1, 200);
     this.fitOffset(w / h);
-    this.scene.fog = new THREE.Fog(BG, 60, 140);
+    this.scene.fog = new THREE.Fog(BG, 55, 120);
 
     this.scene.add(new THREE.HemisphereLight(0xfff4e0, 0x30343c, 1.4));
     const sun = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -128,9 +130,8 @@ export class ArenaRenderer {
       this.waves.push({ m, life: 0 });
     }
 
-    const start = this.followTarget(sim);
-    this.camLook.copy(start);
-    this.camPos.copy(start).add(this.followOffset);
+    // Start the fight camera already in position (a long step snaps it there).
+    this.updateCamera(sim, 10, 0);
   }
 
   private buildArena(sim: Sim) {
@@ -171,6 +172,8 @@ export class ArenaRenderer {
       }
     }
 
+    this.buildStadium();
+
     sim.hazards.forEach((h, idx) => {
       const r = h.r / CELL;
       if (h.kind === 'acid') {
@@ -199,6 +202,70 @@ export class ArenaRenderer {
     });
   }
 
+  /** Raised arena platform, outer floor, tiered stands with a crowd, and floodlights. */
+  private buildStadium() {
+    const size = HALF * 2;
+    const plinth = toonMesh(new THREE.BoxGeometry(size + 5, 1.6, size + 5), toonMaterial(0x1f242b), 0.02);
+    plinth.position.y = -1.0;
+    this.scene.add(plinth);
+    const trim = new THREE.Mesh(new THREE.BoxGeometry(size + 5.2, 0.12, size + 5.2), new THREE.MeshBasicMaterial({ color: 0xf2a93b }));
+    trim.position.y = -0.25;
+    this.scene.add(trim);
+    const outer = new THREE.Mesh(new THREE.CircleGeometry(90, 48), toonMaterial(0x161a20));
+    outer.rotation.x = -Math.PI / 2;
+    outer.position.y = -1.8;
+    this.scene.add(outer);
+
+    // Tiered stands in a bowl.
+    const tiers = 5;
+    const crowdColors = [0xf2a93b, 0x3ddc97, 0xff5d5d, 0x4fa8ff, 0xc77dff, 0xf1ede4, 0x8ed1e6];
+    const perTier = 110;
+    const crowd = new THREE.InstancedMesh(new THREE.BoxGeometry(0.7, 1.0, 0.7), new THREE.MeshToonMaterial({ color: 0xffffff }), tiers * perTier);
+    const m = new THREE.Matrix4();
+    const c = new THREE.Color();
+    let n = 0;
+    for (let i = 0; i < tiers; i++) {
+      const r = 34 + i * 3.4;
+      const top = -1.8 + 1.6 + i * 1.7;
+      // Each tier: an inward-facing riser wall plus a flat ring to stand on.
+      const mat = toonMaterial(i % 2 ? 0x2a3038 : 0x252a31);
+      const riser = new THREE.Mesh(new THREE.CylinderGeometry(r, r, top + 1.8, 56, 1, true), mat);
+      (riser.material as THREE.Material).side = THREE.DoubleSide;
+      riser.position.y = (top - 1.8) / 2;
+      const tread = new THREE.Mesh(new THREE.RingGeometry(r, r + 3.4, 56), mat);
+      tread.rotation.x = -Math.PI / 2;
+      tread.position.y = top;
+      this.scene.add(riser, tread);
+      for (let k = 0; k < perTier; k++) {
+        const a = (k / perTier) * Math.PI * 2 + i * 0.13;
+        const rr = r + 1.4 + Math.sin(k * 7.3 + i) * 0.5;
+        m.makeRotationY(-a);
+        m.setPosition(Math.cos(a) * rr, top + 0.5 + Math.abs(Math.sin(k * 3.1 + i * 2)) * 0.15, Math.sin(a) * rr);
+        crowd.setMatrixAt(n, m);
+        crowd.setColorAt(n, c.set(crowdColors[(k * 5 + i * 3) % crowdColors.length]).multiplyScalar(0.75));
+        n++;
+      }
+    }
+    crowd.instanceMatrix.needsUpdate = true;
+    if (crowd.instanceColor) crowd.instanceColor.needsUpdate = true;
+    this.scene.add(crowd);
+
+    // Floodlight towers.
+    const pole = toonMaterial(0x3a424d);
+    const lamp = new THREE.MeshBasicMaterial({ color: 0xfff1c8 });
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + (i * Math.PI) / 2;
+      const r = 54;
+      const tower = toonMesh(new THREE.CylinderGeometry(0.5, 0.8, 26, 8), pole, 0.03);
+      tower.position.set(Math.cos(a) * r, 11, Math.sin(a) * r);
+      this.scene.add(tower);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(5, 2.4, 0.6), lamp);
+      head.position.set(Math.cos(a) * r, 24.5, Math.sin(a) * r);
+      head.lookAt(0, 0, 0);
+      this.scene.add(head);
+    }
+  }
+
   private buildBug(bug: Bug): BugView {
     const group = new THREE.Group();
     const pose = new THREE.Group();
@@ -208,30 +275,49 @@ export class ArenaRenderer {
     const shadowGeo = new THREE.CircleGeometry(0.62, 16);
     const shadowMat = new THREE.MeshBasicMaterial({ color: 0x1d2128 });
     const ground = new THREE.Group();
+    const shadows = new THREE.Group();
+    ground.add(shadows);
     const seats = new Map<string, number>();
+    // A part with something slung underneath rides higher.
+    const lifted = new Set(bug.parts.filter((p) => p.z === -1).map((p) => `${p.x},${p.y}`));
+    const lift = (p: SimPart) => (lifted.has(`${p.x},${p.y}`) ? UNDER_LIFT : 0);
     const parts = bug.parts.map((p) => {
       const model = buildPart(p.part.id, p.z ? 0 : Math.sign(Math.round(p.lx)), p.y);
       model.root.position.set(p.lx / CELL, 0, p.ly / CELL);
       pose.add(model.root);
-      if (!p.z) seats.set(`${p.x},${p.y}`, seatHeight(model));
+      if (!p.z) {
+        model.root.position.y = lift(p);
+        seats.set(`${p.x},${p.y}`, seatHeight(model) + lift(p));
+      }
+      if (p.z === -1) {
+        model.root.scale.setScalar(UNDER_SCALE);
+        model.root.position.y = 0.02;
+      }
       const shadow = new THREE.Mesh(shadowGeo, shadowMat);
       shadow.rotation.x = -Math.PI / 2;
       shadow.position.set(p.lx / CELL, 0.022, p.ly / CELL);
       shadow.visible = !p.z;
-      if (!p.z) group.add(shadow);
+      if (!p.z) shadows.add(shadow);
       return { part: p, model, attached: true, shadow, punch: 0 };
     });
     // Stacked parts rest on top of the part in their cell.
     for (const pv of parts) {
-      if (pv.part.z) pv.model.root.position.y = stackOffset(pv.model, seats.get(`${pv.part.x},${pv.part.y}`) ?? 0.9);
+      if (pv.part.z === 1) pv.model.root.position.y = stackOffset(pv.model, seats.get(`${pv.part.x},${pv.part.y}`) ?? 0.9);
     }
 
     const onGrid = parts.filter((pv) => !pv.part.z);
     const links = adjacentPairs(onGrid.map((pv) => pv.part)).map(([i, j]) => {
       const a = onGrid[i];
       const b = onGrid[j];
-      const obj = buildConnector(a.part.part.category, b.part.part.category, b.part.x - a.part.x, b.part.y - a.part.y);
-      obj.position.copy(a.model.root.position);
+      const obj = buildConnector(
+        a.part.part.category,
+        b.part.part.category,
+        b.part.x - a.part.x,
+        b.part.y - a.part.y,
+        lift(a.part),
+        lift(b.part),
+      );
+      obj.position.copy(a.model.root.position).setY(0);
       pose.add(obj);
       return { a, b, obj };
     });
@@ -245,7 +331,7 @@ export class ArenaRenderer {
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.03;
     ground.add(ring);
-    group.add(ground);
+    this.scene.add(ground);
 
     // A small camera-facing pointer over the player's bug.
     let marker: THREE.Mesh | null = null;
@@ -267,17 +353,11 @@ export class ArenaRenderer {
     shield.visible = false;
     group.add(shield);
     this.scene.add(group);
-    return { group, pose, parts, links, ground, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
-  }
-
-  private followTarget(sim: Sim) {
-    const [a, b] = sim.bugs;
-    return toWorld(a.pos.x * 0.65 + b.pos.x * 0.35, a.pos.y * 0.65 + b.pos.y * 0.35);
+    return { group, pose, parts, links, ground, shadows, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
   }
 
   private fitOffset(aspect: number) {
     this.aspectK = Math.max(1, 0.85 / aspect);
-    this.followOffset = BASE_OFFSET.clone().multiplyScalar(this.aspectK);
   }
 
   resize(w: number, h: number) {
@@ -300,15 +380,20 @@ export class ArenaRenderer {
     sim.bugs.forEach((bug, bi) => {
       const v = this.bugs[bi];
       v.kick.multiplyScalar(Math.exp(-dt * 13));
-      v.group.position.copy(toWorld(bug.pos.x, bug.pos.y)).add(v.kick);
+      const altU = bug.alt / CELL;
+      v.group.position.copy(toWorld(bug.pos.x, bug.pos.y, altU)).add(v.kick);
       v.group.rotation.y = yaw(bug.heading);
+      // Floor marks stay on the floor; shadows shrink as the bug climbs.
+      v.ground.position.copy(toWorld(bug.pos.x, bug.pos.y));
+      v.ground.rotation.y = v.group.rotation.y;
+      v.shadows.scale.setScalar(Math.max(0.45, 1 - altU * 0.18));
       v.shield.visible = bug.shield > 0;
       v.shield.rotation.y = t;
       v.ground.visible = !bug.dead;
       v.ground.scale.setScalar(Math.max(0.4, bug.radius / CELL / v.baseRadius));
       if (v.marker) {
         v.marker.visible = !bug.dead && !ult;
-        v.marker.position.copy(v.group.position).setY(3.6 + Math.sin(t * 3) * 0.1);
+        v.marker.position.copy(v.group.position).setY(v.group.position.y + 3.6 + Math.sin(t * 3) * 0.1);
         v.marker.quaternion.copy(this.camera.quaternion);
       }
 
@@ -335,7 +420,9 @@ export class ArenaRenderer {
         v.pose.position.y = rear * 0.4;
       } else {
         v.pose.scale.lerp(new THREE.Vector3(1, 1, 1), 0.3);
-        v.pose.rotation.x *= 0.7;
+        // Nose down when diving, up when climbing.
+        const tilt = bug.alt > 2 ? THREE.MathUtils.clamp(bug.vAlt / 260, -0.35, 0.3) : 0;
+        v.pose.rotation.x += (tilt - v.pose.rotation.x) * 0.2;
         const bob = bug.dead ? 0 : Math.abs(Math.sin(v.walk)) * 0.05 * speed + Math.sin(t * 2.2 + bi) * 0.012;
         v.pose.position.y += (bob - v.pose.position.y) * 0.3;
       }
@@ -355,7 +442,7 @@ export class ArenaRenderer {
         // 1 at the moment the weapon fires, fading over ~0.28 s.
         const w = p.part.weapon;
         const attack = w && sim.time > 1 ? THREE.MathUtils.clamp(1 - (w.cooldown - p.cooldown) / 0.28, 0, 1) : 0;
-        pv.model.animate({ t, walk: v.walk, speed, attack });
+        pv.model.animate({ t, walk: v.walk, speed, attack, air: Math.min(1, bug.alt / 14) });
       }
     });
 
@@ -399,7 +486,7 @@ export class ArenaRenderer {
         const v = this.bugs[e.bug];
         const pv = v.parts[e.part];
         if (pv) pv.punch = 1;
-        const at = toWorld(e.x, e.y, 0.7);
+        const at = toWorld(e.x, e.y, e.h / CELL + 0.7);
         const strength = THREE.MathUtils.clamp(e.dmg / 10, 0.5, 2.2);
         if (e.by !== null) {
           const from = sim.bugs[e.by].pos;
@@ -411,8 +498,17 @@ export class ArenaRenderer {
           }
         }
         this.burst(at, Math.round(3 + strength * 3), e.shielded ? 0x7fb3ff : e.dmg >= 14 ? 0xffb347 : 0xffe08a, 0.8 + strength * 0.25);
+      } else if (e.type === 'crash') {
+        const at = toWorld(e.x, e.y, 0.2);
+        this.burst(at, 16, 0x8c98a6, 1.3);
+        const w = this.waves[this.nextWave];
+        this.nextWave = (this.nextWave + 1) % this.waves.length;
+        w.m.position.copy(at).setY(0.06);
+        (w.m.material as THREE.MeshBasicMaterial).color.set(0xd9d4c7);
+        w.life = 0.45;
+        w.m.visible = true;
       } else if (e.type === 'break') {
-        const at = toWorld(e.x, e.y, 0.6);
+        const at = toWorld(e.x, e.y, e.h / CELL + 0.6);
         this.burst(at, 12, CATEGORY_COLOR[e.category], 1.4);
         this.burst(at, 6, 0xffffff, 1.1);
         const w = this.waves[this.nextWave];
@@ -455,7 +551,7 @@ export class ArenaRenderer {
     const root = pv.model.root;
     const w = partWorld(bug, pv.part);
     const v = this.bugs[bug.index];
-    const height = root.position.y;
+    const height = root.position.y + v.group.position.y;
     v.pose.remove(root);
     root.position.copy(toWorld(w.x, w.y, height));
     root.rotation.y = yaw(bug.heading);
@@ -519,7 +615,7 @@ export class ArenaRenderer {
       const p = sim.projectiles[i];
       m.visible = !!p;
       if (!p) return;
-      m.position.copy(toWorld(p.x, p.y, 0.7));
+      m.position.copy(toWorld(p.x, p.y, p.z / CELL + 0.7));
       m.scale.setScalar(p.big ? 1.8 : 1);
     });
   }
@@ -537,7 +633,7 @@ export class ArenaRenderer {
       const mat = m.material as THREE.MeshBasicMaterial;
       mat.color.set(e.color);
       mat.opacity = Math.min(0.9, e.ttl * 3);
-      m.position.copy(toWorld(e.x, e.y, 0.8));
+      m.position.copy(toWorld(e.x, e.y, e.h / CELL + 0.8));
       m.scale.setScalar((e.size / CELL) * (1.3 - e.ttl));
       m.rotation.y += 0.2;
     });
@@ -564,9 +660,35 @@ export class ArenaRenderer {
   }
 
   private updateCamera(sim: Sim, dt: number, t: number) {
-    const target = this.followTarget(sim);
-    const followPos = target.clone().add(this.followOffset);
-    const k = 1 - Math.exp(-dt * 4);
+    // Fight camera: a three-quarter view from behind the player's bug looking at
+    // the opponent (so on a tall phone screen the fight runs up the screen, with
+    // real depth), swinging round smoothly as they circle and pulling back/up as
+    // they separate or take to the air.
+    const [a, b] = sim.bugs;
+    const pa = toWorld(a.pos.x, a.pos.y, a.alt / CELL);
+    const pb = toWorld(b.pos.x, b.pos.y, b.alt / CELL);
+    const target = pa.clone().multiplyScalar(0.5).add(pb.clone().multiplyScalar(0.5));
+    target.y = target.y * 0.7 + 0.6;
+    const axis = pb.clone().sub(pa).setY(0);
+    const sep = axis.length();
+    if (sep > 2.5) {
+      // Camera direction (target → camera) = behind the player, 35° off the axis.
+      const behind = Math.atan2(-axis.x, -axis.z);
+      const options = [behind + 0.6, behind - 0.6].map((y) => {
+        let d = y - this.camYaw;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        return d;
+      });
+      const turn = Math.abs(options[0]) < Math.abs(options[1]) ? options[0] : options[1];
+      this.camYaw += THREE.MathUtils.clamp(turn, -0.8 * dt, 0.8 * dt);
+    }
+    const high = Math.max(a.alt, b.alt) / CELL;
+    const pitch = 0.62 + Math.min(0.2, high * 0.05);
+    const dist = THREE.MathUtils.clamp(sep * 0.8 + 11, 12, 24) * Math.sqrt(this.aspectK);
+    const dir = new THREE.Vector3(Math.sin(this.camYaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(this.camYaw) * Math.cos(pitch));
+    const followPos = target.clone().addScaledVector(dir, dist);
+    const k = 1 - Math.exp(-dt * 3.5);
     this.camLook.lerp(target, k);
     this.camPos.lerp(followPos, k);
 
@@ -580,7 +702,7 @@ export class ArenaRenderer {
     if (ult) {
       // The camera swings round to face the caster, low and close…
       const c = sim.bugs[ult.caster];
-      const center = toWorld(c.pos.x, c.pos.y);
+      const center = toWorld(c.pos.x, c.pos.y, c.alt / CELL);
       // Three-quarter front view, from whichever side is further from the opponent,
       // so the shot never ends up inside the bug standing in front of the caster.
       if (this.ultSide === 0) {
@@ -611,10 +733,10 @@ export class ArenaRenderer {
     let focus = 8;
     if (ult) {
       const c = sim.bugs[ult.caster];
-      focus = pos.distanceTo(toWorld(c.pos.x, c.pos.y)) + c.radius / CELL;
+      focus = pos.distanceTo(toWorld(c.pos.x, c.pos.y, c.alt / CELL)) + c.radius / CELL;
     }
-    fog.near = THREE.MathUtils.lerp(60, focus + 0.5, this.ultWeight);
-    fog.far = THREE.MathUtils.lerp(140, focus + 10, this.ultWeight);
+    fog.near = THREE.MathUtils.lerp(55, focus + 0.5, this.ultWeight);
+    fog.far = THREE.MathUtils.lerp(120, focus + 10, this.ultWeight);
 
     if (sim.shake > 0) {
       const s = sim.shake * 0.9;

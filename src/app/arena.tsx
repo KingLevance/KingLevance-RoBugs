@@ -10,7 +10,7 @@ import { Colors, Spacing } from '@/constants/theme';
 import { GUIDE } from '@/game/guide';
 import { getMove, PROC } from '@/game/moves';
 import { getOpponent } from '@/game/opponents';
-import { aiInput, createSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug } from '@/game/sim';
+import { aiInput, CELL, createSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug } from '@/game/sim';
 import { ArenaRenderer } from '@/render/scene';
 import { useGame } from '@/state/game-store';
 
@@ -21,6 +21,7 @@ function BugHud({ bug, color, align }: { bug: HudBug; color: string; align: 'lef
       <Text style={[styles.hudName, { color }]} numberOfLines={1}>
         {bug.name}
         {bug.shield ? ' 🛡' : ''}
+        {bug.flying ? ' ✈' : ''}
       </Text>
       <View style={styles.track}>
         <View style={[styles.fill, { width: `${Math.max(0, bug.hp) * 100}%`, backgroundColor: color }, end && { alignSelf: 'flex-end' }]} />
@@ -30,6 +31,17 @@ function BugHud({ bug, color, align }: { bug: HudBug; color: string; align: 'lef
           style={[styles.fill, { width: `${(bug.proc / PROC.max) * 100}%`, backgroundColor: '#C77DFF' }, end && { alignSelf: 'flex-end' }]}
         />
       </View>
+      {bug.wings >= 0 && (
+        <View style={[styles.track, { height: 4, width: '60%' }]}>
+          <View
+            style={[
+              styles.fill,
+              { width: `${bug.wings * 100}%`, backgroundColor: bug.flying ? '#8ED1E6' : '#4B5563' },
+              end && { alignSelf: 'flex-end' },
+            ]}
+          />
+        </View>
+      )}
       <View style={{ flexDirection: 'row', gap: 4 }}>
         {bug.moves.map((m) => {
           const def = getMove(m.id);
@@ -99,12 +111,15 @@ export default function Arena() {
       const items: Floater[] = [];
       for (; cursor < sim.events.length; cursor++) {
         const e = sim.events[cursor];
-        if (e.type !== 'hit' && e.type !== 'break') continue;
-        const p = renderer.project(e.x, e.y, e.type === 'break' ? 2 : 1.2);
+        if (e.type !== 'hit' && e.type !== 'break' && e.type !== 'crash') continue;
+        const h = e.type === 'crash' ? 0 : e.h / CELL;
+        const p = renderer.project(e.x, e.y, h + (e.type === 'hit' ? 1.2 : 2));
         const x = Math.min(size.current.w - 50, Math.max(50, p.x * size.current.w)) + (Math.random() - 0.5) * 22;
         const y = Math.min(size.current.h - 120, Math.max(90, p.y * size.current.h));
         const mine = e.bug === 0;
-        if (e.type === 'break') {
+        if (e.type === 'crash') {
+          items.push({ id: nextId++, x, y, text: 'CRASH!', color: '#D9D4C7', size: 22 });
+        } else if (e.type === 'break') {
           items.push({ id: nextId++, x, y, text: `${GUIDE[e.category].label.toUpperCase()} BROKEN!`, color: mine ? '#FF5D5D' : '#7CFFB2', size: 15 });
         } else {
           const n = Math.max(1, Math.round(e.dmg));

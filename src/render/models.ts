@@ -112,9 +112,11 @@ export type AnimCtx = {
   speed: number;
   /** 1 at the instant this part's weapon fires, decaying to 0. */
   attack: number;
+  /** 0 on the ground .. 1 flying: legs tuck up, wings beat hard. */
+  air: number;
 };
 
-export const IDLE: Omit<AnimCtx, 't'> = { walk: 0, speed: 0, attack: 0 };
+export const IDLE: Omit<AnimCtx, 't'> = { walk: 0, speed: 0, attack: 0, air: 0 };
 
 export type PartModel = {
   root: THREE.Group;
@@ -276,12 +278,13 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           hips.push({ g: hip, d, phase: (row % 2 ? Math.PI : 0) + (d > 0 ? Math.PI : 0) + (dz > 0 ? Math.PI / 2 : 0) });
         }
       }
-      animate = ({ t, walk, speed }) =>
+      animate = ({ t, walk, speed, air }) =>
         hips.forEach(({ g, d, phase }, i) => {
           const p = walk + phase;
-          g.rotation.y = Math.sin(p) * 0.5 * speed * d; // sweep fore–aft
-          const lift = Math.max(0, Math.cos(p)) * speed;
-          g.rotation.z = d * (lift * 0.32 + Math.sin(t * 1.6 + i * 1.3) * 0.02 * (1 - speed));
+          const ground = 1 - air;
+          g.rotation.y = Math.sin(p) * 0.5 * speed * d * ground + Math.sin(t * 3 + i) * 0.08 * air; // sweep, or dangle in the air
+          const lift = Math.max(0, Math.cos(p)) * speed * ground;
+          g.rotation.z = d * (lift * 0.32 + Math.sin(t * 1.6 + i * 1.3) * 0.02 * (1 - speed) + air * 0.75); // tuck up when flying
         });
       break;
     }
@@ -306,10 +309,11 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           pivots.push({ g: pivot, d, k });
         });
       }
-      animate = ({ t, speed }) =>
+      animate = ({ t, speed, air }) =>
         pivots.forEach(({ g, d, k }) => {
-          const rate = 9 + speed * 46;
-          const amp = 0.12 + speed * 0.38;
+          const beat = Math.max(speed, air);
+          const rate = 9 + beat * 46;
+          const amp = 0.12 + beat * 0.38;
           g.rotation.z = d * (0.22 + Math.sin(t * rate + k * 0.9) * amp);
         });
       break;
