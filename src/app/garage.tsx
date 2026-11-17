@@ -16,10 +16,11 @@ import {
 import { PartCell } from '@/components/part-cell';
 import { Button, Meter, Panel } from '@/components/ui';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
-import { computeStats, MAX_MASS, resolve, usage, validateBuild } from '@/game/build';
-import { autoPlace, movePart, partAt, removeAt } from '@/game/editor';
+import { computeStats, connectedKeys, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
+import { autoBuild, autoPlace, movePart, partAt, rankSlots, removeAt } from '@/game/editor';
+import { GROUPS, GUIDE } from '@/game/guide';
 import { getMove, MOVE_SLOTS } from '@/game/moves';
-import { getPart, PARTS, RARITY_COLOR, type PartDef } from '@/game/parts';
+import { getPart, PARTS, RARITY_COLOR, type Category, type PartDef } from '@/game/parts';
 import { GarageRenderer, type Cell, type ViewName } from '@/render/garage-scene';
 import { useGame } from '@/state/game-store';
 
@@ -32,7 +33,7 @@ const VIEW_BUTTONS: [ViewName, string][] = [
   ['front', 'Front'],
 ];
 
-function PartDetails({ part }: { part: PartDef }) {
+function PartDetails({ part, onRemove }: { part: PartDef; onRemove: () => void }) {
   const lines: string[] = [`HP ${part.hp}`, `Mass ${part.mass}`];
   lines.push(part.power < 0 ? `Supplies ${-part.power} power` : `Power ${part.power}`);
   if (part.thrust) lines.push(`Thrust ${part.thrust}`);
@@ -43,13 +44,61 @@ function PartDetails({ part }: { part: PartDef }) {
     lines.push(`Dmg ${w.damage} / ${w.cooldown}s`, `Reach ${w.range}`);
     if (w.ramBonus) lines.push('Ram bonus');
   }
+  const g = GUIDE[part.category];
   return (
-    <View style={{ gap: 2, flex: 1 }}>
-      <Text style={[styles.partName, { color: RARITY_COLOR[part.rarity] }]}>
-        {part.name} <Text style={styles.dim}>· {part.rarity} {part.category}</Text>
+    <View style={{ gap: Spacing.sm }}>
+      <View style={styles.detailRow}>
+        <PartCell part={part} size={52} />
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={[styles.partName, { color: RARITY_COLOR[part.rarity] }]}>{part.name}</Text>
+          <Text style={styles.dim}>
+            {g.label} · <Text style={{ color: RARITY_COLOR[part.rarity], fontWeight: '700' }}>{part.rarity}</Text>
+          </Text>
+        </View>
+        <Button label="Remove" variant="danger" onPress={onRemove} />
+      </View>
+      <Text style={styles.guideLine}>
+        <Text style={styles.guideKey}>WHAT IT DOES  </Text>
+        {g.does}
       </Text>
-      <Text style={styles.dim}>{part.description}</Text>
+      <Text style={styles.guideLine}>
+        <Text style={[styles.guideKey, { color: Colors.good }]}>WHERE IT GOES  </Text>
+        {g.where} Green tiles on the grid show good spots.
+      </Text>
       <Text style={styles.statsLine}>{lines.join('  ·  ')}</Text>
+    </View>
+  );
+}
+
+/** The things a bug needs, as ticks: clearer than a list of errors. */
+function Checklist({ placements, stats }: { placements: Placement[]; stats: BugStats }) {
+  const parts = resolve(placements);
+  const count = (c: Category) => parts.filter((p) => p.part.category === c).length;
+  const linked = connectedKeys(parts).size === parts.length;
+  const weapons = parts.filter((p) => p.part.weapon).length;
+  const items: { label: string; ok: boolean; optional?: boolean }[] = [
+    { label: count('head') > 1 ? 'Only 1 head' : 'Head', ok: count('head') === 1 },
+    { label: 'Middle body (thorax)', ok: count('thorax') >= 1 },
+    { label: 'Power core', ok: count('core') >= 1 },
+    { label: 'Legs or wings', ok: stats.thrust > 0 },
+    { label: 'All parts touching', ok: linked },
+    { label: `Power ${stats.powerDraw}/${stats.powerSupply}`, ok: stats.powerDraw <= stats.powerSupply },
+    { label: `Weight ${stats.mass}/${MAX_MASS}`, ok: stats.mass <= MAX_MASS },
+    { label: 'A weapon', ok: weapons > 0, optional: true },
+    { label: 'Even legs', ok: Math.abs(stats.thrustBias) <= 0.05, optional: true },
+  ];
+  return (
+    <View style={styles.checklist}>
+      {items.map((it) => {
+        const color = it.ok ? Colors.good : it.optional ? Colors.accent : Colors.bad;
+        return (
+          <View key={it.label} style={[styles.check, { borderColor: color }]}>
+            <Text style={[styles.checkText, { color }]}>
+              {it.ok ? '✓' : it.optional ? '!' : '✗'} {it.label}
+            </Text>
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -97,6 +146,22 @@ export default function Garage() {
   useEffect(() => {
     renderer.current?.setSelected(selPart ? selected : null);
   }, [selected, selPart]);
+
+  // Light up the best slots for the selected part (as if it were lifted off the bug).
+  useEffect(() => {
+    const r = renderer.current;
+    if (!r) return;
+    if (!selected || !selPart) {
+      r.setHints([]);
+      return;
+    }
+    const others = removeAt(placements, selected.x, selected.y);
+    r.setHints(
+      rankSlots(others, selPart.partId)
+        .slice(0, 3)
+        .filter((c) => !(c.x === selected.x && c.y === selected.y)),
+    );
+  }, [selected, selPart, placements]);
 
   useEffect(() => {
     if (!toast) return;
@@ -268,12 +333,16 @@ export default function Garage() {
 
       <ScrollView contentContainerStyle={styles.content}>
         {selPart && (
-          <Panel style={styles.detailRow}>
-            <PartCell part={getPart(selPart.partId)} size={52} />
-            <PartDetails part={getPart(selPart.partId)} />
-            <Button label="Remove" variant="danger" onPress={removeSelected} />
+          <Panel>
+            <PartDetails part={getPart(selPart.partId)} onRemove={removeSelected} />
           </Panel>
         )}
+
+        <Panel style={{ gap: Spacing.sm }}>
+          <Text style={styles.section}>{errors.length ? 'YOUR BUG STILL NEEDS' : 'READY TO FIGHT'}</Text>
+          <Checklist placements={placements} stats={stats} />
+          {!selPart && <Text style={styles.dim}>Tap a part on the bug to see what it does and where it goes.</Text>}
+        </Panel>
 
         <Panel style={{ gap: Spacing.sm }}>
           <Meter
@@ -294,39 +363,47 @@ export default function Garage() {
               <Text style={[styles.stat, { color: Colors.bad }]}>Pulls {stats.thrustBias > 0 ? 'left' : 'right'}</Text>
             )}
           </View>
-          {errors.map((e) => (
-            <Text key={e} style={styles.error}>
-              ⚠ {e}
-            </Text>
-          ))}
         </Panel>
 
-        <Text style={styles.section}>PARTS BIN · TAP TO ATTACH</Text>
-        <View style={styles.bin}>
-          {owned.map(([id, count]) => {
-            const part = getPart(id);
-            const free = count - (used[id] ?? 0);
-            return (
-              <Pressable
-                key={id}
-                onPress={() => addPart(id)}
-                style={({ pressed }) => [styles.binItem, { width: binW }, pressed && styles.binSelected]}>
-                <View>
-                  <PartCell part={part} size={binW - 16} dim={free <= 0} />
-                  <View style={[styles.countBadge, free <= 0 && { backgroundColor: Colors.border }]}>
-                    <Text style={styles.countText}>
-                      {free}/{count}
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.binName} numberOfLines={2}>
-                  {part.name}
-                </Text>
-                <Text style={[styles.binRarity, { color: RARITY_COLOR[part.rarity] }]}>{part.rarity.toUpperCase()}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
+        <Text style={styles.section}>PARTS BIN · TAP A PART TO ATTACH IT</Text>
+        {GROUPS.map((group) => {
+          const items = owned.filter(([id]) => GUIDE[getPart(id).category].group === group.id);
+          if (items.length === 0) return null;
+          return (
+            <View key={group.id} style={{ gap: Spacing.sm }}>
+              <View>
+                <Text style={styles.groupTitle}>{group.title}</Text>
+                <Text style={styles.dim}>{group.blurb}</Text>
+              </View>
+              <View style={styles.bin}>
+                {items.map(([id, count]) => {
+                  const part = getPart(id);
+                  const free = count - (used[id] ?? 0);
+                  return (
+                    <Pressable
+                      key={id}
+                      onPress={() => addPart(id)}
+                      style={({ pressed }) => [styles.binItem, { width: binW }, pressed && styles.binSelected]}>
+                      <View>
+                        <PartCell part={part} size={binW - 16} dim={free <= 0} />
+                        <View style={[styles.countBadge, free <= 0 && { backgroundColor: Colors.border }]}>
+                          <Text style={styles.countText}>
+                            {free}/{count}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.binName} numberOfLines={2}>
+                        {part.name}
+                      </Text>
+                      <Text style={styles.binType}>{GUIDE[part.category].label}</Text>
+                      <Text style={[styles.binRarity, { color: RARITY_COLOR[part.rarity] }]}>{part.rarity.toUpperCase()}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          );
+        })}
 
         <Text style={styles.section}>
           SIGNATURE MOVES · {game.equipped.length}/{MOVE_SLOTS} EQUIPPED
@@ -358,8 +435,18 @@ export default function Garage() {
         </View>
 
         <View style={styles.actions}>
-          <Button label="Clear" variant="secondary" onPress={() => game.setPlacements([])} style={{ flex: 1 }} />
-          <Button label="Campaign map" disabled={errors.length > 0} onPress={() => router.dismissTo('/campaign')} style={{ flex: 2 }} />
+          <Button label="Clear" variant="secondary" onPress={() => game.setPlacements([])} style={{ flex: 0.8, paddingHorizontal: 4 }} />
+          <Button
+            label="Auto-build"
+            variant="secondary"
+            onPress={() => {
+              game.setPlacements(autoBuild(game.inventory));
+              setSelected(null);
+              setToast('Built from your best parts. Drag things around to tweak it.');
+            }}
+            style={{ flex: 1.3, paddingHorizontal: 4 }}
+          />
+          <Button label="Campaign" disabled={errors.length > 0} onPress={() => router.dismissTo('/campaign')} style={{ flex: 1.3, paddingHorizontal: 4 }} />
         </View>
       </ScrollView>
     </View>
@@ -426,6 +513,13 @@ const styles = StyleSheet.create({
   binSelected: { borderColor: Colors.accent, backgroundColor: Colors.panelHi },
   binName: { color: Colors.text, fontSize: 11, fontWeight: '600', textAlign: 'center', minHeight: 28, paddingHorizontal: 2 },
   binRarity: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  binType: { color: Colors.textDim, fontSize: 10 },
+  groupTitle: { color: Colors.text, fontSize: 13, fontWeight: '900', letterSpacing: 1.2 },
+  guideLine: { color: Colors.text, fontSize: 13, lineHeight: 18 },
+  guideKey: { color: Colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  checklist: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  check: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3 },
+  checkText: { fontSize: 12, fontWeight: '700' },
   countBadge: {
     position: 'absolute',
     top: -5,

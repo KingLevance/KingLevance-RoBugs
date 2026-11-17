@@ -42,6 +42,9 @@ export class GarageRenderer {
   private bug = new THREE.Group();
   private models = new Map<string, PartModel>();
   private links: { a: string; b: string; obj: THREE.Group }[] = [];
+  /** Green "good spot" tiles for the selected part. */
+  private hints: THREE.Mesh[] = [];
+  private hintMat = new THREE.MeshBasicMaterial({ color: 0x3ddc97, transparent: true, opacity: 0.4, depthWrite: false });
   private hover: THREE.Mesh;
   private selRing: THREE.Mesh;
   private raycaster = new THREE.Raycaster();
@@ -187,6 +190,19 @@ export class GarageRenderer {
     }
   }
 
+  /** Light up recommended slots (best first). Pass [] to clear. */
+  setHints(cells: Cell[]) {
+    while (this.hints.length < cells.length) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.05, 0.9), this.hintMat);
+      this.scene.add(m);
+      this.hints.push(m);
+    }
+    this.hints.forEach((m, i) => {
+      m.visible = i < cells.length;
+      if (i < cells.length) m.position.copy(cellToWorld(cells[i].x, cells[i].y)).setY(0.035);
+    });
+  }
+
   setSelected(cell: Cell | null) {
     this.selected = cell ? key(cell.x, cell.y) : null;
   }
@@ -264,6 +280,7 @@ export class GarageRenderer {
       m.tint(1, false, k === this.selected ? 0.12 + Math.sin(t * 6) * 0.08 : 0);
     }
 
+    this.hintMat.opacity = 0.32 + Math.sin(t * 4) * 0.14;
     const held = this.dragging?.key;
     for (const l of this.links) l.obj.visible = l.a !== held && l.b !== held;
     if (this.dragging) {

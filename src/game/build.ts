@@ -134,12 +134,12 @@ export function validateBuild(placements: Placement[]): string[] {
   const errors: string[] = [];
   const heads = countCategory(parts, 'head');
   if (heads !== 1) errors.push(heads === 0 ? 'Needs a head' : 'Only one head allowed');
-  if (countCategory(parts, 'thorax') < 1) errors.push('Needs at least one thorax');
+  if (countCategory(parts, 'thorax') < 1) errors.push('Needs a middle body segment (a thorax)');
   if (countCategory(parts, 'core') < 1) errors.push('Needs a power core');
 
   const connected = connectedKeys(parts);
   const loose = parts.filter((p) => !connected.has(key(p.x, p.y)));
-  if (loose.length) errors.push(`${loose.length} part(s) not connected to a thorax`);
+  if (loose.length) errors.push(loose.length === 1 ? "1 part isn't touching the rest of the bug" : `${loose.length} parts aren't touching the rest of the bug`);
 
   const s = computeStats(parts);
   if (s.thrust <= 0) errors.push('Needs legs or wings to move');

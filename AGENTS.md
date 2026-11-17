@@ -51,7 +51,8 @@ src/app/            Expo Router routes only (every file is a screen)
 src/game/           Pure TypeScript game logic — no React, no three
   parts.ts          Part catalog (stats, rarity, colors)
   build.ts          Grid, stat calculation, validation, connectivity
-  editor.ts         Garage edit ops: auto-attach, move/swap, remove
+  editor.ts         Garage edit ops: slot ranking (hints), auto-attach, auto-build, move/swap, remove
+  guide.ts          Plain-language part guide: labels, what it does, where it goes
   moves.ts          Signature moves + PROC (proc-point) constants table
   sim.ts            Deterministic arena sim: damage, hazards, moves/ults, AI, HUD summary
   opponents.ts      Starter kit, opponents, loot tables, campaign map data
