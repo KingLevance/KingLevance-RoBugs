@@ -1,7 +1,7 @@
 import { GLView, type ExpoWebGLRenderingContext } from 'expo-gl';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DamageNumbers, type Floater } from '@/components/damage-numbers';
@@ -13,6 +13,33 @@ import { getOpponent } from '@/game/opponents';
 import { aiInput, CELL, createSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug } from '@/game/sim';
 import { ArenaRenderer } from '@/render/scene';
 import { useGame } from '@/state/game-store';
+
+/** Seconds of 3-2-1 before the bugs are let loose. */
+const COUNTDOWN = 3;
+
+/** One beat of the countdown: slams in big, settles, fades. */
+function CountBeat({ label, final }: { label: string; final: boolean }) {
+  const [t] = useState(() => new Animated.Value(0));
+  useEffect(() => {
+    Animated.timing(t, { toValue: 1, duration: final ? 800 : 950, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [t, final]);
+  return (
+    <Animated.Text
+      style={[
+        styles.count,
+        final && styles.countGo,
+        {
+          opacity: t.interpolate({ inputRange: [0, 0.7, 1], outputRange: [1, 1, 0] }),
+          transform: [
+            { scale: t.interpolate({ inputRange: [0, 0.18, 1], outputRange: [2.6, 1, final ? 1.25 : 0.85] }) },
+            { rotate: final ? '-4deg' : '0deg' },
+          ],
+        },
+      ]}>
+      {label}
+    </Animated.Text>
+  );
+}
 
 function BugHud({ bug, color, align }: { bug: HudBug; color: string; align: 'left' | 'right' }) {
   const end = align === 'right';
@@ -71,6 +98,8 @@ export default function Arena() {
   );
   const [view, setView] = useState(() => hud(sim));
   const [fast, setFast] = useState(false);
+  /** 3, 2, 1, then 0 = "FIGHT!", then −1 = gone. */
+  const [count, setCount] = useState(COUNTDOWN);
   const speed = useRef(1);
   const loop = useRef<{ raf: number; renderer: ArenaRenderer | null; timer: ReturnType<typeof setTimeout> | null }>({
     raf: 0,
@@ -106,6 +135,10 @@ export default function Arena() {
     let finished = false;
     let cursor = 0;
     let nextId = 1;
+    let countdown = COUNTDOWN;
+    let shown = COUNTDOWN;
+    let goTimer = 0;
+    renderer.intro = 1;
     /** Turn new hit / break events into floating combat text at their on-screen position. */
     const combatText = () => {
       const items: Floater[] = [];
@@ -139,7 +172,26 @@ export default function Arena() {
     const tick = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      acc += dt * speed.current;
+      if (countdown > 0 && !sim.over) {
+        // Hold the bugs while the camera swoops in and it counts 3-2-1.
+        countdown = Math.max(0, countdown - dt);
+        renderer.intro = countdown / COUNTDOWN;
+        const n = Math.ceil(countdown);
+        if (n !== shown) {
+          shown = n;
+          setCount(n);
+        }
+      } else {
+        renderer.intro = 0;
+        if (shown === 0) {
+          goTimer += dt;
+          if (goTimer > 0.8 || sim.over) {
+            shown = -1;
+            setCount(-1);
+          }
+        }
+        acc += dt * speed.current;
+      }
       while (acc >= STEP) {
         // Both bugs fight autonomously; the player's AI plays to its build.
         step(sim, STEP, [aiInput(sim, 0, 0.7), aiInput(sim, 1, opponent.aggression)]);
@@ -202,6 +254,17 @@ export default function Arena() {
           </View>
         )}
 
+        {count >= 0 && !view.over && (
+          <View style={styles.finish} pointerEvents="none">
+            <CountBeat key={count} label={count > 0 ? String(count) : 'FIGHT!'} final={count === 0} />
+            {count > 0 && (
+              <Text style={styles.countVs}>
+                {me.name} <Text style={{ color: Colors.textDim }}>vs</Text> {foe.name}
+              </Text>
+            )}
+          </View>
+        )}
+
         {view.over && (
           <View style={styles.finish} pointerEvents="none">
             <Text style={[styles.finishText, { color: view.winner === 0 ? Colors.good : view.winner === 1 ? Colors.bad : Colors.accent }]}>
@@ -245,6 +308,25 @@ const styles = StyleSheet.create({
   logLine: { color: Colors.text, fontSize: 12, textShadowColor: '#000', textShadowRadius: 3, textShadowOffset: { width: 0, height: 1 } },
   finish: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
   finishText: { fontSize: 60, fontFamily: Fonts.display, textShadowColor: '#000', textShadowRadius: 0, textShadowOffset: { width: 4, height: 4 } },
+  count: {
+    fontFamily: Fonts.display,
+    fontSize: 120,
+    color: Colors.text,
+    textShadowColor: '#000',
+    textShadowRadius: 0,
+    textShadowOffset: { width: 5, height: 6 },
+  },
+  countGo: { fontSize: 76, color: Colors.accent },
+  countVs: {
+    position: 'absolute',
+    bottom: '30%',
+    fontFamily: Fonts.display,
+    fontSize: 22,
+    color: Colors.text,
+    textShadowColor: '#000',
+    textShadowRadius: 4,
+    textShadowOffset: { width: 0, height: 2 },
+  },
   controls: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', padding: Spacing.lg },
   tip: { color: Colors.textDim, fontSize: 11, width: 130, textAlign: 'right' },
   forfeit: { backgroundColor: '#4A1F22', borderColor: Colors.bad, borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 },

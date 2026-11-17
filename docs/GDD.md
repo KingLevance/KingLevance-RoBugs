@@ -32,7 +32,7 @@ Garage (build + equip moves) → Campaign map → 3D Arena (1v1 vs AI) → Rewar
 ```
 
 1. **Build** — place parts on a 5×7 grid. Your layout sets weight, speed, handling, armor and attacks.
-2. **Fight** — watch your bug fight on its own; its AI plays to the build. Weapons fire on their own when an enemy part is in their cone and reach. Basic actions fill your **proc meter**, and equipped signature moves fire on their own when they make sense. Parts get knocked off one by one.
+2. **Fight** — after a 3-2-1-FIGHT! countdown (the bugs hold still while the camera swoops down from a high orbit), watch your bug fight on its own; its AI plays to the build. Weapons fire on their own when an enemy part is in their cone and reach. Basic actions fill your **proc meter**, and equipped signature moves fire on their own when they make sense. Parts get knocked off one by one.
 3. **Earn** — first clears give guaranteed parts and moves. Bosses can be re-fought for rolls on their loot table. A loss still gives one common salvage part.
 
 ## 2. Parts

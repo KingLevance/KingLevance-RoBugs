@@ -84,6 +84,8 @@ export class ArenaRenderer {
   private ultSide = 0;
   /** Direction the camera looks from (radians around +y; 0 = from the south side). */
   private camYaw = 0;
+  /** Pre-fight intro, 1 → 0: the camera swoops in from high above as it counts down. */
+  intro = 0;
   private eventCursor = 0;
   private tmpQ = new THREE.Quaternion();
   private bits: { m: THREE.Mesh; vel: THREE.Vector3; life: number; max: number }[] = [];
@@ -596,6 +598,15 @@ export class ArenaRenderer {
     const k = 1 - Math.exp(-dt * 3.5);
     this.camLook.lerp(target, k);
     this.camPos.lerp(followPos, k);
+
+    // Pre-fight countdown: swoop down from a high, wide orbit into the fight view.
+    if (this.intro > 0) {
+      const k = smooth(this.intro);
+      const a = this.camYaw + k * 1.5;
+      const high = new THREE.Vector3(Math.sin(a) * 30, 24, Math.cos(a) * 30).multiplyScalar(Math.sqrt(this.aspectK));
+      this.camPos.copy(followPos).lerp(high, k);
+      this.camLook.copy(target).lerp(new THREE.Vector3(0, 0, 0), k * 0.6);
+    }
 
     const ult = sim.ult;
     this.ultWeight = ult ? Math.min(1, this.ultWeight + dt * 6) : Math.max(0, this.ultWeight - dt * 3);
