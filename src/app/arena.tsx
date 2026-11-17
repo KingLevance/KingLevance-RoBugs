@@ -4,12 +4,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Joystick } from '@/components/joystick';
 import { UltBanner } from '@/components/ult-banner';
 import { Colors, Spacing } from '@/constants/theme';
 import { getMove, PROC } from '@/game/moves';
 import { getOpponent } from '@/game/opponents';
-import { aiInput, createSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug, type Input } from '@/game/sim';
+import { aiInput, createSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug } from '@/game/sim';
 import { ArenaRenderer } from '@/render/scene';
 import { useGame } from '@/state/game-store';
 
@@ -57,7 +56,8 @@ export default function Arena() {
     ),
   );
   const [view, setView] = useState(() => hud(sim));
-  const input = useRef<Input>({ x: 0, y: 0 });
+  const [fast, setFast] = useState(false);
+  const speed = useRef(1);
   const loop = useRef<{ raf: number; renderer: ArenaRenderer | null; timer: ReturnType<typeof setTimeout> | null }>({
     raf: 0,
     renderer: null,
@@ -90,9 +90,10 @@ export default function Arena() {
     const tick = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      acc += dt;
+      acc += dt * speed.current;
       while (acc >= STEP) {
-        step(sim, STEP, [input.current, aiInput(sim, 1, opponent.aggression)]);
+        // Both bugs fight autonomously; the player's AI plays to its build.
+        step(sim, STEP, [aiInput(sim, 0, 0.7), aiInput(sim, 1, opponent.aggression)]);
         acc -= STEP;
       }
       renderer.render(sim, dt);
@@ -155,14 +156,16 @@ export default function Arena() {
         )}
 
         <View style={[styles.controls, cutscene && { opacity: 0 }]} pointerEvents="box-none">
-          <Joystick
-            size={140}
-            onChange={(v) => {
-              input.current = v;
+          <Pressable
+            onPress={() => {
+              speed.current = fast ? 1 : 2;
+              setFast(!fast);
             }}
-          />
+            style={[styles.forfeit, styles.speed]}>
+            <Text style={styles.forfeitText}>{fast ? '2× speed' : '1× speed'}</Text>
+          </Pressable>
           <View style={{ alignItems: 'flex-end', gap: Spacing.sm }}>
-            <Text style={styles.tip}>Weapons and moves fire on their own. Steer to line them up.</Text>
+            <Text style={styles.tip}>Your bug fights on its own, driven by its build.</Text>
             <Pressable onPress={() => forfeit(sim, 0)} style={styles.forfeit}>
               <Text style={styles.forfeitText}>Forfeit</Text>
             </Pressable>
@@ -191,4 +194,5 @@ const styles = StyleSheet.create({
   tip: { color: Colors.textDim, fontSize: 11, width: 130, textAlign: 'right' },
   forfeit: { backgroundColor: '#4A1F22', borderColor: Colors.bad, borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 },
   forfeitText: { color: Colors.text, fontWeight: '700' },
+  speed: { backgroundColor: Colors.panelHi, borderColor: Colors.border },
 });

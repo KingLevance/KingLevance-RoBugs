@@ -44,12 +44,13 @@ src/app/            Expo Router routes only (every file is a screen)
   _layout.tsx       Stack navigator + GameProvider
   index.tsx         Hub: your bug, campaign shortcut
   campaign.tsx      Campaign map: nodes, unlocks, first-clear rewards, Fight
-  garage.tsx        Grid builder, parts bin, budget meters, move equip
-  arena.tsx         Fight screen: GLView + render loop, HUD, joystick, UltBanner
+  garage.tsx        3D drag-and-drop editor (GarageRenderer), parts bin, budget meters, move equip
+  arena.tsx         Fight screen: GLView + render loop, HUD, UltBanner (fights are autonomous)
   rewards.tsx       Match results: guaranteed + rolled drops
 src/game/           Pure TypeScript game logic — no React, no three
   parts.ts          Part catalog (stats, rarity, colors)
   build.ts          Grid, stat calculation, validation, connectivity
+  editor.ts         Garage edit ops: auto-attach, move/swap, remove
   moves.ts          Signature moves + PROC (proc-point) constants table
   sim.ts            Deterministic arena sim: damage, hazards, moves/ults, AI, HUD summary
   opponents.ts      Starter kit, opponents, loot tables, campaign map data
@@ -57,8 +58,11 @@ src/game/           Pure TypeScript game logic — no React, no three
 src/render/         three.js only — reads sim state, never writes it
   models.ts         Toon voxel part models with outlines
   scene.ts          ArenaRenderer: scene, camera (incl. ult cutscene camera), VFX
+  garage-scene.ts   GarageRenderer: bug on its build grid, raycast picking for drag
+  gl.ts             three.js renderer on an expo-gl context
 src/state/          Save data (React context) + platform storage
-src/components/     Shared UI (UltBanner, joystick, reward chips…)
+src/components/     Shared UI (UltBanner, UpdateBanner, reward chips…)
+src/updates.ts      OTA update checks (expo-updates); no-op on web/dev
 src/constants/      Theme tokens
 scripts/            Dev tools (not shipped)
 docs/GDD.md         Game design doc
@@ -80,3 +84,7 @@ The sim must stay deterministic: fixed `STEP`, seeded RNG via `rand(sim)` only (
 - Never create or edit `ios/` / `android/` by hand (Continuous Native Generation). Configure native behaviour via `app.json` and config plugins.
 - Prefer Expo modules over third-party libraries. Adding a native library means Expo Go may no longer work → development build.
 - Persistence uses `expo-sqlite/kv-store` on native and `localStorage` on web (`src/state/storage*.ts`).
+
+## Shipping to the phone
+
+JS-only changes ship over the air: run the **Publish OTA update** workflow. A new .ipa (**iOS sideload IPA** workflow) is only needed after native changes, and then bump `"version"` in app.json first (runtimeVersion policy is appVersion). See README.

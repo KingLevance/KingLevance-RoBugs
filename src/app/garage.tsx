@@ -1,16 +1,30 @@
+import { GLView, type ExpoWebGLRenderingContext } from 'expo-gl';
 import { router } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+  type GestureResponderEvent,
+  type HostInstance,
+} from 'react-native';
 
 import { PartCell } from '@/components/part-cell';
 import { Button, Meter, Panel } from '@/components/ui';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
-import { computeStats, GRID_H, GRID_W, MAX_MASS, resolve, usage, validateBuild, type Placement } from '@/game/build';
+import { computeStats, MAX_MASS, resolve, usage, validateBuild } from '@/game/build';
+import { autoPlace, movePart, partAt, removeAt } from '@/game/editor';
 import { getMove, MOVE_SLOTS } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type PartDef } from '@/game/parts';
+import { GarageRenderer, type Cell } from '@/render/garage-scene';
 import { useGame } from '@/state/game-store';
 
 const CATALOG_ORDER = new Map(PARTS.map((p, i) => [p.id, i]));
+const DRAG_SLOP = 8;
 
 function PartDetails({ part }: { part: PartDef }) {
   const lines: string[] = [`HP ${part.hp}`, `Mass ${part.mass}`];
@@ -24,7 +38,7 @@ function PartDetails({ part }: { part: PartDef }) {
     if (w.ramBonus) lines.push('Ram bonus');
   }
   return (
-    <View style={{ gap: 2 }}>
+    <View style={{ gap: 2, flex: 1 }}>
       <Text style={[styles.partName, { color: RARITY_COLOR[part.rarity] }]}>
         {part.name} <Text style={styles.dim}>· {part.rarity} {part.category}</Text>
       </Text>
@@ -34,158 +48,284 @@ function PartDetails({ part }: { part: PartDef }) {
   );
 }
 
+type Touch = { startX: number; startY: number; cell: Cell | null; dragging: boolean; last: { cell: Cell | null; inside: boolean } };
+
 export default function Garage() {
   const game = useGame();
-  const { width } = useWindowDimensions();
-  const [selected, setSelected] = useState<string | null>(null);
-  const [inspect, setInspect] = useState<string | null>(null);
+  const { width, height } = useWindowDimensions();
+  const [selected, setSelected] = useState<Cell | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [dragHint, setDragHint] = useState<'move' | 'remove' | null>(null);
+  const renderer = useRef<GarageRenderer | null>(null);
+  const raf = useRef(0);
+  const box = useRef({ x: 0, y: 0, w: 1, h: 1 });
+  const viewRef = useRef<HostInstance>(null);
+  const touch = useRef<Touch | null>(null);
 
   const placements = game.build.placements;
   const used = usage(placements);
   const stats = computeStats(resolve(placements));
   const errors = validateBuild(placements);
-  const cell = Math.min(58, Math.floor((Math.min(width, MaxContentWidth) - Spacing.lg * 2) / GRID_W));
+  const editorW = Math.min(width, MaxContentWidth);
+  const editorH = Math.min(editorW * 1.05, height * 0.48);
+  const selPart = selected ? partAt(placements, selected.x, selected.y) : undefined;
 
   const owned = Object.entries(game.inventory)
     .filter(([, n]) => n > 0)
     .sort(([a], [b]) => (CATALOG_ORDER.get(a) ?? 0) - (CATALOG_ORDER.get(b) ?? 0));
 
-  const at = (x: number, y: number) => placements.find((p) => p.x === x && p.y === y);
+  useEffect(() => {
+    renderer.current?.setPlacements(placements);
+  }, [placements]);
 
-  function tapCell(x: number, y: number) {
-    const existing = at(x, y);
-    const rest = placements.filter((p) => !(p.x === x && p.y === y));
-    if (existing && (!selected || existing.partId === selected)) {
-      game.setPlacements(rest);
-      setInspect(existing.partId);
-      return;
-    }
-    if (!selected) return;
-    const free = (game.inventory[selected] ?? 0) - (used[selected] ?? 0) + (existing?.partId === selected ? 1 : 0);
-    if (free <= 0) return;
-    const next: Placement[] = [...rest, { x, y, partId: selected }];
-    game.setPlacements(next);
+  useEffect(() => {
+    renderer.current?.setSelected(selPart ? selected : null);
+  }, [selected, selPart]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2200);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(raf.current);
+      renderer.current?.dispose();
+      renderer.current = null;
+    },
+    [],
+  );
+
+  function onContextCreate(gl: ExpoWebGLRenderingContext) {
+    const r = new GarageRenderer(gl);
+    r.setPlacements(game.build.placements);
+    renderer.current = r;
+    let last = performance.now();
+    const tick = (now: number) => {
+      r.render(Math.min(0.1, (now - last) / 1000));
+      last = now;
+      raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
   }
 
-  const detailId = selected ?? inspect;
+  function measure() {
+    viewRef.current?.measureInWindow((x, y, w, h) => {
+      box.current = { x, y, w: w || 1, h: h || 1 };
+    });
+  }
+
+  const norm = (e: GestureResponderEvent) => ({
+    nx: (e.nativeEvent.pageX - box.current.x) / box.current.w,
+    ny: (e.nativeEvent.pageY - box.current.y) / box.current.h,
+  });
+
+  function onGrant(e: GestureResponderEvent) {
+    const { nx, ny } = norm(e);
+    measure();
+    const cell = renderer.current?.pick(nx, ny).cell ?? null;
+    touch.current = {
+      startX: e.nativeEvent.pageX,
+      startY: e.nativeEvent.pageY,
+      cell: cell && partAt(placements, cell.x, cell.y) ? cell : null,
+      dragging: false,
+      last: { cell, inside: !!cell },
+    };
+  }
+
+  function onMove(e: GestureResponderEvent) {
+    const t = touch.current;
+    const r = renderer.current;
+    if (!t || !t.cell || !r) return;
+    if (!t.dragging) {
+      const moved = Math.hypot(e.nativeEvent.pageX - t.startX, e.nativeEvent.pageY - t.startY);
+      if (moved < DRAG_SLOP) return;
+      t.dragging = r.startDrag(t.cell);
+      setSelected(t.cell);
+    }
+    const { nx, ny } = norm(e);
+    t.last = r.dragTo(nx, ny);
+    setDragHint(t.last.inside ? 'move' : 'remove');
+  }
+
+  function onRelease() {
+    const t = touch.current;
+    touch.current = null;
+    setDragHint(null);
+    if (!t) return;
+    if (!t.dragging) {
+      // Tap: select / deselect a part.
+      const same = t.cell && selected && t.cell.x === selected.x && t.cell.y === selected.y;
+      setSelected(t.cell && !same ? t.cell : null);
+      return;
+    }
+    renderer.current?.endDrag();
+    const from = t.cell!;
+    const moving = partAt(placements, from.x, from.y);
+    if (t.last.inside && t.last.cell) {
+      game.setPlacements(movePart(placements, from, t.last.cell));
+      setSelected(t.last.cell);
+    } else {
+      game.setPlacements(removeAt(placements, from.x, from.y));
+      setSelected(null);
+      if (moving) setToast(`${getPart(moving.partId).name} back in the bin`);
+    }
+  }
+
+  function addPart(id: string) {
+    const free = (game.inventory[id] ?? 0) - (used[id] ?? 0);
+    const part = getPart(id);
+    if (free <= 0) {
+      setToast(`All your ${part.name} are already on the bug`);
+      return;
+    }
+    const spot = autoPlace(placements, id);
+    if (!spot) {
+      setToast('No free slot touching the bug');
+      return;
+    }
+    game.setPlacements([...placements, spot]);
+    setSelected({ x: spot.x, y: spot.y });
+    setToast(`${part.name} attached. Drag it to move it.`);
+  }
+
+  function removeSelected() {
+    if (!selected || !selPart) return;
+    game.setPlacements(removeAt(placements, selected.x, selected.y));
+    setToast(`${getPart(selPart.partId).name} back in the bin`);
+    setSelected(null);
+  }
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
-      <TextInput
-        value={game.build.name}
-        onChangeText={(t) => game.setBugName(t.slice(0, 18))}
-        style={styles.nameInput}
-        placeholder="Name your bug"
-        placeholderTextColor={Colors.textDim}
-      />
-
-      <View style={{ alignItems: 'center', gap: Spacing.xs }}>
-        <Text style={styles.front}>▲ FRONT</Text>
-        <View style={[styles.grid, { width: cell * GRID_W + 4, height: cell * GRID_H + 4 }]}>
-          {Array.from({ length: GRID_H }).map((_, y) =>
-            Array.from({ length: GRID_W }).map((__, x) => {
-              const p = at(x, y);
-              return (
-                <Pressable
-                  key={`${x},${y}`}
-                  onPress={() => tapCell(x, y)}
-                  style={[styles.slot, { left: x * cell + 2, top: y * cell + 2, width: cell, height: cell }]}>
-                  {p ? <PartCell part={getPart(p.partId)} size={cell - 4} /> : <View style={styles.empty} />}
-                </Pressable>
-              );
-            }),
-          )}
-        </View>
-        <Text style={styles.hint}>
-          {selected ? 'Tap a slot to place · tap the same part again to remove' : 'Pick a part below, then tap a slot. Tap a placed part to remove it.'}
-        </Text>
-      </View>
-
-      <Panel style={{ gap: Spacing.sm }}>
-        <Meter
-          label="POWER"
-          value={stats.powerDraw}
-          max={Math.max(stats.powerSupply, 1)}
-          color={stats.powerDraw > stats.powerSupply ? Colors.bad : Colors.good}
-          display={`${stats.powerDraw} / ${stats.powerSupply}`}
+    <View style={styles.root}>
+      <View style={[styles.top, { width: editorW }]}>
+        <TextInput
+          value={game.build.name}
+          onChangeText={(t) => game.setBugName(t.slice(0, 18))}
+          style={styles.nameInput}
+          placeholder="Name your bug"
+          placeholderTextColor={Colors.textDim}
         />
-        <Meter label="WEIGHT" value={stats.mass} max={MAX_MASS} color={stats.mass > MAX_MASS ? Colors.bad : Colors.accent} />
-        <View style={styles.statGrid}>
-          <Text style={styles.stat}>Speed {Math.round(stats.topSpeed)}</Text>
-          <Text style={styles.stat}>Turn {stats.turnRate.toFixed(1)}</Text>
-          <Text style={styles.stat}>HP {stats.totalHp}</Text>
-          <Text style={styles.stat}>DPS {stats.dps.toFixed(1)}</Text>
-          <Text style={styles.stat}>Reach ×{stats.reach.toFixed(1)}</Text>
-          {Math.abs(stats.thrustBias) > 0.05 && <Text style={[styles.stat, { color: Colors.bad }]}>Pulls {stats.thrustBias > 0 ? 'left' : 'right'}</Text>}
+        <View ref={viewRef} onLayout={measure} style={{ width: editorW, height: editorH }}>
+          <GLView
+            style={StyleSheet.absoluteFill}
+            onContextCreate={onContextCreate}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderTerminationRequest={() => false}
+            onResponderGrant={onGrant}
+            onResponderMove={onMove}
+            onResponderRelease={onRelease}
+            onResponderTerminate={onRelease}
+          />
+          <View pointerEvents="none" style={styles.editorOverlay}>
+            <Text style={styles.front}>▲ FRONT</Text>
+            <Text style={[styles.hint, dragHint === 'remove' && { color: Colors.bad }]}>
+              {dragHint === 'remove'
+                ? 'Release to put it back in the bin'
+                : dragHint === 'move'
+                  ? 'Release to drop it here (swaps if taken)'
+                  : toast ?? 'Drag parts to move them · drag off the grid to remove'}
+            </Text>
+          </View>
         </View>
-        {errors.map((e) => (
-          <Text key={e} style={styles.error}>
-            ⚠ {e}
-          </Text>
-        ))}
-      </Panel>
+      </View>
 
-      {detailId && (
-        <Panel>
-          <PartDetails part={getPart(detailId)} />
+      <ScrollView contentContainerStyle={styles.content}>
+        {selPart && (
+          <Panel style={styles.detailRow}>
+            <PartDetails part={getPart(selPart.partId)} />
+            <Button label="Remove" variant="danger" onPress={removeSelected} />
+          </Panel>
+        )}
+
+        <Panel style={{ gap: Spacing.sm }}>
+          <Meter
+            label="POWER"
+            value={stats.powerDraw}
+            max={Math.max(stats.powerSupply, 1)}
+            color={stats.powerDraw > stats.powerSupply ? Colors.bad : Colors.good}
+            display={`${stats.powerDraw} / ${stats.powerSupply}`}
+          />
+          <Meter label="WEIGHT" value={stats.mass} max={MAX_MASS} color={stats.mass > MAX_MASS ? Colors.bad : Colors.accent} />
+          <View style={styles.statGrid}>
+            <Text style={styles.stat}>Speed {Math.round(stats.topSpeed)}</Text>
+            <Text style={styles.stat}>Turn {stats.turnRate.toFixed(1)}</Text>
+            <Text style={styles.stat}>HP {stats.totalHp}</Text>
+            <Text style={styles.stat}>DPS {stats.dps.toFixed(1)}</Text>
+            <Text style={styles.stat}>Reach ×{stats.reach.toFixed(1)}</Text>
+            {Math.abs(stats.thrustBias) > 0.05 && (
+              <Text style={[styles.stat, { color: Colors.bad }]}>Pulls {stats.thrustBias > 0 ? 'left' : 'right'}</Text>
+            )}
+          </View>
+          {errors.map((e) => (
+            <Text key={e} style={styles.error}>
+              ⚠ {e}
+            </Text>
+          ))}
         </Panel>
-      )}
 
-      <Text style={styles.section}>PARTS BIN</Text>
-      <View style={styles.bin}>
-        {owned.map(([id, count]) => {
-          const part = getPart(id);
-          const free = count - (used[id] ?? 0);
-          const isSel = selected === id;
-          return (
-            <Pressable
-              key={id}
-              onPress={() => setSelected(isSel ? null : id)}
-              style={[styles.binItem, isSel && styles.binSelected]}>
-              <PartCell part={part} size={34} dim={free <= 0} />
-              <Text style={styles.binName} numberOfLines={2}>
-                {part.name}
-              </Text>
-              <Text style={styles.binCount}>
-                {free}/{count}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      <Text style={styles.section}>
-        SIGNATURE MOVES · {game.equipped.length}/{MOVE_SLOTS} EQUIPPED
-      </Text>
-      <View style={{ gap: Spacing.sm }}>
-        {game.moves.map((id) => {
-          const m = getMove(id);
-          const on = game.equipped.includes(id);
-          const hasParts = placements.filter((p) => getPart(p.partId).category === m.requires.category).length >= m.requires.count;
-          return (
-            <Pressable key={id} onPress={() => game.toggleEquip(id)} style={[styles.moveRow, on && { borderColor: m.color, backgroundColor: Colors.panelHi }]}>
-              <View style={[styles.moveDot, { backgroundColor: on ? m.color : Colors.bg, borderColor: m.color }]} />
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text style={[styles.partName, { color: m.color, fontSize: 15 }]}>
-                  {m.name} <Text style={styles.dim}>· {m.cost} PP · {m.cooldown}s cd{m.ultimate ? ' · ultimate' : ''}</Text>
+        <Text style={styles.section}>PARTS BIN · TAP TO ATTACH</Text>
+        <View style={styles.bin}>
+          {owned.map(([id, count]) => {
+            const part = getPart(id);
+            const free = count - (used[id] ?? 0);
+            return (
+              <Pressable key={id} onPress={() => addPart(id)} style={({ pressed }) => [styles.binItem, pressed && styles.binSelected]}>
+                <PartCell part={part} size={34} dim={free <= 0} />
+                <Text style={styles.binName} numberOfLines={2}>
+                  {part.name}
                 </Text>
-                <Text style={styles.dim}>{m.description}</Text>
-                {on && !hasParts && <Text style={styles.error}>⚠ Your build has no {m.requires.category}, so this move can never fire.</Text>}
-              </View>
-            </Pressable>
-          );
-        })}
-      </View>
+                <Text style={styles.binCount}>
+                  {free}/{count}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
 
-      <View style={styles.actions}>
-        <Button label="Clear grid" variant="secondary" onPress={() => game.setPlacements([])} style={{ flex: 1 }} />
-        <Button label="Campaign map" disabled={errors.length > 0} onPress={() => router.dismissTo('/campaign')} style={{ flex: 2 }} />
-      </View>
-    </ScrollView>
+        <Text style={styles.section}>
+          SIGNATURE MOVES · {game.equipped.length}/{MOVE_SLOTS} EQUIPPED
+        </Text>
+        <View style={{ gap: Spacing.sm }}>
+          {game.moves.map((id) => {
+            const m = getMove(id);
+            const on = game.equipped.includes(id);
+            const hasParts = placements.filter((p) => getPart(p.partId).category === m.requires.category).length >= m.requires.count;
+            return (
+              <Pressable
+                key={id}
+                onPress={() => game.toggleEquip(id)}
+                style={[styles.moveRow, on && { borderColor: m.color, backgroundColor: Colors.panelHi }]}>
+                <View style={[styles.moveDot, { backgroundColor: on ? m.color : Colors.bg, borderColor: m.color }]} />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text style={[styles.partName, { color: m.color, fontSize: 15 }]}>
+                    {m.name}{' '}
+                    <Text style={styles.dim}>
+                      · {m.cost} PP · {m.cooldown}s cd{m.ultimate ? ' · ultimate' : ''}
+                    </Text>
+                  </Text>
+                  <Text style={styles.dim}>{m.description}</Text>
+                  {on && !hasParts && <Text style={styles.error}>⚠ Your build has no {m.requires.category}, so this move can never fire.</Text>}
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <View style={styles.actions}>
+          <Button label="Clear" variant="secondary" onPress={() => game.setPlacements([])} style={{ flex: 1 }} />
+          <Button label="Campaign map" disabled={errors.length > 0} onPress={() => router.dismissTo('/campaign')} style={{ flex: 2 }} />
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: Colors.bg },
+  top: { alignSelf: 'center' },
   content: {
     padding: Spacing.lg,
     gap: Spacing.lg,
@@ -196,24 +336,24 @@ const styles = StyleSheet.create({
   },
   nameInput: {
     color: Colors.text,
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
-    borderBottomWidth: 1,
-    borderColor: Colors.border,
-    paddingVertical: Spacing.xs,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
   },
-  front: { color: Colors.accent, fontWeight: '800', fontSize: 12, letterSpacing: 2 },
-  grid: { backgroundColor: Colors.panel, borderRadius: 12, borderWidth: 1, borderColor: Colors.border },
-  slot: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
-  empty: {
-    width: '84%',
-    height: '84%',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: Colors.border,
+  editorOverlay: { ...StyleSheet.absoluteFill, justifyContent: 'space-between', alignItems: 'center', paddingVertical: Spacing.sm },
+  front: { color: Colors.accent, fontWeight: '800', fontSize: 11, letterSpacing: 2 },
+  hint: {
+    color: Colors.text,
+    fontSize: 12,
+    textAlign: 'center',
+    backgroundColor: 'rgba(20,23,28,0.75)',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 4,
+    borderRadius: 999,
+    overflow: 'hidden',
   },
-  hint: { color: Colors.textDim, fontSize: 12, textAlign: 'center' },
+  detailRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
   statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.md },
   stat: { color: Colors.text, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
   error: { color: Colors.bad, fontSize: 13 },

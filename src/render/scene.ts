@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { getMove } from '@/game/moves';
 import { ARENA_SIZE, CELL, partWorld, stompWarning, type Bug, type Sim, type SimPart } from '@/game/sim';
 
+import { createRenderer } from './gl';
 import { buildPart, toonMaterial, toonMesh, type PartModel } from './models';
 
 const HALF = ARENA_SIZE / CELL / 2;
@@ -57,19 +58,7 @@ export class ArenaRenderer {
   ) {
     const w = gl.drawingBufferWidth;
     const h = gl.drawingBufferHeight;
-    const canvas = {
-      width: w,
-      height: h,
-      style: {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      clientHeight: h,
-      getContext: () => gl,
-    } as unknown as HTMLCanvasElement;
-    this.renderer = new THREE.WebGLRenderer({ canvas, context: gl as unknown as WebGLRenderingContext, antialias: true });
-    this.renderer.setPixelRatio(1);
-    this.renderer.setSize(w, h, false);
-    this.renderer.setClearColor(BG);
+    this.renderer = createRenderer(gl, BG);
 
     this.camera = new THREE.PerspectiveCamera(FOV, w / h, 0.1, 200);
     this.fitOffset(w / h);

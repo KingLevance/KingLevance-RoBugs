@@ -12,6 +12,8 @@ RoBugs is an original 3D mobile game. You collect robotic bug parts, snap them o
 | Art style | Cartoony and chunky: blocky voxel-style parts, bright colours, toon shading and bold outlines. All our own designs. |
 | Main mode | **Single-player campaign**: a map of opponents with guaranteed first-clear drops and farmable bosses. |
 | Signature moves | Equippable, unlockable moves that **auto-proc** and play a short cutscene. See §6. |
+| Controls | **Fights are autonomous.** Your bug's AI plays to its build: melee charges, ranged kites, hurt bugs circle. The player's skill is in building and choosing moves. A 1×/2× speed toggle is available while watching. |
+| Garage | **3D editor.** The bug is shown exactly as it looks in the arena. Drag a part to move it (swaps if the slot is taken), drag it off the grid to remove it, and tap a part in the bin to auto-attach it to a sensible slot. |
 | PvP | **Later phase.** The sim is already deterministic (seeded RNG, fixed 60 Hz step, input-driven, no rendering) so async/online PvP can be added without a rewrite. |
 
 ## 1. Core loop
@@ -21,7 +23,7 @@ Garage (build + equip moves) → Campaign map → 3D Arena (1v1 vs AI) → Rewar
 ```
 
 1. **Build** — place parts on a 5×7 grid. Your layout sets weight, speed, handling, armor and attacks.
-2. **Fight** — drive with a thumbstick. Weapons fire on their own when an enemy part is in their cone and reach. Basic actions fill your **proc meter**, and equipped signature moves fire on their own when they make sense. Parts get knocked off one by one.
+2. **Fight** — watch your bug fight on its own; its AI plays to the build. Weapons fire on their own when an enemy part is in their cone and reach. Basic actions fill your **proc meter**, and equipped signature moves fire on their own when they make sense. Parts get knocked off one by one.
 3. **Earn** — first clears give guaranteed parts and moves. Bosses can be re-fought for rolls on their loot table. A loss still gives one common salvage part.
 
 ## 2. Parts
@@ -149,7 +151,7 @@ Saves are stored on the device (SQLite key-value store on native, localStorage o
 
 ## 11. Open decisions (for the owner)
 
-1. **Controls.** Right now it's a thumbstick plus auto-fire. Alternatives: tap-to-move, or a manual "boost".
+1. **Pre-fight tactics.** Should players get light control over the autonomous AI, such as an aggressive/defensive stance or a target-priority setting?
 2. **Part orientation.** Parts can't be rotated yet. Do we want rotatable or mirrored parts (e.g. a rear-facing stinger)?
 3. **Grid size and shape.** Currently 5×7. Should it grow with progression?
 4. **Economy.** Should there be scrap or currency to craft or upgrade parts? Duplicates currently just stack.
