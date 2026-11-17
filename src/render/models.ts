@@ -848,8 +848,9 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         }
         animate = ({ t, speed }) => {
           stalks.forEach(({ g, d }) => {
-            g.rotation.x = Math.sin(t * 2.1 + d + row) * 0.1 + speed * 0.35;
-            g.rotation.z = Math.sin(t * 1.5 + d * 2) * 0.08;
+            // Swept back by speed, with a springy twitch at the tips.
+            g.rotation.x = Math.sin(t * 2.1 + d + row) * 0.12 + speed * 0.4 + Math.sin(t * 9 + d) * 0.03 * speed;
+            g.rotation.z = Math.sin(t * 1.5 + d * 2) * 0.1;
           });
           tipMat.emissiveIntensity = 0.6 + Math.sin(t * 3 + row) * 0.4;
         };

@@ -21,7 +21,7 @@ export const GIVE: Record<Category, number> = {
   abdomen: 0.6,
   legs: 0.75,
   wings: 0.12, // bolted-on mount: the bug moves with its wings (the membranes still beat)
-  sensor: 1.3,
+  sensor: 0.15, // the mount is bolted on; the antenna stalks sway on their own (models.ts)
   mandibles: 0.6,
   pincers: 0.6,
   stinger: 0.75,
