@@ -1,0 +1,81 @@
+# Builds an UNSIGNED Release .ipa on GitHub's macOS runners for sideloading
+# (Sideloadly / AltStore sign it with your own Apple ID). No Mac, Expo account
+# or Apple certificates needed.
+#
+# The .ipa has the EAS Update URL baked in, so it receives over-the-air updates
+# published by publish-update.yml. Run expo-setup.yml once first; this
+# workflow refuses to build without the update URL.
+name: iOS sideload IPA
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  ipa:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Check over-the-air updates are configured
+        run: |
+          URL=$(node -p "require('./app.json').expo.updates?.url ?? ''")
+          if [ -z "$URL" ]; then
+            echo "::error::app.json has no expo.updates.url. Run the 'Expo setup (one-time)' workflow first so this build can receive OTA updates."
+            exit 1
+          fi
+          echo "Update URL: $URL"
+          echo "Runtime version (app version): $(node -p "require('./app.json').expo.version")"
+      - name: Use the newest Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n 1)
+          echo "Using $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+      - name: Install node modules
+        run: npm ci
+      - name: Generate the native project
+        run: npx expo prebuild --platform ios --clean --no-install
+      - name: Install pods
+        working-directory: ./ios
+        run: pod install
+      - name: Build the app, unsigned
+        working-directory: ./ios
+        run: |
+          set -eo pipefail
+          WS=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME=$(basename "$WS" .xcworkspace)
+          xcodebuild -workspace "$WS" -scheme "$SCHEME" -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' -derivedDataPath build -quiet \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+      - name: Check the JS bundle is embedded
+        working-directory: ./ios
+        run: |
+          set -eo pipefail
+          APP=$(ls -d build/Build/Products/Release-iphoneos/*.app | head -n 1)
+          ls -la "$APP" | head -50
+          test -f "$APP/main.jsbundle" || { echo "::error::main.jsbundle missing from the .app"; exit 1; }
+      - name: Package the .ipa
+        working-directory: ./ios
+        run: |
+          set -eo pipefail
+          APP=$(ls -d build/Build/Products/Release-iphoneos/*.app | head -n 1)
+          rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
+          zip -qry ../RoBugs-unsigned.ipa Payload
+      - name: Keep it as a run artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoBugs-unsigned-ipa
+          path: RoBugs-unsigned.ipa
+          retention-days: 30
+      - name: Attach it to a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "ipa-${{ github.run_number }}" RoBugs-unsigned.ipa \
+            --title "Sideload IPA #${{ github.run_number }}" \
+            --notes "Unsigned build of ${{ github.sha }} for Sideloadly / AltStore. Receives over-the-air updates for app version $(node -p "require('./app.json').expo.version")." \
+            --target "${{ github.sha }}"

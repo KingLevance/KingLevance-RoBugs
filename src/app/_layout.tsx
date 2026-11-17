@@ -3,7 +3,9 @@ import Stack from 'expo-router/stack';
 import { StatusBar } from 'expo-status-bar';
 
 import { Colors } from '@/constants/theme';
+import { UpdateBanner } from '@/components/update-banner';
 import { GameProvider } from '@/state/game-store';
+import { useBackgroundUpdates } from '@/updates';
 
 const theme = {
   ...DarkTheme,
@@ -11,6 +13,7 @@ const theme = {
 };
 
 export default function RootLayout() {
+  useBackgroundUpdates();
   return (
     <ThemeProvider value={theme}>
       <GameProvider>
@@ -26,7 +29,9 @@ export default function RootLayout() {
           <Stack.Screen name="campaign" options={{ title: 'Campaign' }} />
           <Stack.Screen name="arena" options={{ headerShown: false, gestureEnabled: false, animation: 'fade' }} />
           <Stack.Screen name="rewards" options={{ title: 'Results', headerBackVisible: false, gestureEnabled: false }} />
+          <Stack.Screen name="settings" options={{ title: 'Settings' }} />
         </Stack>
+        <UpdateBanner />
       </GameProvider>
     </ThemeProvider>
   );

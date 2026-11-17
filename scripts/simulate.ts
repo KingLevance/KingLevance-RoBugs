@@ -15,6 +15,7 @@ for (const b of builds) {
     `${b.name.padEnd(12)} mass ${s.mass} power ${s.powerDraw}/${s.powerSupply} speed ${s.topSpeed.toFixed(0)} turn ${s.turnRate.toFixed(2)} hp ${s.totalHp} dps ${s.dps.toFixed(1)}`,
     errs.length ? `INVALID: ${errs.join('; ')}` : 'ok',
   );
+  if (errs.length) process.exitCode = 1;
 }
 
 const player: Fighter = { build: STARTER_BUILD, moves: STARTER_MOVES };
@@ -30,6 +31,7 @@ function run(oppIndex: number, seed: number) {
 const a = run(1, 1234);
 const b = run(1, 1234);
 console.log(a.hash === b.hash ? 'determinism ok' : `DETERMINISM BROKEN ${a.hash} vs ${b.hash}`);
+if (a.hash !== b.hash) process.exitCode = 1;
 
 const N = 40;
 OPPONENTS.forEach((opp, i) => {

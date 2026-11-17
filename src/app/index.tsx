@@ -56,7 +56,7 @@ export default function Hub() {
           your proc meter, which powers your moves. They fire automatically when the moment is right. Knock off parts:
           lose every core or thorax and you&apos;re out.
         </Text>
-        <Button label="Reset save" variant="danger" onPress={game.resetSave} style={{ alignSelf: 'center' }} />
+        <Button label="Settings & updates" variant="secondary" onPress={() => router.push('/settings')} style={{ alignSelf: 'center' }} />
       </ScrollView>
     </SafeAreaView>
   );
