@@ -528,7 +528,7 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
       for (let k = -3; k <= 3; k++) {
         const a = aim + k * 0.055;
         const dz = foe.alt - bug.alt;
-        sim.projectiles.push({ x: from.x, y: from.y, z: bug.alt, vx: Math.cos(a) * 380, vy: Math.sin(a) * 380, vz: dz / tFly, damage: 14, owner: bug.index, ttl: 1, big: true });
+        sim.projectiles.push({ x: from.x, y: from.y, z: bug.alt, vx: Math.cos(a) * 380, vy: Math.sin(a) * 380, vz: dz / tFly, damage: 10, owner: bug.index, ttl: 1, big: true });
       }
       break;
     }
