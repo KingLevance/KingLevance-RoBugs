@@ -11,7 +11,8 @@ import type { ArenaId } from './opponents';
 import type { Category, PartDef } from './parts';
 
 export const CELL = 22;
-export const ARENA_SIZE = 600;
+/** Arena width/depth in world px (22 px = one grid cell). */
+export const ARENA_SIZE = 760;
 export const MATCH_SECONDS = 90;
 export const STEP = 1 / 60;
 /** Global damage multiplier — lower = longer fights. */
@@ -220,13 +221,15 @@ export function maxStamina(bug: Bug) {
 
 function arenaHazards(arena: ArenaId): { hazards: Hazard[]; spikedWalls: boolean } {
   const m = ARENA_SIZE / 2;
+  /** Hazard positions are laid out on a 600-wide plan and scaled to the arena; sizes stay fixed. */
+  const at = (v: number) => (v / 600) * ARENA_SIZE;
   switch (arena) {
     case 'pit':
       return {
         spikedWalls: false,
         hazards: [
-          { kind: 'acid', x: 150, y: m, r: 50 },
-          { kind: 'acid', x: 450, y: m, r: 50 },
+          { kind: 'acid', x: at(150), y: m, r: 52 },
+          { kind: 'acid', x: at(450), y: m, r: 52 },
         ],
       };
     case 'foundry':
@@ -234,16 +237,16 @@ function arenaHazards(arena: ArenaId): { hazards: Hazard[]; spikedWalls: boolean
         spikedWalls: true,
         hazards: [
           { kind: 'stomper', x: m, y: m, r: 70, period: 6, t: 0 },
-          { kind: 'acid', x: 110, y: 110, r: 45 },
-          { kind: 'acid', x: 490, y: 490, r: 45 },
+          { kind: 'acid', x: at(110), y: at(110), r: 46 },
+          { kind: 'acid', x: at(490), y: at(490), r: 46 },
         ],
       };
     case 'hive':
       return {
         spikedWalls: true,
         hazards: [
-          { kind: 'stomper', x: 170, y: m, r: 60, period: 5, t: 0 },
-          { kind: 'stomper', x: 430, y: m, r: 60, period: 5, t: 2.5 },
+          { kind: 'stomper', x: at(170), y: m, r: 60, period: 5, t: 0 },
+          { kind: 'stomper', x: at(430), y: m, r: 60, period: 5, t: 2.5 },
           { kind: 'acid', x: m, y: m, r: 40 },
         ],
       };
@@ -254,8 +257,8 @@ export function createSim(player: Fighter, opponent: Fighter, arena: ArenaId, se
   const { hazards, spikedWalls } = arenaHazards(arena);
   return {
     bugs: [
-      makeBug(0, player, { x: ARENA_SIZE / 2, y: ARENA_SIZE - 90 }, -Math.PI / 2),
-      makeBug(1, opponent, { x: ARENA_SIZE / 2, y: 90 }, Math.PI / 2),
+      makeBug(0, player, { x: ARENA_SIZE / 2, y: ARENA_SIZE * 0.78 }, -Math.PI / 2),
+      makeBug(1, opponent, { x: ARENA_SIZE / 2, y: ARENA_SIZE * 0.22 }, Math.PI / 2),
     ],
     hazards,
     arena,

@@ -224,18 +224,21 @@ const THEMES: Record<ArenaId, Theme> = {
 type Vat = { surface: THREE.Mesh; bubbles: THREE.InstancedMesh; steam: THREE.Mesh[]; x: number; z: number; r: number; seed: number };
 type Press = {
   head: THREE.Group;
-  rod: THREE.Object3D;
+  shadow: THREE.Mesh;
   lights: THREE.MeshBasicMaterial[];
   ring: THREE.Mesh;
   idx: number;
   x: number;
   z: number;
   r: number;
-  /** Fades out when a bug is underneath, so the fight stays visible. */
+  /** Head materials: fade a little while a bug is right underneath. */
   mats: THREE.Material[];
   outlines: THREE.Object3D[];
   fade: number;
 };
+
+/** Where the press head waits between slams: above the camera's view. */
+const PRESS_HIGH = 26;
 
 export class ArenaDressing {
   private theme: Theme;
@@ -516,67 +519,70 @@ export class ArenaDressing {
     this.vats.push({ surface, bubbles, steam, x: p.x, z: p.z, r, seed: this.vats.length * 3.7 });
   }
 
+  /**
+   * A press that drops in from above: the head waits out of view, and only the
+   * floor shows it's there (a striped target ring with four lamps). During the
+   * warning its shadow darkens and the lamps flash as it comes down; it slams,
+   * then yanks back up out of sight.
+   */
   private buildPress(sx: number, sy: number, rr: number, idx: number) {
     const r = rr / CELL;
     const p = toWorld(sx, sy);
-    const rig = new THREE.Group();
-    this.scene.add(rig);
-    const steel = toonMaterial(0x4b5563);
-    const dark = toonMaterial(0x23272e);
-    // Gantry: two pillars and a crossbeam.
-    for (const d of [-1, 1]) {
-      const pillar = toonMesh(new THREE.BoxGeometry(0.7, 9, 0.7), steel, 0.04);
-      pillar.position.set(p.x + d * (r + 0.9), 4.5, p.z);
-      rig.add(pillar);
-    }
-    const beam = toonMesh(new THREE.BoxGeometry(2 * r + 2.6, 0.9, 1.1), steel, 0.04);
-    beam.position.set(p.x, 9.2, p.z);
-    rig.add(beam);
-    // Warning lights on the beam.
-    const lights: THREE.MeshBasicMaterial[] = [];
-    for (const d of [-1, 1]) {
-      const m = new THREE.MeshBasicMaterial({ color: 0x551a0c });
-      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), m);
-      lamp.position.set(p.x + d * (r + 0.9), 9.8, p.z);
-      rig.add(lamp);
-      lights.push(m);
-    }
-    // Hydraulic rod + press head (with a hazard band).
-    const rod = toonMesh(new THREE.CylinderGeometry(0.35, 0.35, 1, 12), toonMaterial(0xc8ced6), 0.03);
-    rig.add(rod);
+
     const head = new THREE.Group();
-    head.add(toonMesh(new THREE.CylinderGeometry(r * 0.95, r * 0.95, 1.1, 10), dark, 0.04));
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.97, r * 0.97, 0.3, 24, 1, true), toonMaterial(0xffffff));
+    head.add(toonMesh(new THREE.CylinderGeometry(r * 0.95, r * 0.95, 0.8, 12), toonMaterial(0x23272e), 0.04));
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.97, r * 0.97, 0.26, 24, 1, true), toonMaterial(0xffffff));
     const bandTex = stripes(0xf2c14e, 0x1d1f24);
     bandTex.repeat.set(8, 1);
     (band.material as THREE.MeshToonMaterial).map = bandTex;
-    band.position.y = -0.3;
+    band.position.y = -0.18;
     head.add(band);
-    const plate = toonMesh(new THREE.CylinderGeometry(r, r, 0.25, 10), toonMaterial(0xff8a3d), 0.03);
-    plate.position.y = -0.65;
+    const plate = toonMesh(new THREE.CylinderGeometry(r, r, 0.2, 12), toonMaterial(0xff8a3d), 0.03);
+    plate.position.y = -0.48;
     head.add(plate);
-    head.position.set(p.x, 5.6, p.z);
-    rig.add(head);
-    // Hazard-striped target ring on the floor.
+    // A short piston stub above (the rest disappears out of view).
+    head.add(toonMesh(new THREE.CylinderGeometry(0.35, 0.35, 6, 10), toonMaterial(0xc8ced6), 0.03).translateY(3.4));
+    head.position.set(p.x, PRESS_HIGH, p.z);
+    this.scene.add(head);
+
+    // Its shadow on the floor: invisible at rest, darkening as the head comes down.
+    const shadow = new THREE.Mesh(
+      new THREE.CircleGeometry(r, 32),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false }),
+    );
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.set(p.x, 0.025, p.z);
+    this.scene.add(shadow);
+
+    // Hazard-striped target ring with four lamps around it.
     const ringTex = stripes(0xf2c14e, 0x1d1f24);
     ringTex.repeat.set(3, 3);
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(r * 0.82, r, 40),
-      new THREE.MeshBasicMaterial({ map: ringTex, transparent: true, opacity: 0.55, depthWrite: false }),
+      new THREE.RingGeometry(r * 0.86, r, 40),
+      new THREE.MeshBasicMaterial({ map: ringTex, transparent: true, opacity: 0.5, depthWrite: false }),
     );
     ring.rotation.x = -Math.PI / 2;
     ring.position.set(p.x, 0.03, p.z);
     this.scene.add(ring);
-    // Everything in the rig can fade; outline shells just hide while faded.
+    const lights: THREE.MeshBasicMaterial[] = [];
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + (i * Math.PI) / 2;
+      const m = new THREE.MeshBasicMaterial({ color: 0x551a0c });
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), m);
+      lamp.position.set(p.x + Math.cos(a) * (r + 0.35), 0.02, p.z + Math.sin(a) * (r + 0.35));
+      this.scene.add(lamp);
+      lights.push(m);
+    }
+
     const mats = new Set<THREE.Material>();
     const outlines: THREE.Object3D[] = [];
-    rig.traverse((o) => {
+    head.traverse((o) => {
       if (!(o instanceof THREE.Mesh)) return;
       const m = o.material as THREE.Material;
       if (m instanceof THREE.MeshBasicMaterial && m.side === THREE.BackSide) outlines.push(o);
       else mats.add(m);
     });
-    this.presses.push({ head, rod, lights, ring, idx, x: p.x, z: p.z, r, mats: [...mats], outlines, fade: 1 });
+    this.presses.push({ head, shadow, lights, ring, idx, x: p.x, z: p.z, r, mats: [...mats], outlines, fade: 1 });
   }
 
   update(sim: Sim, t: number, dt: number) {
@@ -612,26 +618,28 @@ export class ArenaDressing {
       });
     }
 
-    // Presses: the head rides the stomper cycle; rod stretches from the beam; lights flash on warning.
+    // Presses: wait out of view, come down during the warning, slam, yank back up.
     for (const p of this.presses) {
       const h = sim.hazards[p.idx];
       if (h.kind !== 'stomper') continue;
       const warnStart = h.period - 1.2;
-      let y = 5.6;
-      if (h.t < 0.5) y = 0.95 + (h.t / 0.5) * 4.65;
-      else if (h.t > warnStart) y = 5.6 + ((h.t - warnStart) / 1.2) * 1.4;
-      const shudder = stompWarning(h) ? Math.sin(t * 60) * 0.05 : 0;
-      p.head.position.set(p.x + shudder, y, p.z);
-      const top = 8.8;
-      const len = Math.max(0.1, top - (y + 0.55));
-      p.rod.position.set(p.x, y + 0.55 + len / 2, p.z);
-      p.rod.scale.set(1, len, 1);
+      const low = 0.65;
+      let y = PRESS_HIGH;
+      if (h.t < 0.12) y = low;
+      else if (h.t < 0.8) y = low + (1 - Math.pow(1 - (h.t - 0.12) / 0.68, 3)) * (PRESS_HIGH - low);
+      else if (h.t > warnStart) y = PRESS_HIGH - (PRESS_HIGH - 3.2) * Math.pow((h.t - warnStart) / 1.2, 2);
       const warn = stompWarning(h);
+      const shudder = warn ? Math.sin(t * 60) * 0.04 : 0;
+      p.head.position.set(p.x + shudder, y, p.z);
+      p.head.visible = y < PRESS_HIGH - 0.1;
+      const closeness = 1 - (y - low) / (PRESS_HIGH - low);
+      (p.shadow.material as THREE.MeshBasicMaterial).opacity = Math.max(0, closeness) * 0.55;
       const blink = warn && Math.sin(t * 22) > 0;
       p.lights.forEach((m) => m.color.set(blink ? 0xff3b1a : 0x551a0c));
-      // See-through while a bug is near, so the press never hides the fight.
-      const near = sim.bugs.some((b) => Math.hypot(b.pos.x / CELL - HALF - p.x, b.pos.y / CELL - HALF - p.z) < p.r + 3 + b.radius / CELL);
-      p.fade += ((near ? 0.25 : 1) - p.fade) * Math.min(1, dt * 6);
+      (p.ring.material as THREE.MeshBasicMaterial).opacity = warn ? 0.6 + Math.sin(t * 22) * 0.3 : 0.4;
+      // Slightly see-through while a bug is right underneath, so the slam doesn't hide the fight.
+      const near = sim.bugs.some((b) => Math.hypot(b.pos.x / CELL - HALF - p.x, b.pos.y / CELL - HALF - p.z) < p.r + 1.5 + b.radius / CELL);
+      p.fade += ((near && y < 6 ? 0.55 : 1) - p.fade) * Math.min(1, dt * 8);
       const solid = p.fade > 0.97;
       for (const m of p.mats) {
         // Opaque shaders force alpha to 1, so switching needs a rebuild (only on the flip).
@@ -643,7 +651,6 @@ export class ArenaDressing {
         m.opacity = p.fade;
       }
       for (const o of p.outlines) o.visible = solid;
-      (p.ring.material as THREE.MeshBasicMaterial).opacity = warn ? 0.6 + Math.sin(t * 22) * 0.3 : 0.45;
     }
 
     // Sweeping floodlight beams.
