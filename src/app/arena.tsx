@@ -9,8 +9,8 @@ import { UltBanner } from '@/components/ult-banner';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
 import { GUIDE } from '@/game/guide';
 import { getMove, PROC } from '@/game/moves';
-import { getOpponent } from '@/game/opponents';
-import { aiInput, CELL, createSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug } from '@/game/sim';
+import { getOpponent, lineup } from '@/game/opponents';
+import { aiInput, CELL, createTeamSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug } from '@/game/sim';
 import { ArenaRenderer } from '@/render/scene';
 import { useGame } from '@/state/game-store';
 
@@ -105,14 +105,11 @@ function MiniHud({ bug, color, align }: { bug: HudBug; color: string; align: 'le
 export default function Arena() {
   const game = useGame();
   const [opponent] = useState(() => getOpponent(game.selected));
-  const [sim] = useState(() =>
-    createSim(
-      { build: game.build, moves: game.equipped },
-      { build: opponent.build, moves: opponent.moves, aggression: opponent.aggression },
-      opponent.arena,
-      (Math.random() * 2 ** 31) | 0,
-    ),
-  );
+  const [sim] = useState(() => {
+    // Your bug, plus any allies this fight gives you, against the opponent's whole team.
+    const { allies, enemies } = lineup(opponent);
+    return createTeamSim([{ build: game.build, moves: game.equipped }, ...allies], enemies, opponent.arena, (Math.random() * 2 ** 31) | 0);
+  });
   const [view, setView] = useState(() => hud(sim));
   const [fast, setFast] = useState(false);
   /** −2 = waiting for the arena's first frame; 3, 2, 1; then 0 = "FIGHT!"; then −1 = gone. */
@@ -304,7 +301,7 @@ export default function Arena() {
             <CountBeat key={count} label={count > 0 ? String(count) : 'FIGHT!'} final={count === 0} />
             {count > 0 && (
               <Text style={styles.countVs}>
-                {me.name} <Text style={{ color: Colors.textDim }}>vs</Text> {foe.name}
+                {allies.length ? 'Your team' : me.name} <Text style={{ color: Colors.textDim }}>vs</Text> {opponent.name}
               </Text>
             )}
           </View>

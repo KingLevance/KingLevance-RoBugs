@@ -131,6 +131,18 @@ Moves are unlocked like parts (from drops) and **equipped** in the Garage. There
 - **UI (`UltBanner`):** letterbox bars (~13% of screen height each), and the move name slams in from the right on a skewed stripe in the move's colour, drifts, then flies out left. The HUD hides while it plays.
 - **Charge VFX:** a ring at the caster's feet in the move's colour and sparks streaming into the weapon (or onto the shell).
 
+**Quick moves** (no cutscene; they fire in real time):
+- **Web Snare** (Silk Spinneret): a silk glob. A webbed bug moves at 35% speed, turns slowly and can't fly for 3.5 s. Bugs with Weaver Legs shrug most of it off.
+- **Burrow Strike** (Mole Diggers): the bug digs under the floor for up to 1.5 s (untouchable; a dirt mound shows where it is), tunnels at its target and erupts beneath it: 3 hits from below (slung-under parts first, then legs) and the target is tossed into the air. Flyers can climb out of reach; fast bugs can outrun it.
+- **Ghost Shell** (Mirage Plate): invisible for 4.5 s. Enemies hunt its last-seen spot and can't target it unless it's touching them; its first melee hit out of hiding is a guaranteed crit; taking a hit flushes it out. Your own bug shows as a ghost, enemies all but vanish.
+- **Static Burst** (Tesla Prongs): enemies close by are stunned 1.3 s and lose 15 proc.
+- **Overclock** (2 cores): 5 s of +35% speed and +50% attack rate.
+- **Gale Flap** (wings): hurls nearby enemies back (lighter ones further) and drains flyers' wing stamina so they drop.
+
+**Sunder Beam** (Prism Cutter) is the fourth ultimate: the bug swings its lens onto the target and fires a beam that hits up to 5 parts in a line (piercing).
+
+Moves name the hardware they need with `requires: { category?, tag?, count, label }`; signature parts carry a `tag` (`silk`, `dig`, `cloak`, `laser`, `shock`, `venom`, `spider`).
+
 Starting moves: **Mandible Crusher** (mandibles; heavy multi-part bite), **Venom Barrage** (stinger; fan of darts), **Carapace Lock** (armor; 4 s damage shield), **Skitter Dash** (legs; small, non-ultimate side-dodge).
 
 ## 7. AI
@@ -156,7 +168,19 @@ Measured with `scripts/simulate.ts` and an ad-hoc behaviour probe: about 5–7 c
 
 ## 8. Campaign and loot
 
-The campaign map (`src/game/campaign.ts`) is a path of nodes. Each node unlocks when its `requires` nodes are cleared.
+The campaign (`src/game/opponents.ts`) is a scrolling map of 17 stops in three zones. A stop unlocks when any of its `unlockedBy` stops is cleared.
+
+| Zone | Stops |
+|---|---|
+| **The Scrapyard** | Rustmite → Needlewisp / Snapclaw → **Ironback** (boss). Optional: **Old Scrapjaw** (teaches Overclock). |
+| **The Undergrowth** | Silkjaw (webs) → Gravelgrub (burrows) / Arcfly (static, gale) → **Queen Vexa** (boss). Optional: **Mother Lattice**. |
+| **The Deep Hive** | Rivet & Ratchet (2v2) → Glimmer (cloak) / Lenswing (laser) → The Tunnel Kings (2v2) → **The Hive Guard** (3v3 boss) → **Empress Kalyx** (3v3 finale, farmable). Optional: **Nullshade**. |
+
+**Team fights:** an opponent can bring a `team` of extra bugs, and names `allies` (ids of earlier opponents) whose bugs fight on the player's side. The sim handles 1–3 bugs a side (`createTeamSim`): each bug's AI picks the nearest enemy and sticks with it until it's down or another is much closer; a side loses when all its bugs are disabled; on time, the side with more total integrity wins. The HUD shows allies and extra enemies as small health bars. *(Assumption: allies are campaign partners, not extra bugs the player builds. See Open decisions.)*
+
+**Optional bosses** (`optional: true`) sit off the main path, are harder than the stops around them, and pay out signature parts.
+
+**Balance check:** `npm test` plays the whole campaign in order with an auto-built player bug that picks up each stop's rewards. Current win rates for that auto-player: early stops 75–100%, bosses about 45–50%, optional bosses 35–45%, the finale 40%.
 
 Each opponent has:
 - `guaranteed: Reward[]` — given **once**, on first clear (parts or moves).
@@ -183,9 +207,10 @@ Saves are stored on the device (SQLite key-value store on native, localStorage o
 ## 11. Open decisions (for the owner)
 
 1. **Pre-fight tactics.** Should players get light control over the autonomous AI, such as an aggressive/defensive stance or a target-priority setting?
-2. **Part orientation.** Parts can't be rotated yet. Do we want rotatable or mirrored parts (e.g. a rear-facing stinger)?
+2. ~~Part orientation~~ Decided: weapons can face front, sides or back.
 3. **Grid size and shape.** Currently 5×7. Should it grow with progression?
 4. **Economy.** Should there be scrap or currency to craft or upgrade parts? Duplicates currently just stack.
 5. **Monetisation.** None, premium, or cosmetic-only? (No pay-to-win is assumed.)
 6. **Move slots.** 2 for now. Should more unlock through the campaign?
+8. **Team fights: who are your allies?** For now they're campaign partners (bugs you've beaten fight beside you). Should the player build and bring their own second and third bug instead?
 7. **Balance.** First-pass numbers. Fights often go to time, and melee mirror matches can snowball.

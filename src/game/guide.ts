@@ -59,7 +59,7 @@ export const GUIDE: Record<Category, { label: string; group: GuideGroup; does: s
   stinger: {
     label: 'Stinger',
     group: 'weapon',
-    does: 'Shoots darts at range in the direction it points.',
+    does: 'Shoots at range in the direction it points: venom darts, or laser bolts from a Prism Cutter.',
     where: 'Front, sides or back: it points outward from wherever you put it (tap Rotate to turn it). A rear stinger lets your bug shoot while backing away.',
   },
   horn: {

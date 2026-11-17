@@ -8,7 +8,7 @@ import { PART_ICONS } from '@/components/part-icons';
 import { Button, Label, Panel, Pill } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { validateBuild } from '@/game/build';
-import { ARENA_NAMES, getOpponent, OPPONENTS } from '@/game/opponents';
+import { ARENA_NAMES, fightSize, getOpponent, OPPONENTS } from '@/game/opponents';
 import { useGame } from '@/state/game-store';
 
 const STEPS: [string, string, string][] = [
@@ -71,7 +71,8 @@ export default function Hub() {
               <Label>{allClear ? 'REMATCH' : 'NEXT FIGHT'}</Label>
               <Text style={styles.nextName}>{next.name}</Text>
               <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
-                {next.boss && <Pill label="BOSS" color={Colors.bad} filled />}
+                {next.boss && <Pill label={next.optional ? 'OPTIONAL BOSS' : 'BOSS'} color={next.optional ? '#C77DFF' : Colors.bad} filled />}
+                {fightSize(next) !== '1v1' && <Pill label={fightSize(next)} color="#58C7FF" filled />}
                 <Pill label={ARENA_NAMES[next.arena]} />
               </View>
             </View>

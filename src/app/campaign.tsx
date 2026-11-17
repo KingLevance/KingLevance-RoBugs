@@ -1,16 +1,27 @@
 import { router } from 'expo-router';
+import { useEffect, useRef, type ComponentRef } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BUG_PORTRAITS } from '@/components/bug-portraits';
 import { RewardChip } from '@/components/reward-chip';
-import { Button, Label, Panel, Pill } from '@/components/ui';
+import { Button, Label, Pill } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { validateBuild } from '@/game/build';
 import { getMove } from '@/game/moves';
-import { ARENA_NAMES, getOpponent, isUnlocked, OPPONENTS, type Opponent } from '@/game/opponents';
+import { ARENA_NAMES, fightSize, getOpponent, isUnlocked, OPPONENTS, type Opponent } from '@/game/opponents';
 import { useGame } from '@/state/game-store';
 
 const ARENA_TINT = { pit: '#7CE654', foundry: '#FF8A3D', hive: '#F2C14E' } as const;
+const OPTIONAL = '#C77DFF';
+/** Map height as a multiple of its width (the map scrolls). */
+const MAP_ASPECT = 3.3;
+/** Campaign zones, as bands of the map (y from, y to). */
+const ZONES: { name: string; from: number; to: number; tint: string }[] = [
+  { name: 'THE DEEP HIVE', from: 0.09, to: 0.545, tint: '#F2C14E' },
+  { name: 'THE UNDERGROWTH', from: 0.545, to: 0.785, tint: '#7CE654' },
+  { name: 'THE SCRAPYARD', from: 0.785, to: 1, tint: '#FF8A3D' },
+];
 
 function Link({ a, b, w, h, lit }: { a: Opponent; b: Opponent; w: number; h: number; lit: boolean }) {
   const x1 = a.map.x * w;
@@ -42,96 +53,139 @@ function Link({ a, b, w, h, lit }: { a: Opponent; b: Opponent; w: number; h: num
 
 export default function Campaign() {
   const game = useGame();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const mapW = Math.min(width, MaxContentWidth) - Spacing.lg * 2;
-  const mapH = mapW * 1.05;
+  const mapH = mapW * MAP_ASPECT;
   const sel = getOpponent(game.selected);
   const errors = validateBuild(game.build.placements);
   const selUnlocked = isUnlocked(sel, game.cleared);
   const firstClear = !game.cleared.includes(sel.id);
+  const size = fightSize(sel);
+  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  // Open the map on the selected fight.
+  const startY = Math.max(0, sel.map.y * mapH - height * 0.22);
+  useEffect(() => {
+    const t = setTimeout(() => scroll.current?.scrollTo({ y: startY, animated: false }), 0);
+    return () => clearTimeout(t);
+    // Only on first show.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
-      <View style={[styles.map, { width: mapW, height: mapH }]}>
-        {OPPONENTS.flatMap((o) =>
-          o.unlockedBy.map((from) => (
-            <Link key={`${from}-${o.id}`} a={getOpponent(from)} b={o} w={mapW} h={mapH} lit={game.cleared.includes(from)} />
-          )),
-        )}
-        {OPPONENTS.map((o) => {
-          const unlocked = isUnlocked(o, game.cleared);
-          const cleared = game.cleared.includes(o.id);
-          const selected = o.id === sel.id;
-          const size = o.boss ? 82 : 66;
-          const ring = selected ? Colors.accent : cleared ? Colors.good : o.boss ? Colors.bad : Colors.border;
-          return (
-            <Pressable
-              key={o.id}
-              onPress={() => game.selectOpponent(o.id)}
-              style={[
-                styles.node,
-                {
-                  left: o.map.x * mapW - size / 2,
-                  top: o.map.y * mapH - size / 2,
-                  width: size,
-                  height: size,
-                  borderRadius: size / 2,
-                  borderColor: ring,
-                  borderWidth: selected ? 4 : 3,
-                },
-                selected && styles.nodeSelected,
-              ]}>
-              <View style={[styles.nodeInner, { borderRadius: size / 2 }]}>
-                <Image
-                  source={BUG_PORTRAITS[o.id]}
-                  style={{ width: size * 1.15, height: size * 1.15, opacity: unlocked ? 1 : 0.9, tintColor: unlocked ? undefined : '#0B0D11' }}
-                />
-              </View>
-              {!unlocked && <Text style={styles.lock}>🔒</Text>}
-              {cleared && (
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>✓</Text>
+    <SafeAreaView style={styles.root} edges={['bottom']}>
+      <ScrollView ref={scroll} contentContainerStyle={styles.content} contentOffset={{ x: 0, y: startY }}>
+        <View style={[styles.map, { width: mapW, height: mapH }]}>
+          {ZONES.map((z) => (
+            <View key={z.name} style={[styles.zone, { top: z.from * mapH, height: (z.to - z.from) * mapH, borderTopColor: z.tint }]}>
+              <Text style={[styles.zoneName, { color: z.tint }]}>{z.name}</Text>
+            </View>
+          ))}
+          {OPPONENTS.flatMap((o) =>
+            o.unlockedBy.map((from) => (
+              <Link key={`${from}-${o.id}`} a={getOpponent(from)} b={o} w={mapW} h={mapH} lit={game.cleared.includes(from)} />
+            )),
+          )}
+          {OPPONENTS.map((o) => {
+            const unlocked = isUnlocked(o, game.cleared);
+            const cleared = game.cleared.includes(o.id);
+            const selected = o.id === sel.id;
+            const node = o.optional ? 68 : o.boss ? 82 : 66;
+            const ring = selected ? Colors.accent : cleared ? Colors.good : o.optional ? OPTIONAL : o.boss ? Colors.bad : Colors.border;
+            const team = fightSize(o);
+            return (
+              <Pressable
+                key={o.id}
+                onPress={() => game.selectOpponent(o.id)}
+                style={[
+                  styles.node,
+                  {
+                    left: o.map.x * mapW - node / 2,
+                    top: o.map.y * mapH - node / 2,
+                    width: node,
+                    height: node,
+                    borderRadius: node / 2,
+                    borderColor: ring,
+                    borderWidth: selected ? 4 : 3,
+                    borderStyle: o.optional && !cleared && !selected ? 'dashed' : 'solid',
+                  },
+                  selected && styles.nodeSelected,
+                ]}>
+                <View style={[styles.nodeInner, { borderRadius: node / 2 }]}>
+                  <Image
+                    source={BUG_PORTRAITS[o.id]}
+                    style={{ width: node * 1.15, height: node * 1.15, opacity: unlocked ? 1 : 0.9, tintColor: unlocked ? undefined : '#0B0D11' }}
+                  />
                 </View>
-              )}
-              {o.boss && <Text style={[styles.crown, { left: size / 2 - 13 }]}>👑</Text>}
-              <View style={[styles.nodeLabel, { left: (size - 120) / 2 }]}>
-                <Text style={[styles.nodeLabelText, selected && { color: Colors.accent }]} numberOfLines={1}>
-                  {unlocked ? o.name : '???'}
-                </Text>
-              </View>
-            </Pressable>
-          );
-        })}
-      </View>
+                {!unlocked && <Text style={styles.lock}>🔒</Text>}
+                {cleared && (
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>✓</Text>
+                  </View>
+                )}
+                {team !== '1v1' && (
+                  <View style={styles.teamBadge}>
+                    <Text style={styles.teamBadgeText}>{team}</Text>
+                  </View>
+                )}
+                {o.boss && <Text style={[styles.crown, { left: node / 2 - 13 }]}>{o.optional ? '💀' : '👑'}</Text>}
+                <View style={[styles.nodeLabel, { left: (node - 130) / 2 }]}>
+                  <Text style={[styles.nodeLabelText, selected && { color: Colors.accent }]} numberOfLines={1}>
+                    {unlocked ? o.name : '???'}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      </ScrollView>
 
-      <Panel style={{ gap: Spacing.md }}>
+      {/* The selected fight stays pinned under the map. */}
+      <View style={styles.sheet}>
         <View style={styles.row}>
-          <View style={[styles.bigPortrait, { borderColor: sel.boss ? Colors.bad : Colors.accent }]}>
-            <Image source={BUG_PORTRAITS[sel.id]} style={{ width: 110, height: 110, tintColor: selUnlocked ? undefined : '#0B0D11' }} />
+          <View style={[styles.bigPortrait, { borderColor: sel.optional ? OPTIONAL : sel.boss ? Colors.bad : Colors.accent }]}>
+            <Image source={BUG_PORTRAITS[sel.id]} style={{ width: 84, height: 84, tintColor: selUnlocked ? undefined : '#0B0D11' }} />
           </View>
-          <View style={{ flex: 1, gap: 4 }}>
-            <Text style={styles.h2}>{selUnlocked ? sel.name : '???'}</Text>
+          <View style={{ flex: 1, gap: 3 }}>
+            <Text style={styles.h2} numberOfLines={1}>
+              {selUnlocked ? sel.name : '???'}
+            </Text>
             <View style={styles.pills}>
-              {sel.boss && <Pill label="BOSS" color={Colors.bad} filled />}
+              {sel.optional ? <Pill label="OPTIONAL BOSS" color={OPTIONAL} filled /> : sel.boss && <Pill label="BOSS" color={Colors.bad} filled />}
+              {size !== '1v1' && <Pill label={size} color="#58C7FF" filled />}
               <Pill label={ARENA_NAMES[sel.arena]} color={ARENA_TINT[sel.arena]} />
               {game.cleared.includes(sel.id) && <Pill label="BEATEN" color={Colors.good} />}
             </View>
-            <Text style={styles.dim}>{selUnlocked ? sel.blurb : `Beat ${sel.unlockedBy.map((id) => getOpponent(id).name).join(' or ')} to unlock.`}</Text>
-            {selUnlocked && sel.moves.length > 0 && <Text style={styles.dim}>Moves: {sel.moves.map((m) => getMove(m).name).join(', ')}</Text>}
           </View>
         </View>
-
+        <Text style={styles.dim} numberOfLines={3}>
+          {selUnlocked ? sel.blurb : `Beat ${sel.unlockedBy.map((id) => getOpponent(id).name).join(' or ')} to unlock.`}
+        </Text>
+        {selUnlocked && (sel.allies?.length ?? 0) > 0 && (
+          <View style={styles.allies}>
+            <Text style={styles.alliesLabel}>WITH YOU</Text>
+            {sel.allies!.map((id) => (
+              <View key={id} style={styles.ally}>
+                <Image source={BUG_PORTRAITS[id]} style={styles.allyPortrait} />
+                <Text style={styles.allyName}>{getOpponent(id).name}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+        {selUnlocked && sel.moves.length > 0 && (
+          <Text style={styles.dim} numberOfLines={1}>
+            Moves: {sel.moves.map((m) => getMove(m).name).join(', ')}
+          </Text>
+        )}
         {selUnlocked && (
           <>
-            <Label>{firstClear ? 'FIRST-CLEAR REWARD (GUARANTEED)' : 'FIRST CLEAR ✓ CLAIMED'}</Label>
-            <View style={styles.chips}>
-              {sel.guaranteed.map((r, i) => (
-                <RewardChip key={i} reward={r} dim={!firstClear} />
-              ))}
-            </View>
-            <Text style={styles.dim}>
-              Every win: {sel.boss ? '3' : '2'} rolls on the loot table{sel.boss ? ', including signature drops. Farm it!' : '.'}
-            </Text>
+            <Label>{firstClear ? 'FIRST-CLEAR REWARD (GUARANTEED)' : `FIRST CLEAR ✓ · EVERY WIN: ${sel.boss ? 3 : 2} LOOT ROLLS`}</Label>
+            {firstClear && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+                {sel.guaranteed.map((r, i) => (
+                  <RewardChip key={i} reward={r} />
+                ))}
+              </ScrollView>
+            )}
           </>
         )}
         <Button
@@ -141,19 +195,23 @@ export default function Campaign() {
           disabled={errors.length > 0 || !selUnlocked}
           onPress={() => router.push('/arena')}
         />
-      </Panel>
-    </ScrollView>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { padding: Spacing.lg, gap: Spacing.lg, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center', paddingBottom: Spacing.xl * 2 },
+  root: { flex: 1, backgroundColor: Colors.bg },
+  content: { padding: Spacing.lg, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center' },
   map: {
     backgroundColor: Colors.bgDeep,
     borderRadius: 22,
     borderWidth: 1,
     borderColor: Colors.border,
+    overflow: 'hidden',
   },
+  zone: { position: 'absolute', left: 0, right: 0, borderTopWidth: 2, opacity: 0.9 },
+  zoneName: { fontSize: 10, fontWeight: '900', letterSpacing: 2, margin: 10, opacity: 0.85 },
   node: {
     position: 'absolute',
     backgroundColor: Colors.panel,
@@ -177,8 +235,20 @@ const styles = StyleSheet.create({
     borderColor: Colors.bgDeep,
   },
   badgeText: { color: Colors.bgDeep, fontSize: 12, fontWeight: '900' },
+  teamBadge: {
+    position: 'absolute',
+    left: -8,
+    top: -2,
+    backgroundColor: '#58C7FF',
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderWidth: 2,
+    borderColor: Colors.bgDeep,
+  },
+  teamBadgeText: { color: Colors.bgDeep, fontFamily: Fonts.display, fontSize: 11 },
   crown: { position: 'absolute', top: -20, fontSize: 22 },
-  nodeLabel: { position: 'absolute', bottom: -24, width: 120, alignItems: 'center' },
+  nodeLabel: { position: 'absolute', bottom: -24, width: 130, alignItems: 'center' },
   nodeLabelText: {
     color: Colors.text,
     fontFamily: Fonts.display,
@@ -189,11 +259,24 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     overflow: 'hidden',
   },
+  sheet: {
+    width: '100%',
+    maxWidth: MaxContentWidth,
+    alignSelf: 'center',
+    gap: Spacing.sm,
+    padding: Spacing.md + 2,
+    backgroundColor: Colors.panel,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: Colors.panelEdge,
+  },
   row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
   bigPortrait: {
-    width: 96,
-    height: 96,
-    borderRadius: 20,
+    width: 72,
+    height: 72,
+    borderRadius: 18,
     borderWidth: 2,
     backgroundColor: Colors.bgDeep,
     alignItems: 'center',
@@ -201,7 +284,22 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   pills: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  h2: { fontFamily: Fonts.display, color: Colors.text, fontSize: 26 },
+  h2: { fontFamily: Fonts.display, color: Colors.text, fontSize: 24 },
   dim: { color: Colors.textDim, fontSize: 13, lineHeight: 18 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  allies: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flexWrap: 'wrap' },
+  alliesLabel: { color: '#58C7FF', fontSize: 10, fontWeight: '900', letterSpacing: 1.4 },
+  ally: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Colors.bgDeep,
+    borderColor: '#58C7FF',
+    borderWidth: 1.5,
+    borderRadius: 999,
+    paddingRight: 10,
+    overflow: 'hidden',
+  },
+  allyPortrait: { width: 30, height: 30 },
+  allyName: { color: Colors.text, fontFamily: Fonts.display, fontSize: 13 },
+  chips: { flexDirection: 'row', gap: Spacing.sm },
 });

@@ -165,7 +165,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('overclock'), part('head-octo'), part('core-cell')],
     lootTable: [...tierTable('rare'), { reward: part('head-octo'), weight: 20 }, { reward: part('core-cell'), weight: 20 }],
     unlockedBy: ['snapclaw'],
-    map: { x: 0.92, y: 0.83 },
+    map: { x: 0.86, y: 0.83 },
   },
   {
     id: 'ironback',
@@ -216,7 +216,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [part('legs-weaver'), part('legs-weaver'), part('armor-aegis'), part('mand-shear')],
     lootTable: [...tierTable('epic'), { reward: part('legs-weaver'), weight: 30 }, { reward: part('head-octo'), weight: 20 }, { reward: part('abdomen-spinner'), weight: 15 }],
     unlockedBy: ['silkjaw'],
-    map: { x: 0.1, y: 0.7 },
+    map: { x: 0.14, y: 0.7 },
   },
   {
     id: 'gravelgrub',
@@ -312,7 +312,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [part('sting-lance'), part('armor-mirage'), part('head-visor')],
     lootTable: [...tierTable('epic'), { reward: part('armor-mirage'), weight: 20 }, { reward: part('sting-lance'), weight: 14 }, { reward: part('sting-laser'), weight: 14 }],
     unlockedBy: ['glimmer'],
-    map: { x: 0.08, y: 0.345 },
+    map: { x: 0.14, y: 0.345 },
   },
   {
     id: 'lenswing',
