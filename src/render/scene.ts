@@ -684,8 +684,8 @@ export class ArenaRenderer {
       this.camYaw += THREE.MathUtils.clamp(turn, -0.8 * dt, 0.8 * dt);
     }
     const high = Math.max(a.alt, b.alt) / CELL;
-    const pitch = 0.62 + Math.min(0.2, high * 0.05);
-    const dist = THREE.MathUtils.clamp(sep * 0.8 + 11, 12, 24) * Math.sqrt(this.aspectK);
+    const pitch = 0.72 + Math.min(0.18, high * 0.05);
+    const dist = THREE.MathUtils.clamp(sep * 0.7 + 22, 22, 34) * Math.sqrt(this.aspectK);
     const dir = new THREE.Vector3(Math.sin(this.camYaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(this.camYaw) * Math.cos(pitch));
     const followPos = target.clone().addScaledVector(dir, dist);
     const k = 1 - Math.exp(-dt * 3.5);
