@@ -12,6 +12,7 @@ import { ARENA_SIZE, CELL, partWorld, type Bug, type Sim, type SimPart } from '@
 import { createRenderer } from './gl';
 import { ArenaDressing } from './arena';
 import { FlexRig, GIVE } from './flex';
+import { Spine } from './spine';
 import { adjacentPairs, buildConnector, buildPart, seatHeight, stackOffset, UNDER_LIFT, UNDER_SCALE, type Connector, type PartModel } from './models';
 
 const HALF = ARENA_SIZE / CELL / 2;
@@ -37,6 +38,8 @@ type PartView = {
   punch: number;
   /** Index in the bug's FlexRig. */
   flex: number;
+  /** Rest spot in pose space before the spine bends it. */
+  rest: THREE.Vector3;
 };
 type BugView = {
   group: THREE.Group;
@@ -46,6 +49,8 @@ type BugView = {
   links: { a: PartView; b: PartView; c: Connector }[];
   /** Spring joints: parts sway and lag instead of moving as one rigid block. */
   rig: FlexRig;
+  /** Bendy body: rows of parts curve on turns and ripple as it walks. */
+  spine: Spine;
   /** On the floor (stays down when the bug flies): part shadows + thin team ring. */
   ground: THREE.Group;
   /** Shadows only (shrink as the bug climbs). */
@@ -169,6 +174,7 @@ export class ArenaRenderer {
   intro = 0;
   private eventCursor = 0;
   private tmpQ = new THREE.Quaternion();
+  private tmpV = new THREE.Vector3();
   private bits: { m: THREE.Mesh; vel: THREE.Vector3; life: number; max: number }[] = [];
   private nextBit = 0;
   private waves: { m: THREE.Mesh; life: number }[] = [];
@@ -304,7 +310,7 @@ export class ArenaRenderer {
         model.root.scale.setScalar(UNDER_SCALE);
         model.root.position.y = 0.02;
       }
-      return { part: p, model, attached: true, punch: 0, flex: -1 };
+      return { part: p, model, attached: true, punch: 0, flex: -1, rest: new THREE.Vector3() };
     });
     // Stacked parts rest on top of the part in their cell.
     for (const pv of parts) {
@@ -323,6 +329,7 @@ export class ArenaRenderer {
 
     // Spring joints: each part hangs off the neighbour one step closer to the
     // thorax (stacked/slung parts off the part in their cell).
+    for (const pv of parts) pv.rest.copy(pv.model.root.position);
     const rig = new FlexRig(pose);
     const at = new Map(onGrid.map((pv) => [`${pv.part.x},${pv.part.y}`, pv]));
     const root = onGrid.find((pv) => pv.part.part.category === 'thorax') ?? onGrid[0];
@@ -350,6 +357,11 @@ export class ArenaRenderer {
       pv.flex = rig.add(pv.model.root, pv.model.root.position, base && !pv.part.z ? -1 : (base?.flex ?? -1), GIVE[pv.part.part.category], 2);
     }
     rig.finalize();
+    const thorax = onGrid.find((pv) => pv.part.part.category === 'thorax') ?? onGrid[0];
+    const spine = new Spine(
+      onGrid.map((pv) => pv.rest.z),
+      thorax?.rest.z ?? 0,
+    );
 
     const r = bug.radius / CELL;
     const team = bug.index === 0 ? 0x3ddc97 : 0xff5d5d;
@@ -387,7 +399,7 @@ export class ArenaRenderer {
     shadow.renderOrder = 1;
     shadows.add(shadow);
     softShadow(shadow, parts);
-    return { group, pose, parts, links, rig, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
+    return { group, pose, parts, links, rig, spine, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
   }
 
   private fitOffset(aspect: number) {
@@ -480,7 +492,16 @@ export class ArenaRenderer {
         const bob = bug.dead ? 0 : Math.abs(Math.sin(v.walk)) * 0.05 * speed + Math.sin(t * 2.2 + bi) * 0.012;
         v.pose.position.y += (bob - v.pose.position.y) * 0.3;
       }
-      // Spring joints, then re-seat the struts between the swaying parts.
+      // Bend the spine (turning lag, walking sway and ripple), then the spring joints on top,
+      // then re-seat the struts between the swaying parts.
+      const yawRate = frozen || bug.dead ? 0 : -turn / Math.max(dt, 1e-3);
+      v.spine.update(frozen ? 0 : dt, THREE.MathUtils.clamp(yawRate, -6, 6), v.walk, speed, Math.min(1, bug.alt / 14), t);
+      for (const pv of v.parts) {
+        if (!pv.attached || pv.flex < 0) continue;
+        const b = v.spine.transform(pv.rest.x, pv.rest.z);
+        this.tmpV.set(b.x, pv.rest.y + b.lift, b.z);
+        v.rig.setPose(pv.flex, this.tmpV, b.yaw, b.pitch);
+      }
       v.rig.update(dt);
       for (const l of v.links) {
         l.c.obj.visible = l.a.attached && l.b.attached;
@@ -558,6 +579,8 @@ export class ArenaRenderer {
             v.pose.getWorldQuaternion(this.tmpQ).invert();
             dir.normalize().applyQuaternion(this.tmpQ);
             v.rig.impulse(pv.flex, dir, THREE.MathUtils.clamp(e.dmg / 4, 1.5, 6));
+            // …and the whole body wobbles from the blow.
+            v.spine.kick(pv.rest.z, dir.x * THREE.MathUtils.clamp(e.dmg / 5, 0.6, 3) * (e.crit ? 1.6 : 1));
           }
         }
         const at = toWorld(e.x, e.y, e.h / CELL + 0.7);

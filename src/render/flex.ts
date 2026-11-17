@@ -30,16 +30,21 @@ export const GIVE: Record<Category, number> = {
   core: 0.55,
 };
 
-const STIFF = 210; // spring constant (1/s²): higher = snappier, less sway
-const DAMP = 10; // damping (1/s): lower = more bounce
-const CARRY = 0.8; // share of the parent's displacement a child inherits
-const MAX_DISP = 0.38; // world units
+const STIFF = 140; // spring constant (1/s²): higher = snappier, less sway
+const DAMP = 8; // damping (1/s): lower = more bounce
+const CARRY = 0.85; // share of the parent's displacement a child inherits
+const MAX_DISP = 0.5; // world units
+const LEAN = 1.25; // how far a part tips into its sway (radians per unit of displacement)
 const MAX_ACC = 260; // ignore teleports / first frames
 const SUBSTEP = 1 / 120;
 
 type Node = {
   root: THREE.Object3D;
   rest: THREE.Vector3;
+  /** Base rotation: the part's own yaw (e.g. weapon facing) plus whatever the spine adds. */
+  yaw: number;
+  baseYaw: number;
+  pitch: number;
   parent: number;
   give: number;
   off: THREE.Vector3;
@@ -67,6 +72,9 @@ export class FlexRig {
     this.nodes.push({
       root,
       rest: rest.clone(),
+      yaw: root.rotation.y,
+      baseYaw: root.rotation.y,
+      pitch: 0,
       parent,
       give: give * (1 + depth * 0.22),
       off: new THREE.Vector3(),
@@ -87,6 +95,18 @@ export class FlexRig {
 
   deactivate(i: number) {
     if (this.nodes[i]) this.nodes[i].active = false;
+  }
+
+  /**
+   * Move a part's rest spot and bend (pose space), e.g. as the spine curves.
+   * `yaw`/`pitch` are added to the part's own base rotation.
+   */
+  setPose(i: number, rest: THREE.Vector3, yaw: number, pitch: number) {
+    const n = this.nodes[i];
+    if (!n) return;
+    n.rest.copy(rest);
+    n.yaw = n.baseYaw + yaw;
+    n.pitch = pitch;
   }
 
   /** Current displacement of a part from its rest spot (pose space). */
@@ -142,9 +162,10 @@ export class FlexRig {
       if (n.disp.length() > MAX_DISP) n.disp.setLength(MAX_DISP);
 
       n.root.position.copy(n.rest).add(n.disp);
-      // Lean the part into its sway a little.
-      n.root.rotation.x = n.disp.z * 0.9;
-      n.root.rotation.z = -n.disp.x * 0.9;
+      // Lean the part into its sway.
+      n.root.rotation.y = n.yaw;
+      n.root.rotation.x = n.pitch + n.disp.z * LEAN;
+      n.root.rotation.z = -n.disp.x * LEAN;
     }
   }
 }

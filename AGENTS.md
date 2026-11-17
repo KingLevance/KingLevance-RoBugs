@@ -64,6 +64,7 @@ src/render/         three.js only — reads sim state, never writes it
   arena.ts          ArenaDressing: themed floor/walls/hazards/stadium/sky/crowd per arena
   garage-scene.ts   GarageRenderer: bug on its build grid, raycast picking for drag
   flex.ts           FlexRig: spring joints so parts sway/lag/bounce (cosmetic)
+  spine.ts          Spine: bendy body (rows curve on turns, walking sway/ripple, hit wobble)
   bug-model.ts      Whole bug as one display model (hub showcase, portrait renderer)
   showcase.ts       ShowcaseRenderer: the hub's turning bug on a pedestal
   gl.ts             three.js renderer on an expo-gl context
