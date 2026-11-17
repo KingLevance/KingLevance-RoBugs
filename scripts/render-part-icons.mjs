@@ -47,7 +47,9 @@ window.renderIcons = (size) => {
     const sphere = new THREE.Box3().setFromObject(m.root).getBoundingSphere(new THREE.Sphere());
     const r = sphere.radius * 1.02;
     const cam = new THREE.OrthographicCamera(-r, r, r, -r, 0.1, 50);
-    cam.position.copy(sphere.center).addScaledVector(dir, 10);
+    // Wings are flat: look at them from higher up so the membranes read.
+    const view = p.category === 'wings' ? new THREE.Vector3(0.35, 1, -0.55).normalize() : dir;
+    cam.position.copy(sphere.center).addScaledVector(view, 10);
     cam.lookAt(sphere.center);
     renderer.render(scene, cam);
     out[p.id] = canvas.toDataURL('image/png');

@@ -1,7 +1,8 @@
 /**
- * Part models: chunky rounded toon shapes with inverted-hull outlines, built
- * from primitives (no external assets). Every catalog part has its own look,
- * and every model animates from a small context (walk cycle, speed, attacks).
+ * Part models: chunky rounded toon shapes with inverted-hull outlines and a
+ * soft rim light, built from primitives and small procedural textures (no
+ * external assets). Every catalog part has its own look, and every model
+ * animates from a small context (walk cycle, speed, attacks, flight).
  *
  * Local space: −z is the bug's front, +y up, one grid cell = 1 unit, floor at y = 0.
  */
@@ -18,7 +19,7 @@ const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 let gradient: THREE.DataTexture | null = null;
 function toonGradient() {
   if (!gradient) {
-    const data = new Uint8Array([110, 110, 110, 255, 185, 185, 185, 255, 255, 255, 255, 255]);
+    const data = new Uint8Array([105, 105, 105, 255, 180, 180, 180, 255, 255, 255, 255, 255]);
     gradient = new THREE.DataTexture(data, 3, 1, THREE.RGBAFormat);
     gradient.minFilter = THREE.NearestFilter;
     gradient.magFilter = THREE.NearestFilter;
@@ -27,17 +28,45 @@ function toonGradient() {
   return gradient;
 }
 
+/** Adds a soft fresnel rim (edges catch light) to a toon material. */
+function addRim(m: THREE.MeshToonMaterial, strength: number) {
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace(
+      '#include <emissivemap_fragment>',
+      `#include <emissivemap_fragment>
+      {
+        float facing = clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0);
+        float rim = smoothstep(0.62, 0.92, 1.0 - facing);
+        totalEmissiveRadiance += mix(diffuseColor.rgb, vec3(1.0), 0.55) * rim * ${strength.toFixed(3)};
+      }`,
+    );
+  };
+  m.customProgramCacheKey = () => `rim${strength.toFixed(3)}`;
+}
+
 export function toonMaterial(
   color: THREE.ColorRepresentation,
-  opts: { emissive?: THREE.ColorRepresentation; transparent?: boolean; opacity?: number } = {},
+  opts: {
+    emissive?: THREE.ColorRepresentation;
+    transparent?: boolean;
+    opacity?: number;
+    rim?: number;
+    map?: THREE.Texture;
+    side?: THREE.Side;
+  } = {},
 ) {
-  return new THREE.MeshToonMaterial({
+  const m = new THREE.MeshToonMaterial({
     color,
     gradientMap: toonGradient(),
     emissive: opts.emissive ?? 0x000000,
     transparent: opts.transparent ?? false,
     opacity: opts.opacity ?? 1,
+    map: opts.map ?? null,
+    side: opts.side ?? THREE.FrontSide,
   });
+  if (opts.transparent) m.depthWrite = false;
+  if (opts.rim) addRim(m, opts.rim);
+  return m;
 }
 
 /** A toon mesh plus its black outline shell (uniform-scale hull; used for arena props). */
@@ -67,11 +96,32 @@ function geo(key: string, make: () => THREE.BufferGeometry) {
 
 const rbox = (w: number, h: number, d: number, r = 0.1) =>
   geo(`rb:${w}:${h}:${d}:${r}`, () => new RoundedBoxGeometry(w, h, d, 2, Math.min(r, w / 2, h / 2, d / 2)));
-const ball = (r: number) => geo(`sp:${r}`, () => new THREE.SphereGeometry(r, 12, 9));
+const ball = (r: number) => geo(`sp:${r}`, () => new THREE.SphereGeometry(r, 14, 10));
+/** Ellipsoid with radii rx, ry, rz. */
+const ellip = (rx: number, ry: number, rz: number) =>
+  geo(`el:${rx}:${ry}:${rz}`, () => new THREE.SphereGeometry(1, 16, 12).scale(rx, ry, rz));
+/** Upper half of an ellipsoid (flat side down at y = 0). */
+const dome = (rx: number, ry: number, rz: number) =>
+  geo(`do:${rx}:${ry}:${rz}`, () => new THREE.SphereGeometry(1, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2).scale(rx, ry, rz));
 const cone = (r: number, h: number, seg = 8) => geo(`co:${r}:${h}:${seg}`, () => new THREE.ConeGeometry(r, h, seg));
-const cyl = (rt: number, rb: number, h: number, seg = 10) =>
+const cyl = (rt: number, rb: number, h: number, seg = 12) =>
   geo(`cy:${rt}:${rb}:${h}:${seg}`, () => new THREE.CylinderGeometry(rt, rb, h, seg));
-const torus = (r: number, tube: number) => geo(`to:${r}:${tube}`, () => new THREE.TorusGeometry(r, tube, 6, 14));
+const torus = (r: number, tube: number, arc = Math.PI * 2) =>
+  geo(`to:${r}:${tube}:${arc.toFixed(3)}`, () => new THREE.TorusGeometry(r, tube, 6, 16, arc));
+/** Capsule along +y that tapers from radius r0 (bottom) to r1 (top); `len` is the straight part. */
+const taperGeo = (r0: number, r1: number, len: number) =>
+  geo(`tp:${r0}:${r1}:${len.toFixed(3)}`, () => {
+    const pts: THREE.Vector2[] = [];
+    for (let i = 0; i <= 4; i++) {
+      const a = -Math.PI / 2 + (i / 4) * (Math.PI / 2);
+      pts.push(new THREE.Vector2(Math.cos(a) * r0, -len / 2 + Math.sin(a) * r0));
+    }
+    for (let i = 0; i <= 4; i++) {
+      const a = (i / 4) * (Math.PI / 2);
+      pts.push(new THREE.Vector2(Math.max(1e-4, Math.cos(a) * r1), len / 2 + Math.sin(a) * r1));
+    }
+    return new THREE.LatheGeometry(pts, 10);
+  });
 
 /** Mesh + outline whose thickness is even on every axis (works for flat or long shapes). */
 function shape(g: THREE.BufferGeometry, mat: THREE.Material, outline = OUTLINE_W) {
@@ -86,20 +136,119 @@ function shape(g: THREE.BufferGeometry, mat: THREE.Material, outline = OUTLINE_W
   return group;
 }
 
-/** A rounded limb between two points. */
-function limb(a: THREE.Vector3, b: THREE.Vector3, r: number, mat: THREE.Material, outline = OUTLINE_W) {
+/** A rounded limb between two points, tapering from radius r0 at `a` to r1 at `b`. */
+function seg(a: THREE.Vector3, b: THREE.Vector3, r0: number, mat: THREE.Material, r1 = r0, outline = OUTLINE_W) {
   const len = a.distanceTo(b);
-  const g = geo(`cap:${r}:${len.toFixed(3)}`, () => new THREE.CapsuleGeometry(r, len, 2, 8));
-  const m = shape(g, mat, outline);
+  const m = shape(taperGeo(r0, r1, len), mat, outline);
   m.position.copy(a).add(b).multiplyScalar(0.5);
   m.quaternion.setFromUnitVectors(UP, b.clone().sub(a).normalize());
   return m;
+}
+
+/** A smooth tapered chain through `pts` (radius r0 at the start to r1 at the end). */
+function chain(pts: THREE.Vector3[], r0: number, r1: number, mat: THREE.Material, outline = OUTLINE_W) {
+  const g = new THREE.Group();
+  const n = pts.length - 1;
+  for (let i = 0; i < n; i++) {
+    const ra = THREE.MathUtils.lerp(r0, r1, i / n);
+    const rb = THREE.MathUtils.lerp(r0, r1, (i + 1) / n);
+    g.add(seg(pts[i], pts[i + 1], ra, mat, rb, outline));
+  }
+  return g;
 }
 
 const at = <T extends THREE.Object3D>(o: T, x: number, y: number, z: number) => {
   o.position.set(x, y, z);
   return o;
 };
+
+/** Point the +y axis of `o` along `dir`. */
+const aim = <T extends THREE.Object3D>(o: T, dir: THREE.Vector3) => {
+  o.quaternion.setFromUnitVectors(UP, dir.clone().normalize());
+  return o;
+};
+
+// ── Procedural textures ─────────────────────────────────────────────
+
+const lin = (c: number) => Math.round(Math.pow(c / 255, 2.2) * 255);
+
+/**
+ * Wing membrane: a colour gradient from root to tip, darker veins fanning out
+ * from the root, cross-veins (cells) and a dark rim. Values are written
+ * linear so they look right without an sRGB texture format.
+ */
+const wingTex = new Map<string, THREE.DataTexture>();
+function wingTexture(kind: 'foil' | 'glass') {
+  let tex = wingTex.get(kind);
+  if (tex) return tex;
+  const W = 128;
+  const H = 64;
+  const data = new Uint8Array(W * H * 4);
+  const [root, tip] =
+    kind === 'glass'
+      ? [
+          [150, 235, 255],
+          [214, 160, 255],
+        ]
+      : [
+          [255, 214, 150],
+          [255, 160, 110],
+        ];
+  const veins = kind === 'glass' ? 7 : 5;
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const u = x / (W - 1);
+      const v = y / (H - 1) - 0.5;
+      // Fan of veins from the root (u = 0, v = 0).
+      const ang = Math.atan2(v, u + 0.08);
+      const fan = Math.abs(Math.sin(ang * veins * 1.6));
+      let vein = fan < 0.1 + u * 0.03 ? 1 : 0;
+      // Cross veins: arcs around the root.
+      const rr = Math.hypot(u, v * 1.6);
+      if (Math.abs(Math.sin(rr * (kind === 'glass' ? 22 : 14))) < 0.09 && u > 0.12) vein = Math.max(vein, 0.7);
+      // Leading edge (front, v < 0) is a thick vein.
+      if (v > 0.4) vein = 1;
+      const k = Math.min(1, u * 1.1);
+      const c = root.map((r, i) => r + (tip[i] - r) * k);
+      const shade = vein ? 0.45 : 1;
+      const o = (y * W + x) * 4;
+      data[o] = lin(c[0] * shade);
+      data[o + 1] = lin(c[1] * shade);
+      data[o + 2] = lin(c[2] * shade);
+      data[o + 3] = vein ? 235 : kind === 'glass' ? 125 : 150;
+    }
+  tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  wingTex.set(kind, tex);
+  return tex;
+}
+
+/** Flat insect-wing outline in the x/z plane: root at the origin, reaching out along +x, leading edge toward −z. */
+function wingGeo(len: number, width: number, key: string) {
+  return geo(`wing:${key}:${len}:${width}`, () => {
+    const s = new THREE.Shape();
+    s.moveTo(0, 0.04 * width);
+    s.bezierCurveTo(len * 0.25, width * 0.55, len * 0.75, width * 0.62, len, width * 0.18);
+    s.bezierCurveTo(len * 1.04, 0, len * 0.9, -width * 0.32, len * 0.6, -width * 0.36);
+    s.bezierCurveTo(len * 0.3, -width * 0.4, len * 0.1, -width * 0.25, 0, -0.04 * width);
+    s.closePath();
+    const g = new THREE.ShapeGeometry(s, 16);
+    // Shape y → −z (leading edge forward), and UVs normalised to the outline's bounds.
+    g.rotateX(-Math.PI / 2);
+    g.computeBoundingBox();
+    const bb = g.boundingBox!;
+    const pos = g.attributes.position;
+    const uv = g.attributes.uv;
+    for (let i = 0; i < pos.count; i++) {
+      uv.setXY(i, (pos.getX(i) - bb.min.x) / (bb.max.x - bb.min.x), 1 - (pos.getZ(i) - bb.min.z) / (bb.max.z - bb.min.z));
+    }
+    uv.needsUpdate = true;
+    return g;
+  });
+}
 
 // ── Model API ───────────────────────────────────────────────────────
 
@@ -143,8 +292,10 @@ const LOOK: Record<string, number> = {
   'sensor-radar': 1,
 };
 
-const STEEL = 0x8c98a6;
+const STEEL = 0x9aa6b4;
 const GUNMETAL = 0x3a424d;
+const IVORY = 0xf2ead8;
+const RIM = 0.32;
 
 /**
  * Build the model for a catalog part.
@@ -159,58 +310,104 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
 
   const mats: { m: THREE.MeshToonMaterial; base: THREE.Color; em: THREE.Color }[] = [];
   const mat = (color: THREE.ColorRepresentation, opts: Parameters<typeof toonMaterial>[1] = {}) => {
-    const m = toonMaterial(color, opts);
+    const m = toonMaterial(color, { rim: opts.transparent ? 0 : RIM, ...opts });
     mats.push({ m, base: m.color.clone(), em: m.emissive.clone() });
     return m;
   };
   const main = mat(baseColor);
   const dark = mat(baseColor.clone().multiplyScalar(0.55));
-  const light = mat(baseColor.clone().lerp(new THREE.Color(0xffffff), 0.35));
+  const light = mat(baseColor.clone().lerp(new THREE.Color(0xffffff), 0.4));
+  const gun = mat(GUNMETAL);
+  const steel = mat(STEEL);
   const sides = side === 0 ? [-1, 1] : [side];
+  /** Little steel bolt heads. */
+  const bolt = (x: number, y: number, z: number, r = 0.045) => root.add(at(new THREE.Mesh(ball(r), steel), x, y, z));
   let animate: PartModel['animate'] = () => {};
 
   switch (def.category) {
     case 'head': {
       const skull = new THREE.Group();
-      skull.add(at(shape(rbox(0.8, 0.58, 0.78, 0.2), main), 0, 0.58, 0));
-      skull.add(at(shape(rbox(0.56, 0.34, 0.3, 0.12), dark), 0, 0.47, -0.42)); // snout
-      skull.add(at(shape(rbox(0.5, 0.2, 0.2, 0.08), mat(GUNMETAL), 0), 0, 0.42, 0.42)); // neck
-      const glow = mat(0x9fd4ff, { emissive: 0x2a8cff });
+      skull.add(at(shape(rbox(0.7, 0.26, 0.66, 0.1), dark), 0, 0.38, 0.02)); // jaw plate
+      const glow = mat(0xa8dcff, { emissive: 0x2a8cff });
+      const blinkers: THREE.Object3D[] = [];
       if (look === 0) {
+        skull.add(at(shape(ellip(0.42, 0.3, 0.4), main), 0, 0.6, 0.02)); // cranium
+        skull.add(at(shape(rbox(0.74, 0.1, 0.24, 0.05), light, 0.025), 0, 0.84, -0.2)); // brow
         for (const d of [-1, 1]) {
-          skull.add(at(shape(ball(0.15), glow, 0.03), 0.25 * d, 0.72, -0.3));
-          skull.add(at(new THREE.Mesh(ball(0.07), OUTLINE), 0.27 * d, 0.74, -0.42)); // pupil
+          const eye = new THREE.Group();
+          eye.add(shape(ball(0.16), mat(0xf6fbff), 0.03));
+          eye.add(at(new THREE.Mesh(ball(0.1), glow), 0, 0, -0.08)); // iris
+          eye.add(at(new THREE.Mesh(ball(0.05), OUTLINE), 0, 0, -0.15)); // pupil
+          eye.add(at(new THREE.Mesh(ball(0.028), new THREE.MeshBasicMaterial({ color: 0xffffff })), -0.04, 0.05, -0.17));
+          eye.position.set(0.21 * d, 0.68, -0.28);
+          eye.rotation.y = -0.25 * d;
+          skull.add(eye);
+          blinkers.push(eye);
+          for (let i = 0; i < 3; i++) skull.add(at(shape(rbox(0.04, 0.05, 0.16, 0.02), gun, 0), 0.4 * d, 0.5, -0.08 + i * 0.1)); // cheek vents
         }
+        // Mouth grille.
+        skull.add(at(shape(rbox(0.4, 0.14, 0.12, 0.05), gun, 0.025), 0, 0.42, -0.34));
+        for (let i = -1; i <= 1; i++) skull.add(at(new THREE.Mesh(rbox(0.07, 0.03, 0.04, 0.01), light), i * 0.11, 0.42, -0.41));
       } else {
-        const visor = mat(0xbff3ff, { emissive: 0x19c2d8 });
-        skull.add(at(shape(rbox(0.74, 0.17, 0.2, 0.08), visor, 0.03), 0, 0.7, -0.33));
-        skull.add(at(shape(rbox(0.1, 0.22, 0.5, 0.05), light), 0, 0.92, 0.02)); // crest
+        skull.add(at(shape(ellip(0.4, 0.3, 0.46), main), 0, 0.6, 0.04)); // helmet
+        skull.add(at(shape(ellip(0.36, 0.13, 0.24), mat(0xc9f6ff, { emissive: 0x15b5cf }), 0.03), 0, 0.64, -0.24)); // wraparound visor
+        const scan = new THREE.Mesh(ball(0.06), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+        scan.position.set(0, 0.66, -0.47);
+        skull.add(scan);
+        blinkers.push(scan);
+        skull.add(at(shape(rbox(0.08, 0.26, 0.6, 0.04), light, 0.025), 0, 0.92, 0.06)); // crest fin
+        for (const d of [-1, 1]) {
+          skull.add(at(shape(cyl(0.09, 0.11, 0.08, 12), gun, 0.02).rotateZ(Math.PI / 2), 0.41 * d, 0.6, 0.06)); // ear caps
+          skull.add(seg(V(0.43 * d, 0.62, 0.06), V(0.5 * d, 0.86, 0.2), 0.025, steel, 0.015, 0));
+        }
       }
+      skull.add(at(shape(cyl(0.16, 0.2, 0.18, 10), gun, 0.02).rotateX(Math.PI / 2), 0, 0.46, 0.38)); // neck socket
       root.add(skull);
       animate = ({ t, speed }) => {
-        skull.rotation.y = Math.sin(t * 0.9 + row) * 0.07 * (1 - speed * 0.6);
-        skull.rotation.x = Math.sin(t * 1.7 + row) * 0.02 - speed * 0.05;
-        glow.emissiveIntensity = 0.8 + Math.sin(t * 4) * 0.2;
+        skull.rotation.y = Math.sin(t * 0.9 + row) * 0.08 * (1 - speed * 0.6);
+        skull.rotation.x = Math.sin(t * 1.7 + row) * 0.025 - speed * 0.05;
+        glow.emissiveIntensity = 0.85 + Math.sin(t * 4) * 0.2;
+        if (look === 0) {
+          // Blink every few seconds.
+          const b = (t + row * 0.7) % 3.4;
+          const open = b < 0.12 ? Math.abs(b - 0.06) / 0.06 : 1;
+          for (const e of blinkers) e.scale.y = 0.15 + 0.85 * open;
+        } else {
+          blinkers[0].position.x = Math.sin(t * 2.2 + row) * 0.26; // visor scanner sweeps
+        }
       };
       break;
     }
 
     case 'thorax': {
       const body = new THREE.Group();
-      body.add(at(shape(rbox(0.94, 0.68, 0.94, 0.2), main), 0, 0.58, 0));
-      body.add(at(shape(rbox(0.56, 0.1, 0.56, 0.05), dark, 0.02), 0, 0.95, 0)); // hatch
-      const bolt = mat(STEEL);
-      for (const d of [-1, 1]) body.add(at(new THREE.Mesh(ball(0.07), bolt), 0.3 * d, 0.97, -0.3));
-      if (look === 1) {
-        for (const d of [-1, 1]) {
-          body.add(at(shape(rbox(0.16, 0.16, 0.8, 0.07), light), 0.4 * d, 0.9, 0)); // shoulder ridge
-          body.add(at(shape(cyl(0.06, 0.06, 0.3, 8), bolt, 0.02), 0.2 * d, 1.02, 0.3)); // exhaust
-        }
+      body.add(at(shape(rbox(0.9, 0.36, 0.9, 0.14), gun), 0, 0.42, 0)); // chassis
+      const shell = new THREE.Group();
+      shell.position.y = 0.56;
+      body.add(shell);
+      const vents: THREE.MeshToonMaterial[] = [];
+      const ventMat = mat(0xffb070, { emissive: 0xff6a1a });
+      vents.push(ventMat);
+      if (look === 0) {
+        shell.add(shape(dome(0.48, 0.36, 0.48), main));
+        shell.add(at(new THREE.Mesh(torus(0.46, 0.035), dark), 0, 0.02, 0).rotateX(Math.PI / 2)); // seam
+        shell.add(at(shape(rbox(0.4, 0.08, 0.4, 0.04), dark, 0.02), 0, 0.33, 0)); // hatch
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) shell.add(at(new THREE.Mesh(ball(0.04), steel), 0.15 * sx, 0.37, 0.15 * sz));
+      } else {
+        // Overlapping chitin plates with a ridge of spines down the middle.
+        [-0.22, 0.04, 0.28].forEach((z, i) => {
+          shell.add(at(shape(dome(0.47 - i * 0.03, 0.34 - i * 0.04, 0.26), i % 2 ? light : main), 0, -0.02 * i, z));
+        });
+        for (let i = 0; i < 3; i++) shell.add(at(shape(cone(0.05, 0.16, 6), light, 0.02), 0, 0.38 - i * 0.04, -0.2 + i * 0.24));
+        for (const d of [-1, 1]) shell.add(aim(at(shape(cone(0.07, 0.24, 6), dark, 0.02), 0.42 * d, 0.1, -0.2), V(d, 0.6, -0.2)));
       }
+      for (const d of [-1, 1])
+        for (let i = 0; i < 3; i++) body.add(at(new THREE.Mesh(rbox(0.03, 0.05, 0.12, 0.012), ventMat), 0.455 * d, 0.42, -0.16 + i * 0.16)); // glowing side vents
       root.add(body);
-      animate = ({ t }) => {
-        const s = 1 + Math.sin(t * 2 + row) * 0.012;
-        body.scale.set(s, 1 + Math.sin(t * 2 + row) * 0.02, s);
+      animate = ({ t, speed }) => {
+        const s = 1 + Math.sin(t * 2 + row) * 0.015;
+        shell.scale.set(s, 1 + Math.sin(t * 2 + row) * 0.03, s);
+        for (const v of vents) v.emissiveIntensity = 0.6 + speed * 0.6 + Math.sin(t * 5 + row) * 0.25;
       };
       break;
     }
@@ -220,294 +417,438 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
       const rows: [number, number, number, number][] =
         look === 0
           ? [
-              [0.86, 0.6, 0.36, -0.3],
-              [0.78, 0.54, 0.34, 0.02],
-              [0.6, 0.44, 0.32, 0.32],
+              [0.44, 0.3, 0.22, -0.26],
+              [0.4, 0.28, 0.2, 0.04],
+              [0.31, 0.23, 0.18, 0.31],
             ]
           : [
-              [0.92, 0.66, 0.5, -0.22],
-              [0.84, 0.6, 0.46, 0.24],
+              [0.46, 0.32, 0.28, -0.18],
+              [0.38, 0.28, 0.24, 0.24],
             ];
-      rows.forEach(([w, h, d, z], i) => {
-        const seg = new THREE.Group();
-        seg.add(at(shape(rbox(w, h, d, 0.16), i % 2 ? dark : main), 0, 0.52 - i * 0.02, 0));
-        seg.position.z = z;
-        root.add(seg);
-        segs.push(seg);
+      rows.forEach(([rx, ry, rz, z], i) => {
+        const s = new THREE.Group();
+        s.add(at(shape(ellip(rx, ry, rz), i % 2 ? dark : main), 0, 0.52 - i * 0.02, 0));
+        const band = at(new THREE.Mesh(torus(1, 0.035 / rx), light), 0, 0.52 - i * 0.02, rz * 0.45);
+        band.scale.set(rx * 0.9, ry * 0.9, rx * 0.9);
+        s.add(band); // stripe band hugging the segment
+        s.position.z = z;
+        root.add(s);
+        segs.push(s);
       });
+      const tipMat = mat(0xfff0c0, { emissive: 0xffa21f });
+      const tip = new THREE.Mesh(ball(0.07), tipMat);
+      segs[segs.length - 1].add(at(tip, 0, 0.5, rows[rows.length - 1][2] + 0.04));
+      let fluid: THREE.Object3D[] = [];
+      let fluidMat: THREE.MeshToonMaterial | null = null;
       if (look === 1) {
-        const tank = mat(STEEL);
+        // Glass fuel tanks with glowing fluid.
+        const glass = mat(0xdff7ff, { transparent: true, opacity: 0.35 });
+        fluidMat = mat(0x8dffb5, { emissive: 0x1fcf6a });
+        fluid = [];
         for (const d of [-1, 1]) {
-          const t = shape(cyl(0.13, 0.13, 0.7, 10), tank);
-          t.rotation.x = Math.PI / 2;
-          root.add(at(t, 0.4 * d, 0.82, 0.02));
+          const tank = new THREE.Group();
+          tank.add(new THREE.Mesh(cyl(0.12, 0.12, 0.62, 14), glass).rotateX(Math.PI / 2));
+          const f = new THREE.Mesh(cyl(0.095, 0.095, 0.56, 12), fluidMat).rotateX(Math.PI / 2);
+          tank.add(f);
+          fluid.push(f);
+          for (const z of [-0.33, 0.33]) tank.add(at(shape(cyl(0.14, 0.14, 0.06, 14), steel, 0.02).rotateX(Math.PI / 2), 0, 0, z));
+          tank.position.set(0.4 * d, 0.84, 0.02);
+          root.add(tank);
         }
       }
-      animate = ({ t, walk, speed }) =>
+      animate = ({ t, walk, speed }) => {
         segs.forEach((s, i) => {
-          const wag = Math.sin(walk - i * 0.7) * 0.1 * speed + Math.sin(t * 1.3 - i * 0.6 + row) * 0.03;
+          const wag = Math.sin(walk - i * 0.7) * 0.1 * speed + Math.sin(t * 1.3 - i * 0.6 + row) * 0.035;
           s.rotation.y = wag * (i + 1) * 0.6;
           s.position.x = wag * (i + 1) * 0.06;
+          s.scale.y = 1 + Math.sin(t * 2.2 - i * 0.8 + row) * 0.03; // breathing
         });
+        tipMat.emissiveIntensity = 0.6 + Math.max(0, Math.sin(t * 3 + row)) * 0.8;
+        if (fluidMat) {
+          fluidMat.emissiveIntensity = 0.6 + Math.sin(t * 2.5) * 0.25;
+          fluid.forEach((f, i) => (f.rotation.y = Math.sin(t * 3 + i) * 0.06 * (1 + speed * 3))); // slosh
+        }
+      };
       break;
     }
 
     case 'legs': {
-      const joint = mat(look === 2 ? 0xd9d4c7 : STEEL);
-      const r = [0.055, 0.08, 0.065][look];
-      root.add(at(shape(rbox(0.44, 0.3, 0.6, 0.12), main), 0, 0.5, 0));
-      const hips: { g: THREE.Group; d: number; phase: number }[] = [];
+      // Hip housing with a motor drum per side.
+      root.add(at(shape(rbox(0.46, 0.3, 0.62, 0.13), main), 0, 0.5, 0));
+      root.add(at(shape(rbox(0.3, 0.08, 0.5, 0.04), dark, 0.02), 0, 0.68, 0));
+      const joint = look === 2 ? mat(0xe2dccd) : steel;
+      const [r, reach, drop] = [
+        [0.06, 0.66, 0.46],
+        [0.052, 0.78, 0.46],
+        [0.085, 0.58, 0.46],
+      ][look];
+      const legs: { hip: THREE.Group; knee: THREE.Group; d: number; phase: number }[] = [];
       for (const d of sides) {
         for (const dz of [-0.2, 0.2]) {
+          root.add(at(shape(cyl(0.11, 0.11, 0.1, 12), gun, 0.02).rotateZ(Math.PI / 2), 0.25 * d, 0.5, dz)); // motor drum
           const hip = new THREE.Group();
-          hip.position.set(0.16 * d, 0.5, dz);
-          const knee = V(0.42 * d, 0.3, dz * 0.4);
-          const foot = V(0.66 * d, -0.46, dz * 0.9);
-          hip.add(limb(V(0, 0, 0), knee, r, dark));
-          hip.add(at(new THREE.Mesh(ball(r * 1.45), joint), knee.x, knee.y, knee.z));
-          hip.add(limb(knee, foot, r * 0.85, dark));
-          if (look === 1) hip.add(limb(V(0.2 * d, 0.02, dz * 0.2), V(0.5 * d, -0.1, dz * 0.6), r * 0.45, joint, 0)); // piston
+          hip.position.set(0.24 * d, 0.5, dz);
+          const kneeAt = V(reach * 0.55 * d, 0.3, dz * 0.4);
+          const footAt = V(reach * d, -drop, dz * 0.9);
+          // Femur: armoured, chunky; a light plate on top.
+          hip.add(seg(V(0, 0, 0), kneeAt, r * 1.35, main, r * 1.05));
+          if (look !== 1) hip.add(seg(V(0.05 * d, 0.07, 0), kneeAt.clone().multiplyScalar(0.8).add(V(0, 0.07, 0)), r * 0.6, light, r * 0.5, 0));
+          if (look === 1) hip.add(seg(V(0.12 * d, -0.04, 0), V(reach * 0.45 * d, 0.12, dz * 0.35), r * 0.45, steel, r * 0.45, 0)); // piston
+          const knee = new THREE.Group();
+          knee.position.copy(kneeAt);
+          knee.add(shape(ball(r * 1.55), joint, 0.025));
+          const foot = footAt.clone().sub(kneeAt);
+          // Tibia: slimmer, darker, ending in a foot.
+          knee.add(seg(V(0, 0, 0), foot, r * 1.0, dark, r * 0.55));
           if (look === 2) {
-            const claw = shape(cone(0.07, 0.22, 6), joint, 0.02);
-            claw.rotation.z = Math.PI + 0.5 * d;
-            hip.add(at(claw, foot.x - 0.04 * d, foot.y + 0.02, foot.z));
+            for (const k of [-1, 1]) {
+              const claw = shape(cone(0.05, 0.2, 6), joint, 0.02);
+              aim(claw, V(0.5 * d, -1, k * 0.6));
+              knee.add(at(claw, foot.x + 0.04 * d, foot.y - 0.02, foot.z + k * 0.05));
+            }
           } else {
-            hip.add(at(new THREE.Mesh(ball(r * 1.3), joint), foot.x, foot.y + 0.02, foot.z));
+            const toe = shape(cone(r * 0.8, 0.14, 6), joint, 0.02);
+            aim(toe, V(0.2 * d, -1, 0));
+            knee.add(at(toe, foot.x, foot.y - 0.02, foot.z));
           }
+          hip.add(knee);
           root.add(hip);
-          hips.push({ g: hip, d, phase: (row % 2 ? Math.PI : 0) + (d > 0 ? Math.PI : 0) + (dz > 0 ? Math.PI / 2 : 0) });
+          legs.push({ hip, knee, d, phase: (row % 2 ? Math.PI : 0) + (d > 0 ? Math.PI : 0) + (dz > 0 ? Math.PI / 2 : 0) });
         }
       }
       animate = ({ t, walk, speed, air }) =>
-        hips.forEach(({ g, d, phase }, i) => {
+        legs.forEach(({ hip, knee, d, phase }, i) => {
           const p = walk + phase;
           const ground = 1 - air;
-          g.rotation.y = Math.sin(p) * 0.5 * speed * d * ground + Math.sin(t * 3 + i) * 0.08 * air; // sweep, or dangle in the air
-          const lift = Math.max(0, Math.cos(p)) * speed * ground;
-          g.rotation.z = d * (lift * 0.32 + Math.sin(t * 1.6 + i * 1.3) * 0.02 * (1 - speed) + air * 0.75); // tuck up when flying
+          const swing = Math.max(0, Math.cos(p)) * speed * ground; // foot in the air
+          hip.rotation.y = Math.sin(p) * 0.5 * speed * d * ground + Math.sin(t * 3 + i) * 0.08 * air;
+          hip.rotation.z = d * (swing * 0.3 + Math.sin(t * 1.6 + i * 1.3) * 0.02 * (1 - speed) + air * 0.55);
+          // The knee folds to lift the foot on the swing, and tucks right up in flight.
+          knee.rotation.z = d * (swing * 0.35 + air * 0.9);
         });
       break;
     }
 
     case 'wings': {
-      root.add(at(shape(rbox(0.34, 0.26, 0.5, 0.1), dark), 0, 0.82, 0));
-      const film = mat(look === 1 ? 0xd4f6ff : baseColor, { transparent: true, opacity: look === 1 ? 0.55 : 0.72 });
-      const vein = mat(look === 1 ? 0x9fdcf0 : baseColor.clone().multiplyScalar(0.7));
-      const pivots: { g: THREE.Group; d: number; k: number }[] = [];
-      const wingGeo = geo('wing', () => new THREE.SphereGeometry(0.5, 12, 8).scale(1.5, 0.04, 0.72));
+      // Root hub with motor caps.
+      root.add(at(shape(rbox(0.34, 0.24, 0.5, 0.1), dark), 0, 0.82, 0));
+      for (const d of sides) root.add(at(shape(cyl(0.09, 0.09, 0.08, 12), steel, 0.02).rotateZ(Math.PI / 2), 0.17 * d, 0.92, -0.04));
+      const glassy = look === 1;
+      const film = mat(0xffffff, { transparent: true, opacity: 1, map: wingTexture(glassy ? 'glass' : 'foil'), side: THREE.DoubleSide });
+      const strut = mat(glassy ? 0x7fcbe6 : baseColor.clone().multiplyScalar(0.6));
+      const caseMat = mat(new THREE.Color(0x2f6f8f));
+      type Wing = { g: THREE.Group; d: number; k: number };
+      const wings: Wing[] = [];
+      const shells: { g: THREE.Group; d: number }[] = [];
       for (const d of sides) {
-        (look === 1 ? [-0.14, 0.2] : [0]).forEach((dz, k) => {
+        (glassy ? [-0.12, 0.18] : [0.02]).forEach((dz, k) => {
           const pivot = new THREE.Group();
-          pivot.position.set(0.14 * d, 0.95, dz);
-          const wing = new THREE.Mesh(wingGeo, film);
-          wing.position.x = 0.72 * d;
-          wing.scale.setScalar(k === 1 ? 0.75 : 1);
-          pivot.add(wing);
-          pivot.add(limb(V(0, 0, -0.2), V(1.3 * d * (k === 1 ? 0.75 : 1), 0, -0.14), 0.03, vein, 0));
-          pivot.rotation.y = d * (k === 1 ? -0.5 : -0.12);
+          pivot.position.set(0.16 * d, 0.96, dz);
+          const len = glassy ? (k === 0 ? 1.45 : 1.2) : 1.3;
+          const w = new THREE.Mesh(wingGeo(len, glassy ? 0.52 : 0.62, glassy ? 'g' : 'f'), film);
+          if (d < 0) w.scale.x = -1;
+          w.renderOrder = 2;
+          pivot.add(w);
+          pivot.add(seg(V(0, 0, -0.03), V(len * 0.92 * d, 0.0, -0.12), 0.026, strut, 0.012, 0)); // leading-edge spar
+          pivot.rotation.y = d * (glassy ? (k === 0 ? -0.08 : 0.32) : -0.05);
           root.add(pivot);
-          pivots.push({ g: pivot, d, k });
+          wings.push({ g: pivot, d, k });
         });
+        if (!glassy) {
+          // Beetle wing-case: a hard shell that lifts open to let the membrane beat.
+          const hinge = new THREE.Group();
+          hinge.position.set(0.08 * d, 1.0, -0.22);
+          const shell = shape(ellip(0.22, 0.08, 0.44), caseMat);
+          shell.position.set(0.16 * d, 0, 0.36);
+          hinge.add(shell);
+          hinge.add(at(new THREE.Mesh(ellip(0.06, 0.02, 0.32), light), 0.2 * d, 0.06, 0.36));
+          root.add(hinge);
+          shells.push({ g: hinge, d });
+        }
       }
-      animate = ({ t, speed, air }) =>
-        pivots.forEach(({ g, d, k }) => {
-          const beat = Math.max(speed, air);
-          const rate = 9 + beat * 46;
-          const amp = 0.12 + beat * 0.38;
-          g.rotation.z = d * (0.22 + Math.sin(t * rate + k * 0.9) * amp);
-        });
+      animate = ({ t, speed, air }) => {
+        const beat = Math.max(speed * 0.7, air);
+        const rate = 8 + beat * 48;
+        const amp = 0.1 + beat * 0.42;
+        for (const { g, d, k } of wings) {
+          const s = Math.sin(t * rate + k * 1.3);
+          g.rotation.z = d * (0.2 + s * amp);
+          g.rotation.x = Math.cos(t * rate + k * 1.3) * 0.18 * beat; // figure-eight twist
+          // Foil membranes fold back under the cases at rest.
+          if (!glassy) {
+            const open = Math.min(1, beat * 1.6 + 0.08);
+            g.rotation.y = d * (-0.05 - (1 - open) * 1.15);
+            g.scale.setScalar(0.45 + open * 0.55);
+          }
+        }
+        for (const { g, d } of shells) {
+          const open = Math.min(1, beat * 1.5);
+          g.rotation.z = d * open * 0.75;
+          g.rotation.x = -open * 0.35;
+        }
+      };
       break;
     }
 
     case 'mandibles': {
-      root.add(at(shape(rbox(0.56, 0.3, 0.34, 0.1), dark), 0, 0.5, 0.28));
-      const tooth = mat(0xf2ede0);
-      const len = look === 1 ? 0.92 : 0.74;
+      root.add(at(shape(rbox(0.6, 0.32, 0.36, 0.12), dark), 0, 0.5, 0.28));
+      root.add(at(shape(rbox(0.36, 0.12, 0.1, 0.04), gun, 0.02), 0, 0.5, 0.08)); // mouth recess
+      for (const d of [-1, 1]) bolt(0.22 * d, 0.68, 0.3);
+      const tooth = mat(IVORY);
+      const len = look === 1 ? 0.95 : 0.76;
       const jaws: { g: THREE.Group; d: number }[] = [];
       for (const d of [-1, 1]) {
         const pivot = new THREE.Group();
-        pivot.position.set(0.2 * d, 0.5, 0.18);
-        const elbow = V(0.14 * d, 0, -len * 0.5);
-        const tip = V(-0.04 * d, 0, -len);
-        pivot.add(limb(V(0, 0, 0), elbow, 0.1, main));
-        pivot.add(limb(elbow, tip, 0.075, main));
-        const fang = shape(cone(0.075, 0.2, 6), tooth, 0.02);
-        fang.rotation.set(-Math.PI / 2, 0, 0.5 * d);
-        pivot.add(at(fang, tip.x - 0.05 * d, 0, tip.z - 0.06));
-        if (look === 1) {
-          for (let i = 0; i < 3; i++) {
-            const t = new THREE.Mesh(cone(0.045, 0.14, 5), tooth);
-            t.rotation.z = (Math.PI / 2) * d;
-            pivot.add(at(t, 0.02 * d - i * 0.02 * d, 0, -len * (0.5 + i * 0.16)));
-          }
+        pivot.position.set(0.2 * d, 0.5, 0.16);
+        // A sickle: sweeps out, then hooks in to the tip.
+        const pts = [V(0, 0, 0), V(0.14 * d, 0.02, -len * 0.35), V(0.12 * d, 0.01, -len * 0.7), V(-0.06 * d, 0, -len)];
+        pivot.add(chain(pts, 0.11, 0.045, main));
+        const tip = shape(cone(0.05, 0.16, 6), look === 1 ? steel : tooth, 0.02);
+        aim(tip, V(-0.6 * d, 0, -1));
+        pivot.add(at(tip, -0.1 * d, 0, -len - 0.05));
+        // Serrated inner edge.
+        for (let i = 0; i < (look === 1 ? 4 : 3); i++) {
+          const z = -len * (0.3 + i * 0.16);
+          const tth = new THREE.Mesh(cone(0.04, 0.13, 5), look === 1 ? steel : tooth);
+          aim(tth, V(-d, 0, -0.3));
+          pivot.add(at(tth, (0.07 - i * 0.03) * d, 0, z));
         }
+        if (look === 1) pivot.add(seg(V(0.06 * d, 0.06, -len * 0.2), V(0.1 * d, 0.06, -len * 0.75), 0.03, steel, 0.02, 0)); // blade spine
         root.add(pivot);
         jaws.push({ g: pivot, d });
       }
       animate = ({ t, attack }) =>
         jaws.forEach(({ g, d }) => {
           const open = 0.26 + Math.sin(t * 2.6 + row) * 0.1;
-          g.rotation.y = -d * (open * (1 - attack) - 0.3 * attack);
+          g.rotation.y = -d * (open * (1 - attack) - 0.32 * attack);
         });
       break;
     }
 
     case 'pincers': {
-      root.add(at(shape(rbox(0.6, 0.32, 0.36, 0.1), dark), 0, 0.5, 0.26));
+      root.add(at(shape(rbox(0.62, 0.32, 0.36, 0.12), dark), 0, 0.5, 0.26));
       const big = look === 1 ? 1.2 : 1;
-      const claws: { g: THREE.Group; d: number }[] = [];
+      const claws: { g: THREE.Group; finger: THREE.Group; d: number }[] = [];
       for (const d of [-1, 1]) {
-        const wrist = V(0.36 * d, 0.5, -0.2);
-        root.add(limb(V(0.22 * d, 0.5, 0.2), wrist, 0.1 * big, main));
-        if (look === 1) root.add(at(shape(rbox(0.16, 0.2, 0.3, 0.06), mat(STEEL), 0.02), 0.38 * d, 0.66, 0.02)); // hydraulics
+        const wrist = V(0.36 * d, 0.5, -0.18);
+        root.add(seg(V(0.22 * d, 0.5, 0.2), wrist, 0.1 * big, main, 0.085 * big));
+        if (look === 1) {
+          root.add(seg(V(0.2 * d, 0.62, 0.16), V(0.32 * d, 0.6, -0.12), 0.035, steel, 0.035, 0.02)); // hydraulic ram
+          root.add(at(shape(rbox(0.12, 0.12, 0.18, 0.04), gun, 0.02), 0.2 * d, 0.64, 0.2));
+        }
         const claw = new THREE.Group();
         claw.position.copy(wrist);
-        claw.add(at(new THREE.Mesh(ball(0.13 * big), dark), 0, 0, 0));
-        claw.add(limb(V(0, 0, 0), V(0.12 * d, 0, -0.34 * big), 0.085 * big, main));
-        claw.add(limb(V(0.12 * d, 0, -0.34 * big), V(-0.08 * d, 0, -0.56 * big), 0.07 * big, main));
-        claw.add(limb(V(-0.04 * d, 0, -0.06), V(-0.14 * d, 0, -0.36 * big), 0.06 * big, light));
+        claw.add(shape(ball(0.12 * big), steel, 0.025));
+        // Palm and the fixed finger.
+        claw.add(at(shape(ellip(0.16 * big, 0.13 * big, 0.2 * big), main), 0.04 * d, 0, -0.2 * big));
+        claw.add(chain([V(0.1 * d, 0, -0.3 * big), V(0.1 * d, 0, -0.48 * big), V(0.0, 0, -0.62 * big)], 0.075 * big, 0.03 * big, main));
+        // The moving finger (dactyl) on a hinge.
+        const finger = new THREE.Group();
+        finger.position.set(-0.06 * d, 0, -0.3 * big);
+        finger.add(chain([V(0, 0, 0), V(-0.06 * d, 0, -0.18 * big), V(0.0, 0, -0.32 * big)], 0.06 * big, 0.025 * big, light));
+        if (look === 1) for (let i = 0; i < 3; i++) finger.add(at(new THREE.Mesh(cone(0.025, 0.07, 4), steel), -0.0 * d, 0, -0.08 - i * 0.08).rotateZ((Math.PI / 2) * d));
+        claw.add(finger);
         root.add(claw);
-        claws.push({ g: claw, d });
+        claws.push({ g: claw, finger, d });
       }
       animate = ({ t, attack }) =>
-        claws.forEach(({ g, d }) => {
-          const open = 0.3 + Math.sin(t * 2 + d + row) * 0.12;
-          g.rotation.y = -d * (open * (1 - attack) - 0.35 * attack);
+        claws.forEach(({ g, finger, d }) => {
+          const open = 0.35 + Math.sin(t * 2 + d + row) * 0.15;
+          finger.rotation.y = d * (open * (1 - attack) - 0.1 * attack);
+          g.rotation.y = -d * (0.12 - attack * 0.25);
         });
       break;
     }
 
     case 'stinger': {
-      const bulb = shape(geo('bulb', () => new THREE.SphereGeometry(0.3, 12, 9).scale(1, 0.85, 1.15)), dark);
-      root.add(at(bulb, 0, 0.5, 0.2));
-      const glow = mat(0xf0c8ff, { emissive: 0xb65be0 });
+      // Venom gland: glass bulb with glowing fluid inside and banding.
+      const glass = mat(0xf1dcff, { transparent: true, opacity: 0.3 });
+      const venom = mat(0xe6a6ff, { emissive: 0xa23ee0 });
+      root.add(at(new THREE.Mesh(ellip(0.25, 0.22, 0.29), venom), 0, 0.52, 0.2));
+      root.add(at(new THREE.Mesh(ellip(0.3, 0.27, 0.34), glass), 0, 0.52, 0.2));
+      for (const z of [0.04, 0.36]) root.add(at(new THREE.Mesh(torus(0.26, 0.035), dark), 0, 0.52, z));
+      root.add(at(shape(rbox(0.36, 0.14, 0.2, 0.05), gun, 0.02), 0, 0.33, 0.2)); // cradle
+      const glow = mat(0xf6d9ff, { emissive: 0xc06cff });
       const barrel = new THREE.Group();
       if (look === 0) {
-        const c = shape(cone(0.17, 0.85, 8), main);
-        c.rotation.x = -Math.PI / 2;
-        barrel.add(at(c, 0, 0, -0.42));
-        barrel.add(at(new THREE.Mesh(ball(0.06), glow), 0, 0, -0.86));
+        barrel.add(chain([V(0, 0, 0.02), V(0, 0, -0.35), V(0, 0, -0.72)], 0.15, 0.05, main));
+        for (let i = 0; i < 3; i++) barrel.add(at(new THREE.Mesh(torus(0.13 - i * 0.03, 0.03), dark), 0, 0, -0.12 - i * 0.2));
+        const needle = shape(cone(0.05, 0.22, 6), steel, 0.02);
+        needle.rotation.x = -Math.PI / 2;
+        barrel.add(at(needle, 0, 0, -0.86));
+        barrel.add(at(new THREE.Mesh(ball(0.05), glow), 0, 0, -0.98));
       } else {
-        barrel.add(limb(V(0, 0, 0), V(0, 0, -0.95), 0.07, main));
-        for (let i = 0; i < 3; i++) {
-          const ring = new THREE.Mesh(torus(0.14 - i * 0.02, 0.035), glow);
-          barrel.add(at(ring, 0, 0, -0.3 - i * 0.24));
-        }
-        for (const d of [-1, 1]) barrel.add(limb(V(0.1 * d, 0, -0.85), V(0.04 * d, 0, -1.12), 0.03, mat(STEEL), 0));
+        barrel.add(seg(V(0, 0, 0.02), V(0, 0, -0.95), 0.075, main, 0.06));
+        for (let i = 0; i < 4; i++) barrel.add(at(new THREE.Mesh(torus(0.13 - i * 0.012, 0.032), glow), 0, 0, -0.22 - i * 0.2));
+        for (const d of [-1, 1]) barrel.add(seg(V(0.09 * d, 0, -0.86), V(0.04 * d, 0, -1.14), 0.03, steel, 0.018, 0));
+        barrel.add(at(new THREE.Mesh(ball(0.045), glow), 0, 0, -1.1));
       }
-      barrel.position.set(0, 0.54, -0.02);
+      barrel.position.set(0, 0.54, -0.06);
       root.add(barrel);
       animate = ({ t, attack }) => {
-        barrel.position.z = -0.02 + attack * 0.2;
+        barrel.position.z = -0.06 + attack * 0.2;
         barrel.rotation.x = Math.sin(t * 1.4 + row) * 0.04;
-        glow.emissiveIntensity = 0.7 + Math.sin(t * 6) * 0.3 + attack * 1.5;
+        glow.emissiveIntensity = 0.7 + Math.sin(t * 6) * 0.3 + attack * 1.6;
+        venom.emissiveIntensity = 0.55 + Math.sin(t * 2 + row) * 0.2 + attack;
       };
       break;
     }
 
     case 'horn': {
       root.add(at(shape(rbox(0.62, 0.42, 0.54, 0.14), dark), 0, 0.46, 0.14));
+      root.add(at(shape(rbox(0.66, 0.1, 0.2, 0.04), gun, 0.02), 0, 0.36, -0.1)); // bumper lip
+      for (const d of [-1, 1]) bolt(0.24 * d, 0.68, 0.3);
       const horn = new THREE.Group();
       const spin = new THREE.Group();
       horn.add(spin);
       if (look === 0) {
-        spin.add(at(shape(cone(0.27, 0.8, 8), main), 0, 0.4, 0));
-        spin.add(at(new THREE.Mesh(torus(0.2, 0.05), dark), 0, 0.12, 0).rotateX(Math.PI / 2));
+        // A curved beetle horn that sweeps forward and up.
+        const pts = [V(0, 0, 0), V(0, 0.04, -0.3), V(0, 0.16, -0.56), V(0, 0.38, -0.74), V(0, 0.62, -0.78)];
+        horn.add(chain(pts, 0.17, 0.035, mat(IVORY)));
+        for (let i = 0; i < 3; i++) horn.add(at(new THREE.Mesh(torus(0.155 - i * 0.025, 0.025), dark), 0, 0.03 + i * 0.05, -0.12 - i * 0.16).rotateX(-0.15 - i * 0.3));
+        horn.position.set(0, 0.58, -0.06);
       } else {
-        spin.add(at(shape(cone(0.3, 1.0, 10), main), 0, 0.5, 0));
-        const ridge = mat(STEEL);
-        for (let i = 0; i < 4; i++) {
-          const ring = new THREE.Mesh(torus(0.27 - i * 0.065, 0.035), ridge);
-          ring.rotation.set(Math.PI / 2 + 0.3, 0, 0);
-          spin.add(at(ring, 0, 0.1 + i * 0.2, 0));
+        // Drill bit with a spiral flute.
+        spin.add(at(shape(cone(0.3, 1.0, 12), steel), 0, 0.5, 0));
+        const flute = mat(0x5b6574);
+        for (let i = 0; i < 14; i++) {
+          const y = 0.08 + i * 0.062;
+          const rr = 0.29 * (1 - (y - 0.0) / 1.0) + 0.02;
+          const a = i * 0.9;
+          const b = new THREE.Mesh(rbox(0.07, 0.05, 0.12, 0.02), flute);
+          b.position.set(Math.cos(a) * rr, y, Math.sin(a) * rr);
+          b.rotation.y = -a;
+          spin.add(b);
         }
+        horn.add(at(shape(cyl(0.3, 0.32, 0.12, 14), main), 0, 0.02, 0)); // chuck
+        horn.position.set(0, 0.56, -0.12);
+        horn.rotation.x = -Math.PI / 2 + 0.12;
       }
-      horn.position.set(0, 0.56, -0.08);
-      horn.rotation.x = -Math.PI / 2 + (look === 0 ? 0.35 : 0.12);
       root.add(horn);
       animate = ({ t, speed, attack }) => {
         if (look === 1) spin.rotation.y = t * (6 + speed * 18 + attack * 20);
-        horn.position.z = -0.08 - attack * 0.12;
+        horn.position.z = (look === 1 ? -0.12 : -0.06) - attack * 0.12;
+        if (look === 0) horn.rotation.x = -attack * 0.25;
       };
       break;
     }
 
     case 'armor': {
       if (look === 0) {
-        root.add(at(shape(cyl(0.56, 0.56, 0.42, 6), main), 0, 0.42, 0));
-        root.add(at(shape(cyl(0.36, 0.4, 0.1, 6), dark, 0.02), 0, 0.67, 0));
+        root.add(at(shape(cyl(0.56, 0.58, 0.36, 6), main), 0, 0.4, 0));
+        root.add(at(shape(cyl(0.44, 0.5, 0.1, 6), light, 0.02), 0, 0.62, 0));
+        root.add(at(shape(cyl(0.16, 0.18, 0.08, 6), dark, 0.02), 0, 0.7, 0));
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+          bolt(Math.cos(a) * 0.42, 0.6, Math.sin(a) * 0.42, 0.035);
+        }
       } else if (look === 1) {
-        const trim = mat(0x9aa7b8);
-        root.add(at(shape(rbox(1.0, 0.3, 1.0, 0.1), main), 0, 0.36, 0));
-        root.add(at(shape(rbox(0.82, 0.22, 0.82, 0.09), trim), 0, 0.6, 0));
-        root.add(at(shape(rbox(0.5, 0.12, 0.5, 0.05), main, 0.02), 0, 0.76, 0));
+        const tile = mat(0xe9edf2);
+        root.add(at(shape(rbox(1.0, 0.24, 1.0, 0.08), gun), 0, 0.34, 0));
+        for (const sx of [-1, 1])
+          for (const sz of [-1, 1]) root.add(at(shape(rbox(0.44, 0.16, 0.44, 0.07), tile, 0.025), 0.23 * sx, 0.52, 0.23 * sz));
+        root.add(at(shape(rbox(0.22, 0.08, 0.22, 0.04), main, 0.02), 0, 0.62, 0));
       } else {
-        const rivet = mat(STEEL);
-        root.add(at(shape(rbox(1.0, 0.72, 1.0, 0.14), main), 0, 0.5, 0));
-        root.add(at(shape(rbox(1.06, 0.2, 0.3, 0.08), dark), 0, 0.5, -0.42)); // bumper
-        for (const sx of [-1, 1]) for (const sz of [-1, 1]) root.add(at(new THREE.Mesh(ball(0.08), rivet), 0.34 * sx, 0.88, 0.34 * sz));
+        const stripeA = mat(0xf2c14e);
+        const stripeB = mat(0x22252b);
+        root.add(at(shape(rbox(1.0, 0.68, 1.0, 0.14), main), 0, 0.48, 0));
+        root.add(at(shape(rbox(0.6, 0.12, 0.6, 0.06), light, 0.025), 0, 0.85, 0)); // raised boss
+        // Hazard-striped bumper across the front.
+        const bumper = new THREE.Group();
+        for (let i = 0; i < 7; i++) bumper.add(at(new THREE.Mesh(rbox(0.15, 0.2, 0.3, 0.03), i % 2 ? stripeB : stripeA), -0.45 + i * 0.15, 0, 0));
+        bumper.add(at(new THREE.Mesh(rbox(1.08, 0.22, 0.26, 0.06), OUTLINE), 0, 0, 0.03));
+        root.add(at(bumper, 0, 0.46, -0.45));
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) bolt(0.36 * sx, 0.83, 0.36 * sz, 0.06);
       }
       break;
     }
 
     case 'core': {
       const hot = look === 1 ? new THREE.Color(0xff9a3d) : baseColor;
-      root.add(at(shape(cyl(0.44, 0.48, 0.24, 10), mat(GUNMETAL)), 0, 0.32, 0));
-      const post = mat(STEEL);
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) root.add(limb(V(0.3 * sx, 0.4, 0.3 * sz), V(0.3 * sx, 0.78, 0.3 * sz), 0.035, post, 0));
+      root.add(at(shape(cyl(0.44, 0.48, 0.22, 14), gun), 0, 0.3, 0));
+      root.add(at(new THREE.Mesh(torus(0.4, 0.04), steel), 0, 0.42, 0).rotateX(Math.PI / 2));
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) root.add(seg(V(0.29 * sx, 0.4, 0.29 * sz), V(0.27 * sx, 0.98, 0.27 * sz), 0.035, steel, 0.03, 0.02));
+      root.add(at(shape(torus(0.31, 0.05), gun, 0.02).rotateX(Math.PI / 2), 0, 1.0, 0)); // open cap ring
+      const glass = mat(0xe8fff4, { transparent: true, opacity: 0.25 });
+      root.add(at(new THREE.Mesh(cyl(0.3, 0.3, 0.56, 16), glass), 0, 0.71, 0));
       const glow = mat(hot.clone().lerp(new THREE.Color(0xffffff), 0.25), { emissive: hot });
       const crystal = shape(
-        geo(`gem:${look}`, () => (look === 1 ? new THREE.IcosahedronGeometry(0.26, 0) : new THREE.OctahedronGeometry(0.3, 0))),
+        geo(`gem:${look}`, () => (look === 1 ? new THREE.IcosahedronGeometry(0.2, 0) : new THREE.OctahedronGeometry(0.22, 0))),
         glow,
         0.025,
       );
       root.add(crystal);
-      const halo = new THREE.Mesh(torus(0.36, 0.03), glow);
-      halo.visible = look === 1;
-      root.add(halo);
+      const rings = [0, 1].slice(0, look === 1 ? 2 : 1).map(() => {
+        const halo = new THREE.Mesh(torus(0.27, 0.022), glow);
+        root.add(halo);
+        return halo;
+      });
       animate = ({ t }) => {
-        crystal.position.y = 0.74 + Math.sin(t * 3 + row) * 0.04;
+        crystal.position.y = 0.7 + Math.sin(t * 3 + row) * 0.04;
         crystal.rotation.y = t * 1.5;
-        halo.position.y = 0.74;
-        halo.rotation.set(Math.PI / 2 + Math.sin(t * 2) * 0.4, t, 0);
-        glow.emissiveIntensity = 0.75 + Math.sin(t * 6 + row) * 0.3;
+        rings.forEach((h, i) => {
+          h.position.y = 0.7;
+          h.rotation.set(Math.PI / 2 + Math.sin(t * 2 + i * 2) * 0.5, t * (1 + i), i * 1.2);
+        });
+        glow.emissiveIntensity = 0.8 + Math.sin(t * 6 + row) * 0.3;
       };
       break;
     }
 
     case 'sensor': {
-      root.add(at(shape(rbox(0.44, 0.24, 0.44, 0.1), dark), 0, 0.42, 0));
+      root.add(at(shape(rbox(0.44, 0.22, 0.44, 0.1), dark), 0, 0.42, 0));
+      root.add(at(shape(cyl(0.14, 0.18, 0.1, 12), gun, 0.02), 0, 0.57, 0));
       if (look === 0) {
+        const tipMat = mat(0xd8ecff, { emissive: 0x4f8fff });
         const stalks: { g: THREE.Group; d: number }[] = [];
         for (const d of [-1, 1]) {
           const stalk = new THREE.Group();
-          stalk.position.set(0.12 * d, 0.52, -0.05);
-          const bend = V(0.1 * d, 0.42, -0.14);
-          const tip = V(0.3 * d, 0.72, -0.42);
-          stalk.add(limb(V(0, 0, 0), bend, 0.04, main, 0.025));
-          stalk.add(limb(bend, tip, 0.03, main, 0.025));
-          stalk.add(at(shape(ball(0.09), light, 0.025), tip.x, tip.y, tip.z));
+          stalk.position.set(0.08 * d, 0.6, -0.02);
+          // Beaded, gently curved insect antenna.
+          const n = 8;
+          const pts = Array.from({ length: n }, (_, i) => {
+            const k = i / (n - 1);
+            return V((0.04 + k * 0.28) * d, Math.sin(k * 1.9) * 0.62, -k * 0.5);
+          });
+          stalk.add(chain(pts, 0.035, 0.018, main, 0.02));
+          pts.forEach((p, i) => i % 2 && stalk.add(at(new THREE.Mesh(ball(0.05 - i * 0.004), light), p.x, p.y, p.z)));
+          stalk.add(at(new THREE.Mesh(ellip(0.06, 0.05, 0.09), tipMat), 0.33 * d, 0.6, -0.54));
           root.add(stalk);
           stalks.push({ g: stalk, d });
         }
-        animate = ({ t, speed }) =>
+        animate = ({ t, speed }) => {
           stalks.forEach(({ g, d }) => {
             g.rotation.x = Math.sin(t * 2.1 + d + row) * 0.1 + speed * 0.35;
             g.rotation.z = Math.sin(t * 1.5 + d * 2) * 0.08;
           });
+          tipMat.emissiveIntensity = 0.6 + Math.sin(t * 3 + row) * 0.4;
+        };
       } else {
-        root.add(limb(V(0, 0.5, 0), V(0, 0.95, 0), 0.05, mat(STEEL)));
+        root.add(seg(V(0, 0.6, 0), V(0, 0.92, 0), 0.05, steel));
         const dish = new THREE.Group();
-        dish.position.y = 1.0;
-        const bowl = shape(cyl(0.36, 0.1, 0.16, 12), main);
-        bowl.rotation.x = -Math.PI / 2 + 0.5;
-        dish.add(at(bowl, 0, 0.06, -0.06));
+        dish.position.y = 0.98;
+        // Parabolic dish (lathe), feed horn and a blinking lamp.
+        const bowlGeo = geo('dish', () => {
+          const pts: THREE.Vector2[] = [];
+          for (let i = 0; i <= 8; i++) {
+            const x = 0.02 + (i / 8) * 0.36;
+            pts.push(new THREE.Vector2(x, x * x * 1.3));
+          }
+          return new THREE.LatheGeometry(pts, 18);
+        });
+        const bowl = new THREE.Group();
+        bowl.add(new THREE.Mesh(bowlGeo, mat(baseColor, { side: THREE.DoubleSide })));
+        bowl.add(at(new THREE.Mesh(torus(0.38, 0.025), light), 0, 0.18, 0).rotateX(Math.PI / 2));
+        bowl.add(seg(V(0, 0, 0), V(0, 0.28, 0), 0.02, steel, 0.02, 0));
+        bowl.rotation.x = -Math.PI / 2 + 0.55;
+        dish.add(bowl);
         const lamp = mat(0xffffff, { emissive: 0x7fb3ff });
-        dish.add(at(new THREE.Mesh(ball(0.06), lamp), 0, 0.14, -0.2));
+        const lampMesh = at(new THREE.Mesh(ball(0.05), lamp), 0, 0.24, -0.14);
+        dish.add(lampMesh);
         root.add(dish);
         animate = ({ t }) => {
           dish.rotation.y = t * 1.8 + row;
-          lamp.emissiveIntensity = Math.sin(t * 8) > 0 ? 1.4 : 0.3;
+          lamp.emissiveIntensity = Math.sin(t * 8) > 0 ? 1.5 : 0.25;
         };
       }
       break;
