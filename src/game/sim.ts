@@ -866,10 +866,19 @@ export function forfeit(sim: Sim, who: 0 | 1) {
 // The style comes from the build: weapons, speed and turning vs the enemy's.
 
 export type AiMode = 'approach' | 'strike' | 'retreat' | 'windup' | 'charge' | 'orbit';
-export type AiState = { mode: AiMode; t: number; side: 1 | -1; target: number; engaged: number; stuck: number };
+export type AiState = {
+  mode: AiMode;
+  t: number;
+  side: 1 | -1;
+  target: number;
+  engaged: number;
+  stuck: number;
+  /** Smoothed body angle (radians) used to turn precious parts away from the enemy. */
+  guard: number;
+};
 
 export function newAi(index: 0 | 1): AiState {
-  return { mode: 'approach', t: 0, side: index === 0 ? 1 : -1, target: -1, engaged: 0, stuck: 0 };
+  return { mode: 'approach', t: 0, side: index === 0 ? 1 : -1, target: -1, engaged: 0, stuck: 0, guard: 0 };
 }
 
 /** How much we want to break each part category. */
@@ -915,6 +924,71 @@ const unit = (v: Vec): Vec => {
   const n = Math.hypot(v.x, v.y) || 1;
   return { x: v.x / n, y: v.y / n };
 };
+
+/**
+ * How much a bug wants to keep a part of its own out of harm's way: cores most
+ * (it's out without them), then weapons (more so the last one), then legs and
+ * wings, then the rest. Worn parts matter more. Armor is happy to take hits.
+ */
+function partWorth(p: SimPart, weapons: number, cores: number) {
+  const c = p.part.category;
+  if (c === 'armor') return -0.6;
+  const base = c === 'core' ? (cores <= 1 ? 4 : 3) : p.part.weapon ? (weapons <= 1 ? 3.2 : 2.4) : c === 'thorax' ? 2 : c === 'legs' || c === 'wings' ? 1.6 : 1;
+  const wear = 1 - Math.max(0, p.hp) / p.part.hp;
+  return base * (0.6 + wear * 1.6);
+}
+
+/** How much of `bug`'s precious stuff faces `foe` if it points along heading `h` (lower = safer). */
+function exposure(bug: Bug, foe: Bug, h: number) {
+  const parts = bug.parts.filter((p) => p.alive);
+  const weapons = parts.filter((p) => p.part.weapon).length;
+  const cores = parts.filter((p) => p.part.category === 'core').length;
+  // Foe direction in the bug's local frame (local −y is forward, +x is right).
+  const phi = Math.atan2(foe.pos.y - bug.pos.y, foe.pos.x - bug.pos.x) - h;
+  const fx = Math.sin(phi);
+  const fy = -Math.cos(phi);
+  let cost = 0;
+  for (const p of parts) {
+    const d = Math.hypot(p.lx, p.ly);
+    if (p.z === -1 || d < CELL * 0.4) continue; // tucked away or dead centre
+    const facing = Math.max(0, (p.lx * fx + p.ly * fy) / d) * (d / Math.max(CELL, bug.radius));
+    cost += partWorth(p, weapons, cores) * facing;
+  }
+  return cost;
+}
+
+const GUARD_OFFSETS = [-0.6, -0.45, -0.3, -0.15, 0, 0.15, 0.3, 0.45, 0.6];
+
+/**
+ * A small body angle (≤ ~30°) that keeps `bug`'s most precious parts turned
+ * away from `foe` while its main weapons (facing `mainR`) still bear on `aim`.
+ * Returns the offset to add to the heading that points those weapons straight at it.
+ */
+function guardOffset(bug: Bug, foe: Bug, mainR: number, aim: number) {
+  const parts = bug.parts.filter((p) => p.alive);
+  const base = aim - mainR * (Math.PI / 2);
+  const main = parts.filter((p) => p.part.weapon && !p.part.weapon.projectileSpeed && p.r === mainR);
+  const dps = main.reduce((a, p) => a + p.part.weapon!.damage / p.part.weapon!.cooldown, 0) || 1;
+  // Turn further only when something precious is badly hurt.
+  const urgent = parts.some((p) => (p.part.category === 'core' || p.part.weapon) && p.hp < p.part.hp * 0.45);
+  const limit = urgent ? 0.8 : 0.6;
+  let best = 0;
+  let bestCost = Infinity;
+  for (const o of GUARD_OFFSETS.map((g) => g * (limit / 0.6))) {
+    const h = base + o;
+    let cost = Math.abs(o) * 0.3 + exposure(bug, foe, h); // prefer squaring up
+    // Don't turn so far the main weapons can't land.
+    for (const p of main) {
+      const off = Math.abs(angleDiff(h + p.r * (Math.PI / 2), aim));
+      if (off > p.part.weapon!.arc * 0.85) cost += 3 * ((p.part.weapon!.damage / p.part.weapon!.cooldown) / dps);
+    }
+    if (cost < bestCost - 1e-9) {
+      bestCost = cost;
+      best = o;
+    }
+  }
+  return best;
+}
 
 /** Pick the enemy part most worth hitting: valuable, damaged, and on the outside. */
 function pickTarget(foe: Bug): number {
@@ -1040,7 +1114,14 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
   const setMode = (m: AiMode) => {
     ai.mode = m;
     ai.t = 0;
-    if (m === 'retreat') pickSide(away, 0.7);
+    if (m === 'retreat') {
+      pickSide(away, 0.7);
+      // Turn away on whichever side keeps hurt precious parts further from the enemy
+      // (unless that side is boxed in by a wall).
+      const mid = (sd: number) => Math.atan2(toFoeN.y, toFoeN.x) + sd * (Math.PI / 2);
+      const pref: 1 | -1 = exposure(bug, foe, mid(1)) <= exposure(bug, foe, mid(-1)) ? 1 : -1;
+      if (room(bug, rotate(away, 0.7 * pref), 140) > bug.radius + 30) ai.side = pref;
+    }
     if (m === 'windup') pickSide(away, 0.5, 160);
   };
   let goalDist = Infinity;
@@ -1137,7 +1218,12 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
       const lead = { x: targetW.x + foe.vel.x * eta - bug.pos.x, y: targetW.y + foe.vel.y * eta - bug.pos.y };
       dir = unit(lead);
       goalDist = Math.max(0, dist - contact * 0.5);
-      if (meleeR !== 0) face = faceFor(meleeR, Math.atan2(lead.y, lead.x));
+      // Square up the main weapons, angled a little to keep precious parts out of reach
+      // (only once the enemy is close enough to hurt them, and only if it's armed).
+      const aim = Math.atan2(lead.y, lead.x);
+      const threat = foeArmed && dist < contact + 90;
+      ai.guard += ((threat && melee.length ? guardOffset(bug, foe, meleeR, aim) : 0) - ai.guard) * Math.min(1, dt * 3);
+      if (meleeR !== 0 || Math.abs(ai.guard) > 0.03) face = faceFor(meleeR, aim) + ai.guard;
       const touching = dist < contact * 0.95;
       if (touching) ai.engaged += dt;
       else if (ai.t > 2.2) setMode('approach'); // lost them: re-set up the attack
@@ -1145,7 +1231,11 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
       // Backing off only helps against melee; against a shooter, stay on it.
       const foeMelee = foe.parts.some((p) => p.alive && p.part.weapon && !p.part.weapon.projectileSpeed);
       const losingTrade = foeMelee && bug.recentDamage > 18 && myHp < foeHp + 0.05;
-      if (ai.engaged > flurry || (losingTrade && ai.engaged > 0.4)) {
+      // A core or last weapon close to breaking: don't hang around as long.
+      const fragile = bug.parts.some(
+        (p) => p.alive && (p.part.category === 'core' || (p.part.weapon && weapons.length <= 1)) && p.hp < p.part.hp * 0.3,
+      );
+      if (ai.engaged > flurry * (fragile ? 0.65 : 1) || (losingTrade && ai.engaged > 0.4)) {
         ai.engaged = 0;
         setMode('retreat');
       }
