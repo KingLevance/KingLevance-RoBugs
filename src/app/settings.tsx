@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text } from 'react-native';
 
-import { Button, Panel } from '@/components/ui';
+import { Button, Label, Panel } from '@/components/ui';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useGame } from '@/state/game-store';
 import { applyUpdate, checkForUpdate, runningVersion, updatesActive, useUpdateReady } from '@/updates';
@@ -30,7 +30,7 @@ export default function Settings() {
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Panel style={{ gap: Spacing.sm }}>
-        <Text style={styles.label}>APP VERSION</Text>
+        <Label>APP VERSION</Label>
         <Text style={styles.text}>{runningVersion()}</Text>
         {ready ? (
           <Button label="Restart to update" onPress={() => void applyUpdate()} />
@@ -42,7 +42,7 @@ export default function Settings() {
       </Panel>
 
       <Panel style={{ gap: Spacing.sm }}>
-        <Text style={styles.label}>SAVE DATA</Text>
+        <Label>SAVE DATA</Label>
         <Text style={styles.dim}>
           {game.wins}W – {game.losses}L · {game.cleared.length} opponents beaten
         </Text>
@@ -54,7 +54,6 @@ export default function Settings() {
 
 const styles = StyleSheet.create({
   content: { padding: Spacing.lg, gap: Spacing.lg, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center' },
-  label: { color: Colors.accent, fontSize: 12, fontWeight: '800', letterSpacing: 1.5 },
   text: { color: Colors.text, fontSize: 15, fontWeight: '600' },
   dim: { color: Colors.textDim, fontSize: 13 },
 });

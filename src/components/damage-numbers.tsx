@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 
+import { Fonts } from '@/constants/theme';
+
 export type Floater = { id: number; x: number; y: number; text: string; color: string; size: number };
 
 function FloatText({ item, onDone }: { item: Floater; onDone: (id: number) => void }) {
@@ -47,7 +49,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 220,
     textAlign: 'center',
-    fontWeight: '900',
+    fontFamily: Fonts.display,
     fontStyle: 'italic',
     textShadowColor: '#111318',
     textShadowOffset: { width: 1.5, height: 1.5 },

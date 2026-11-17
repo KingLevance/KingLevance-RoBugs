@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DamageNumbers, type Floater } from '@/components/damage-numbers';
 import { UltBanner } from '@/components/ult-banner';
-import { Colors, Spacing } from '@/constants/theme';
+import { Colors, Fonts, Spacing } from '@/constants/theme';
 import { GUIDE } from '@/game/guide';
 import { getMove, PROC } from '@/game/moves';
 import { getOpponent } from '@/game/opponents';
@@ -235,16 +235,16 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.bg },
   overlay: { ...StyleSheet.absoluteFill, justifyContent: 'space-between' },
   hud: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md, padding: Spacing.md, backgroundColor: 'rgba(20,23,28,0.55)' },
-  hudName: { fontWeight: '900', fontSize: 14 },
+  hudName: { fontFamily: Fonts.display, fontSize: 17 },
   track: { height: 9, alignSelf: 'stretch', backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 4, overflow: 'hidden' },
   fill: { height: '100%', borderRadius: 4 },
   moveChip: { borderWidth: 1.5, borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
   moveChipText: { color: Colors.text, fontSize: 10, fontWeight: '800' },
-  timer: { color: Colors.text, fontSize: 24, fontWeight: '900', fontVariant: ['tabular-nums'], minWidth: 40, textAlign: 'center' },
+  timer: { color: Colors.text, fontSize: 28, fontFamily: Fonts.display, fontVariant: ['tabular-nums'], minWidth: 40, textAlign: 'center' },
   log: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: Spacing.lg, paddingBottom: Spacing.sm },
   logLine: { color: Colors.text, fontSize: 12, textShadowColor: '#000', textShadowRadius: 3, textShadowOffset: { width: 0, height: 1 } },
   finish: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
-  finishText: { fontSize: 54, fontWeight: '900', fontStyle: 'italic', textShadowColor: '#000', textShadowRadius: 0, textShadowOffset: { width: 4, height: 4 } },
+  finishText: { fontSize: 60, fontFamily: Fonts.display, textShadowColor: '#000', textShadowRadius: 0, textShadowOffset: { width: 4, height: 4 } },
   controls: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', padding: Spacing.lg },
   tip: { color: Colors.textDim, fontSize: 11, width: 130, textAlign: 'right' },
   forfeit: { backgroundColor: '#4A1F22', borderColor: Colors.bad, borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 },

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Animated, Easing, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
+import { Fonts } from '@/constants/theme';
 import { getMove, ULT_SECONDS } from '@/game/moves';
 
 /**
@@ -69,5 +70,5 @@ const styles = StyleSheet.create({
     borderColor: '#111318',
   },
   caster: { color: 'rgba(0,0,0,0.6)', fontWeight: '900', fontSize: 12, letterSpacing: 3, fontStyle: 'italic' },
-  name: { color: '#FFFFFF', fontWeight: '900', fontSize: 38, fontStyle: 'italic', letterSpacing: 1, textShadowColor: '#111318', textShadowOffset: { width: 3, height: 3 }, textShadowRadius: 0 },
+  name: { color: '#FFFFFF', fontFamily: Fonts.display, fontSize: 40, letterSpacing: 1, textShadowColor: '#111318', textShadowOffset: { width: 3, height: 3 }, textShadowRadius: 0 },
 });

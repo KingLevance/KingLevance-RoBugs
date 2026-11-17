@@ -16,7 +16,7 @@ import { adjacentPairs, buildConnector, buildPart, seatHeight, stackOffset, UNDE
 
 const HALF = ARENA_SIZE / CELL / 2;
 const FOV = 50;
-const BG = 0x14171c;
+const BG = 0x12151a;
 
 /** Sim floor (x, y) → three world (x, 0, z). One grid cell = 1 unit. */
 const toWorld = (x: number, y: number, h = 0) => new THREE.Vector3(x / CELL - HALF, h, y / CELL - HALF);

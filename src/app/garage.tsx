@@ -15,7 +15,7 @@ import {
 
 import { PartCell } from '@/components/part-cell';
 import { Button, Meter, Panel } from '@/components/ui';
-import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
+import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { computeStats, connectedKeys, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
 import { autoBuild, autoPlace, dropLayer, flipLayer, movePart, partAt, rankSlots, removeAt, sameSlot, type Slot } from '@/game/editor';
 import { GROUPS, GUIDE } from '@/game/guide';
@@ -516,8 +516,8 @@ const styles = StyleSheet.create({
   },
   nameInput: {
     color: Colors.text,
-    fontSize: 20,
-    fontWeight: '800',
+    fontFamily: Fonts.display,
+    fontSize: 26,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
   },
@@ -543,28 +543,39 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.md },
-  stat: { color: Colors.text, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  stat: {
+    color: Colors.text,
+    fontSize: 12,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+    backgroundColor: Colors.panelHi,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
   error: { color: Colors.bad, fontSize: 13 },
   partName: { fontSize: 16, fontWeight: '800' },
   dim: { color: Colors.textDim, fontSize: 13, fontWeight: '400' },
   statsLine: { color: Colors.text, fontSize: 12, marginTop: 2 },
-  section: { color: Colors.accent, fontSize: 12, fontWeight: '800', letterSpacing: 1.5 },
+  section: { color: Colors.accent, fontSize: 11, fontWeight: '900', letterSpacing: 1.6 },
   bin: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   binItem: {
     alignItems: 'center',
     gap: 3,
     paddingVertical: Spacing.sm,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: Colors.border,
+    borderTopColor: Colors.panelEdge,
     backgroundColor: Colors.panel,
   },
   binSelected: { borderColor: Colors.accent, backgroundColor: Colors.panelHi },
   binName: { color: Colors.textDim, fontSize: 10, textAlign: 'center', minHeight: 26, paddingHorizontal: 2 },
   binRarity: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
   binType: { color: Colors.text, fontSize: 11, fontWeight: '800' },
-  groupTitle: { color: Colors.text, fontSize: 13, fontWeight: '900', letterSpacing: 1.2 },
+  groupTitle: { color: Colors.text, fontFamily: Fonts.display, fontSize: 18, letterSpacing: 0.4 },
   guideLine: { color: Colors.text, fontSize: 13, lineHeight: 18 },
   guideKey: { color: Colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
   checklist: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
@@ -588,7 +599,7 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     alignItems: 'flex-start',
     padding: Spacing.md,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1.5,
     borderColor: Colors.border,
     backgroundColor: Colors.panel,

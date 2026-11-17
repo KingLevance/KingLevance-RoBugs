@@ -31,6 +31,7 @@ npx expo lint               # lint
 npx tsc --noEmit            # typecheck
 npx tsx scripts/simulate.ts # headless balance check: validates builds, runs AI-vs-AI matches
 node scripts/render-part-icons.mjs  # re-render part icons (assets/parts) after changing models or the catalog
+node scripts/render-bug-portraits.mjs  # re-render opponent portraits (assets/bugs) after changing models or opponent builds
 npx expo-doctor             # diagnose dependency/config issues
 ```
 
@@ -63,11 +64,13 @@ src/render/         three.js only — reads sim state, never writes it
   arena.ts          ArenaDressing: themed floor/walls/hazards/stadium/sky/crowd per arena
   garage-scene.ts   GarageRenderer: bug on its build grid, raycast picking for drag
   flex.ts           FlexRig: spring joints so parts sway/lag/bounce (cosmetic)
+  bug-model.ts      Whole bug as one display model (hub showcase, portrait renderer)
+  showcase.ts       ShowcaseRenderer: the hub's turning bug on a pedestal
   gl.ts             three.js renderer on an expo-gl context
 src/state/          Save data (React context) + platform storage
-src/components/     Shared UI (UltBanner, UpdateBanner, reward chips…); part-icons.ts is GENERATED
+src/components/     Shared UI kit (ui.tsx: Button/Panel/Label/Pill/Meter), BugShowcase, UltBanner, reward chips…; part-icons.ts and bug-portraits.ts are GENERATED
 src/updates.ts      OTA update checks (expo-updates); no-op on web/dev
-src/constants/      Theme tokens
+src/constants/      Theme tokens (Colors, Fonts: Lilita One display face loaded in _layout)
 scripts/            Dev tools (not shipped)
 docs/GDD.md         Game design doc
 ```

@@ -11,7 +11,7 @@ import { getPart } from '@/game/parts';
 import { createRenderer } from './gl';
 import { adjacentPairs, buildConnector, buildPart, IDLE, seatHeight, stackOffset, toonMaterial, toonMesh, UNDER_LIFT, UNDER_SCALE, type PartModel } from './models';
 
-const BG = 0x14171c;
+const BG = 0x12151a;
 const MIDX = (GRID_W - 1) / 2;
 const MIDY = (GRID_H - 1) / 2;
 const TARGET = new THREE.Vector3(0, 0.3, 0.2);
