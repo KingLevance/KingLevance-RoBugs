@@ -53,6 +53,17 @@
       "fallbackToCacheTimeout": 0,
       "requestHeaders": {
         "expo-channel-name": "production"
+      },
+      "url": "https://u.expo.dev/10c6da72-9330-4525-a99d-22082f056627"
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "10c6da72-9330-4525-a99d-22082f056627"
       }
     }
   }
