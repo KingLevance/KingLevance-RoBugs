@@ -548,9 +548,19 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
     }
 
     case 'wings': {
-      // Root hub with motor caps.
-      root.add(at(shape(rbox(0.34, 0.24, 0.5, 0.1), dark), 0, 0.82, 0));
-      for (const d of sides) root.add(at(shape(cyl(0.09, 0.09, 0.08, 12), steel, 0.02).rotateZ(Math.PI / 2), 0.17 * d, 0.92, -0.04));
+      // On the grid (beside the body) the wing stands on a shoulder mount leaning into the
+      // body, so it's anchored rather than hovering; stacked on a body part it sits right on it.
+      const onGrid = side !== 0;
+      const hubX = onGrid ? -0.12 * side : 0;
+      const hubY = onGrid ? 0.78 : 0.82;
+      if (onGrid) {
+        root.add(at(shape(rbox(0.42, 0.46, 0.56, 0.14), gun), hubX * 0.6, 0.44, 0.02)); // shoulder
+        root.add(at(shape(rbox(0.3, 0.08, 0.44, 0.04), dark, 0.02), hubX * 0.6, 0.66, 0.02));
+        for (const dz of [-0.16, 0.16]) bolt(hubX * 0.6 + 0.2 * side, 0.5, dz);
+      }
+      root.add(at(shape(rbox(0.38, 0.24, 0.56, 0.1), dark), hubX, hubY, 0));
+      if (!onGrid) root.add(at(shape(rbox(0.56, 0.08, 0.66, 0.04), gun, 0.02), 0, hubY - 0.12, 0)); // saddle on the body
+      for (const d of sides) root.add(at(shape(cyl(0.1, 0.1, 0.09, 12), steel, 0.02).rotateZ(Math.PI / 2), hubX + 0.17 * d, hubY + 0.1, -0.04));
       const glassy = look === 1;
       const film = mat(0xffffff, { transparent: true, opacity: 1, map: wingTexture(glassy ? 'glass' : 'foil'), side: THREE.DoubleSide });
       const strut = mat(glassy ? 0x7fcbe6 : baseColor.clone().multiplyScalar(0.6));
@@ -561,9 +571,9 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
       for (const d of sides) {
         (glassy ? [-0.12, 0.18] : [0.02]).forEach((dz, k) => {
           const pivot = new THREE.Group();
-          pivot.position.set(0.16 * d, 0.96, dz);
-          const len = glassy ? (k === 0 ? 1.45 : 1.2) : 1.3;
-          const w = new THREE.Mesh(wingGeo(len, glassy ? 0.52 : 0.62, glassy ? 'g' : 'f'), film);
+          pivot.position.set(hubX + 0.16 * d, hubY + 0.14, dz);
+          const len = glassy ? (k === 0 ? 1.65 : 1.4) : 1.5;
+          const w = new THREE.Mesh(wingGeo(len, glassy ? 0.58 : 0.7, glassy ? 'g' : 'f'), film);
           if (d < 0) w.scale.x = -1;
           w.renderOrder = 2;
           pivot.add(w);
@@ -574,12 +584,14 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         });
         if (!glassy) {
           // Beetle wing-case: a hard shell that lifts open to let the membrane beat.
+          // Lies along the body like a real beetle's, covering the folded membrane.
           const hinge = new THREE.Group();
-          hinge.position.set(0.08 * d, 1.0, -0.22);
-          const shell = shape(ellip(0.22, 0.08, 0.44), caseMat);
-          shell.position.set(0.16 * d, 0, 0.36);
+          hinge.position.set(hubX + 0.06 * d, hubY + 0.08, -0.3);
+          const shell = shape(ellip(0.3, 0.14, 0.62), caseMat);
+          shell.position.set(0.24 * d, 0, 0.5);
           hinge.add(shell);
-          hinge.add(at(new THREE.Mesh(ellip(0.06, 0.02, 0.32), light), 0.2 * d, 0.06, 0.36));
+          hinge.add(at(new THREE.Mesh(ellip(0.08, 0.03, 0.46), light), 0.3 * d, 0.11, 0.5)); // sheen stripe
+          hinge.add(at(new THREE.Mesh(ellip(0.25, 0.03, 0.05), caseMat), 0.24 * d, -0.02, 1.08)); // rolled tip
           root.add(hinge);
           shells.push({ g: hinge, d });
         }
@@ -595,8 +607,8 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           // Foil membranes fold back under the cases at rest.
           if (!glassy) {
             const open = Math.min(1, beat * 1.6 + 0.08);
-            g.rotation.y = d * (-0.05 - (1 - open) * 1.15);
-            g.scale.setScalar(0.45 + open * 0.55);
+            g.rotation.y = d * (-0.05 - (1 - open) * 1.05);
+            g.scale.setScalar(0.7 + open * 0.3);
           }
         }
         for (const { g, d } of shells) {
