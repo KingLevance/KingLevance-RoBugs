@@ -53,6 +53,8 @@ export type Bug = {
   invuln: number;
   /** Exponentially decaying recent damage taken, for move judgement. */
   recentDamage: number;
+  /** Autonomous driver state (see aiInput). */
+  ai: AiState;
 };
 
 export type Hazard =
@@ -176,6 +178,7 @@ function makeBug(index: 0 | 1, fighter: Fighter, pos: Vec, heading: number): Bug
     shield: 0,
     invuln: 0,
     recentDamage: 0,
+    ai: newAi(index),
   };
   refresh(bug);
   return bug;
@@ -679,6 +682,37 @@ export function forfeit(sim: Sim, who: 0 | 1) {
 }
 
 // ── AI ──────────────────────────────────────────────────────────────
+//
+// A small state machine per bug, driven entirely by sim state (deterministic):
+//   approach → circle round the enemy's weapons to the side of a juicy part
+//   strike   → dive at that part with our weapons
+//   retreat  → peel away after a flurry (or when losing the trade), then re-engage
+//   windup / charge → rammers (horns) back off, then charge at full speed
+//   orbit    → ranged builds circle at range and turn in to shoot
+// The style comes from the build: weapons, speed and turning vs the enemy's.
+
+export type AiMode = 'approach' | 'strike' | 'retreat' | 'windup' | 'charge' | 'orbit';
+export type AiState = { mode: AiMode; t: number; side: 1 | -1; target: number; engaged: number };
+
+export function newAi(index: 0 | 1): AiState {
+  return { mode: 'approach', t: 0, side: index === 0 ? 1 : -1, target: -1, engaged: 0 };
+}
+
+/** How much we want to break each part category. */
+const TARGET_VALUE: Record<Category, number> = {
+  core: 3,
+  thorax: 2.2,
+  mandibles: 2.4,
+  pincers: 2.4,
+  stinger: 2.6,
+  horn: 2,
+  legs: 2,
+  wings: 1.6,
+  head: 1.4,
+  sensor: 1,
+  abdomen: 1,
+  armor: 0.5,
+};
 
 function inHazard(sim: Sim, at: Vec, pad: number) {
   return sim.hazards.some(
@@ -692,48 +726,189 @@ function rotate(v: Vec, a: number): Vec {
   return { x: v.x * c - v.y * s, y: v.x * s + v.y * c };
 }
 
-/** Simple steering AI: close in with melee, kite with darts, dodge hazards. Pure function of sim state. */
-export function aiInput(sim: Sim, me: 0 | 1, aggression: number): Input {
+const unit = (v: Vec): Vec => {
+  const n = Math.hypot(v.x, v.y) || 1;
+  return { x: v.x / n, y: v.y / n };
+};
+
+/** Pick the enemy part most worth hitting: valuable, damaged, and on the outside. */
+function pickTarget(foe: Bug): number {
+  let best = -1;
+  let bestScore = -Infinity;
+  foe.parts.forEach((p, i) => {
+    if (!p.alive) return;
+    const outer = Math.hypot(p.lx, p.ly) / Math.max(CELL, foe.radius - CELL * 0.5);
+    const wear = 1 - Math.max(0, p.hp) / p.part.hp;
+    const score = TARGET_VALUE[p.part.category] * (0.6 + 0.6 * outer) * (1 + wear) - p.hp / 200;
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  });
+  return best;
+}
+
+/** Point just outside the enemy, on the side where `part` sits. */
+function attackPoint(foe: Bug, part: SimPart, me: Bug): Vec {
+  const w = partWorld(foe, part);
+  const out = unit({ x: w.x - foe.pos.x, y: w.y - foe.pos.y });
+  const r = foe.radius + me.radius * 0.6;
+  return { x: foe.pos.x + out.x * r, y: foe.pos.y + out.y * r };
+}
+
+function hazardNear(sim: Sim, at: Vec, within: number) {
+  return sim.hazards.find((h) => Math.hypot(at.x - h.x, at.y - h.y) < h.r + within);
+}
+
+/** Autonomous driver for bug `me`. Mutates only `bug.ai`; deterministic. */
+export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = STEP): Input {
   const bug = sim.bugs[me];
   const foe = sim.bugs[other(me)];
   if (bug.dead || foe.dead) return { x: 0, y: 0 };
-  const dx = foe.pos.x - bug.pos.x;
-  const dy = foe.pos.y - bug.pos.y;
-  const dist = Math.hypot(dx, dy) || 1;
-  let dir: Vec = { x: dx / dist, y: dy / dist };
-  let throttle = 1;
+  const ai = bug.ai;
+  ai.t += dt;
 
+  const toFoe = { x: foe.pos.x - bug.pos.x, y: foe.pos.y - bug.pos.y };
+  const dist = Math.hypot(toFoe.x, toFoe.y) || 1;
+  const toFoeN = { x: toFoe.x / dist, y: toFoe.y / dist };
+  const contact = bug.radius + foe.radius;
+
+  // Build-driven style.
   const weapons = bug.parts.filter((p) => p.alive && p.part.weapon);
   const ranged = weapons.some((p) => p.part.weapon!.projectileSpeed);
-  const melee = weapons.some((p) => !p.part.weapon!.projectileSpeed);
-  const hurt = hpFraction(bug) < 0.35;
+  const melee = weapons.filter((p) => !p.part.weapon!.projectileSpeed);
+  const rammer = melee.some((p) => p.part.weapon!.ramBonus);
+  const nimble = bug.stats.turnRate > foe.stats.turnRate * 1.1 || bug.stats.topSpeed > foe.stats.topSpeed * 1.15;
+  const heavy = bug.stats.mass > foe.stats.mass * 1.3;
+  const myHp = hpFraction(bug);
+  const foeHp = hpFraction(foe);
 
-  if (ranged && (!melee || aggression < 0.5)) {
-    if (dist < 120) {
-      dir = rotate(dir, Math.PI * 0.75);
-    } else if (dist < 200) {
-      throttle = 0.12; // hold and aim
-    }
-  } else if (hurt && aggression < 0.6) {
-    dir = rotate(dir, Math.PI / 2.5);
-  } else if (dist > 80) {
-    // Lead the target a little.
-    const lead = { x: foe.pos.x + foe.vel.x * 0.3 - bug.pos.x, y: foe.pos.y + foe.vel.y * 0.3 - bug.pos.y };
-    const n = Math.hypot(lead.x, lead.y) || 1;
-    dir = { x: lead.x / n, y: lead.y / n };
+  // Where are we relative to the enemy's weapons? (0 = dead ahead of it)
+  const fromFoe = Math.atan2(bug.pos.y - foe.pos.y, bug.pos.x - foe.pos.x);
+  const inFoeFront = Math.abs(angleDiff(foe.heading, fromFoe)) < 1.1;
+  const foeArmed = foe.parts.some((p) => p.alive && p.part.weapon);
+
+  // Retarget when the old target is gone.
+  if (ai.target < 0 || !foe.parts[ai.target]?.alive) ai.target = pickTarget(foe);
+  const target = foe.parts[ai.target];
+  if (!target) return { x: 0, y: 0 };
+  const targetW = partWorld(foe, target);
+
+  // Unarmed: survive. Circle away and dodge.
+  if (melee.length === 0 && !ranged) {
+    const away = rotate({ x: -toFoeN.x, y: -toFoeN.y }, 0.9 * ai.side);
+    return steer(sim, bug, away, 1);
   }
 
-  // Dodge hazards and walls.
-  const probe = { x: bug.pos.x + dir.x * 70, y: bug.pos.y + dir.y * 70 };
-  if (inHazard(sim, probe, bug.radius * 0.5)) dir = rotate(dir, Math.PI / 2.2);
+  let dir: Vec = toFoeN;
+  let throttle = 1;
+  const setMode = (m: AiMode) => {
+    ai.mode = m;
+    ai.t = 0;
+  };
+
+  if (ranged && melee.length === 0) {
+    // ── Sniper: orbit at range; turn in to shoot when a stinger is ready.
+    if (ai.mode !== 'orbit') setMode('orbit');
+    const want = 175;
+    const ready = weapons.some((p) => p.cooldown < 0.25);
+    const tangent = rotate(toFoeN, (Math.PI / 2) * ai.side);
+    const radial = (dist - want) / 60;
+    dir = unit({ x: tangent.x + toFoeN.x * radial, y: tangent.y + toFoeN.y * radial });
+    if (ready && dist < 240) {
+      dir = unit({ x: targetW.x - bug.pos.x, y: targetW.y - bug.pos.y });
+      throttle = 0.25;
+    }
+    if (ai.t > 4) {
+      ai.side = ai.side === 1 ? -1 : 1; // change orbit direction now and then
+      ai.t = 0;
+    }
+  } else if (rammer && ai.mode !== 'retreat' && ai.mode !== 'strike') {
+    // ── Rammer: back off to build a run-up, then charge the target part.
+    if (ai.mode !== 'windup' && ai.mode !== 'charge') setMode('windup');
+    if (ai.mode === 'windup') {
+      dir = rotate({ x: -toFoeN.x, y: -toFoeN.y }, 0.5 * ai.side);
+      if (dist > contact + 120 || ai.t > 1.6) setMode('charge');
+    } else {
+      dir = unit({ x: targetW.x - bug.pos.x, y: targetW.y - bug.pos.y });
+      if (dist < contact * 0.85 || ai.t > 2) setMode('strike');
+    }
+  } else {
+    // ── Brawler: approach (flanking the weapons) → strike → retreat → repeat.
+    if (ai.mode === 'orbit' || ai.mode === 'windup' || ai.mode === 'charge') setMode('approach');
+
+    if (ai.mode === 'approach') {
+      let goal = attackPoint(foe, target, bug);
+      // Heavy builds shove enemies into hazards: come from the far side of the hazard.
+      const hz = heavy ? hazardNear(sim, foe.pos, 110) : undefined;
+      if (hz) {
+        const push = unit({ x: foe.pos.x - hz.x, y: foe.pos.y - hz.y });
+        goal = { x: foe.pos.x + push.x * contact, y: foe.pos.y + push.y * contact };
+      }
+      const toGoal = { x: goal.x - bug.pos.x, y: goal.y - bug.pos.y };
+      const goalDist = Math.hypot(toGoal.x, toGoal.y);
+      // Don't walk into its weapons: circle round them first (nimble bugs try harder).
+      const foeHasMelee = foe.parts.some((p) => p.alive && p.part.weapon && !p.part.weapon.projectileSpeed);
+      const flankEager = foeArmed && foeHasMelee && !heavy && (nimble || aggression < 0.85);
+      if (flankEager && inFoeFront && dist < contact + 140 && ai.t < (nimble ? 3.5 : 2)) {
+        ai.side = angleDiff(foe.heading, fromFoe) > 0 ? 1 : -1;
+        const tangent = rotate(toFoeN, (-Math.PI / 2) * ai.side);
+        const keepOff = (contact + 60 - dist) / 50;
+        dir = unit({ x: tangent.x - toFoeN.x * keepOff, y: tangent.y - toFoeN.y * keepOff });
+      } else {
+        dir = unit(toGoal);
+      }
+      if (goalDist < 30 || dist < contact * 0.95) setMode('strike');
+      if (ai.t > 5) setMode('strike'); // stop dancing eventually
+    } else if (ai.mode === 'strike') {
+      // Dive at the target part, leading it by how long it takes us to get there (cuts off kiters).
+      const eta = Math.min(1.2, dist / Math.max(60, bug.stats.topSpeed));
+      const lead = { x: targetW.x + foe.vel.x * eta - bug.pos.x, y: targetW.y + foe.vel.y * eta - bug.pos.y };
+      dir = unit(lead);
+      const touching = dist < contact * 0.95;
+      if (touching) ai.engaged += dt;
+      else if (ai.t > 2.2) setMode('approach'); // lost them: re-set up the attack
+      const flurry = 0.5 + aggression * 1.1;
+      // Backing off only helps against melee; against a shooter, stay on it.
+      const foeMelee = foe.parts.some((p) => p.alive && p.part.weapon && !p.part.weapon.projectileSpeed);
+      const losingTrade = foeMelee && bug.recentDamage > 18 && myHp < foeHp + 0.05;
+      if (ai.engaged > flurry || (losingTrade && ai.engaged > 0.4)) {
+        ai.engaged = 0;
+        setMode('retreat');
+      }
+    } else if (ai.mode === 'retreat') {
+      // Peel away on an arc, then come back from the other side.
+      dir = rotate({ x: -toFoeN.x, y: -toFoeN.y }, 0.7 * ai.side);
+      const length = 0.55 + (1 - aggression) * 0.6 + (myHp < 0.35 ? 0.4 : 0);
+      if (ai.t > length) {
+        ai.side = ai.side === 1 ? -1 : 1;
+        ai.target = pickTarget(foe);
+        setMode('approach');
+      }
+    }
+  }
+
+  return steer(sim, bug, dir, throttle);
+}
+
+/** Final steering: dodge hazards and walls. */
+function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number): Input {
+  let d = dir;
+  const probe = { x: bug.pos.x + d.x * 70, y: bug.pos.y + d.y * 70 };
+  if (inHazard(sim, probe, bug.radius * 0.5)) {
+    const left = rotate(d, Math.PI / 2.2);
+    const right = rotate(d, -Math.PI / 2.2);
+    const pl = { x: bug.pos.x + left.x * 70, y: bug.pos.y + left.y * 70 };
+    d = inHazard(sim, pl, bug.radius * 0.5) ? right : left;
+  }
   const m = ARENA_SIZE / 2;
   const edge = Math.max(Math.abs(bug.pos.x - m), Math.abs(bug.pos.y - m));
   if (edge > m - 60) {
-    const c = { x: m - bug.pos.x, y: m - bug.pos.y };
-    const n = Math.hypot(c.x, c.y) || 1;
-    dir = { x: dir.x * 0.5 + (c.x / n) * 0.5, y: dir.y * 0.5 + (c.y / n) * 0.5 };
+    const c = unit({ x: m - bug.pos.x, y: m - bug.pos.y });
+    const k = Math.min(1, (edge - (m - 60)) / 40) * 0.6;
+    d = unit({ x: d.x * (1 - k) + c.x * k, y: d.y * (1 - k) + c.y * k });
   }
-  return { x: dir.x * throttle, y: dir.y * throttle };
+  return { x: d.x * throttle, y: d.y * throttle };
 }
 
 // ── HUD summary (cheap, for React) ──────────────────────────────────

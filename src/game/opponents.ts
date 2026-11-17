@@ -108,7 +108,7 @@ export const OPPONENTS: Opponent[] = [
     blurb: 'A flitting dart-spitter that keeps its distance.',
     arena: 'pit',
     aggression: 0.35,
-    build: { name: 'Needlewisp', placements: fromLayout(['..d..', '.eHe.', '.wTw.', '.lAl.', '.oAo.', '..d..'], L) },
+    build: { name: 'Needlewisp', placements: fromLayout(['..d..', '.eHe.', '.wTw.', '.lAl.', '.oAo.'], L) },
     moves: ['venom-barrage', 'skitter-dash'],
     boss: false,
     guaranteed: [part('sting-dart'), move('venom-barrage')],

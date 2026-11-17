@@ -115,13 +115,22 @@ Starting moves: **Mandible Crusher** (mandibles; heavy multi-part bite), **Venom
 
 ## 7. AI
 
-A simple steering AI (`aiInput` in `sim.ts`):
-- **Melee builds** charge in and aim a little ahead of where the target is going.
-- **Ranged builds** kite: they back off when close and hold still to aim at mid range.
-- **Hurt, low-aggression** bugs circle instead of charging.
-- **All AI bugs** steer around acid and charging stompers and stay away from walls.
+Fights are autonomous, and both bugs use the same driver (`aiInput` in `sim.ts`). It's a small deterministic state machine per bug:
 
-Both bugs use the same move-judgement code.
+- **Target choice:** it picks the enemy part most worth breaking, favouring valuable, damaged, outer parts (cores, weapons, legs over armor).
+- **Approach:** it heads for the side of the enemy where that part sits. If it's in front of the enemy's melee weapons, it **circles round to the flank** first. Nimble builds (better turning or speed than the enemy) flank harder.
+- **Strike:** it dives at the target part, leading it by its own travel time, which cuts off kiters.
+- **Retreat:** after a flurry, or when losing the melee trade, it peels away on an arc, switches sides and re-engages, possibly on a new target.
+
+Build-driven styles:
+- **Rammers** (horns) back off for a run-up, then charge.
+- **Snipers** (only ranged weapons) orbit at range and turn in to shoot when a stinger is ready.
+- **Heavies** (≥1.3× the enemy's mass) set up so their push drives the enemy into acid or stompers.
+- **Unarmed bugs** run.
+
+All bugs steer around acid and charging stompers and away from walls. Move judgement is shared too: both bugs auto-proc their signature moves.
+
+Measured with `scripts/simulate.ts` and an ad-hoc behaviour probe: about 5–7 clashes per match, and roughly half of all hits land on the sides or rear.
 
 ## 8. Campaign and loot
 
