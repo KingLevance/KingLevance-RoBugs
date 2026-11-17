@@ -184,10 +184,10 @@ export class GarageRenderer {
     this.links = adjacentPairs(ground).map(([i, j]) => {
       const a = ground[i];
       const b = ground[j];
-      const obj = buildConnector(getPart(a.partId).category, getPart(b.partId).category, b.x - a.x, b.y - a.y, lift(a), lift(b));
-      obj.position.copy(cellToWorld(a.x, a.y));
-      this.bug.add(obj);
-      return { a: slotKey(a), b: slotKey(b), obj };
+      const c = buildConnector(getPart(a.partId).category, getPart(b.partId).category);
+      c.update(cellToWorld(a.x, a.y).setY(lift(a)), cellToWorld(b.x, b.y).setY(lift(b)));
+      this.bug.add(c.obj);
+      return { a: slotKey(a), b: slotKey(b), obj: c.obj };
     });
     if (placements.length) {
       const xs = placements.map((p) => p.x - MIDX);

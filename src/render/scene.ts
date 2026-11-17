@@ -10,7 +10,8 @@ import { CATEGORY_COLOR } from '@/game/parts';
 import { ARENA_SIZE, CELL, partWorld, stompWarning, type Bug, type Sim, type SimPart } from '@/game/sim';
 
 import { createRenderer } from './gl';
-import { adjacentPairs, buildConnector, buildPart, seatHeight, stackOffset, toonMaterial, toonMesh, UNDER_LIFT, UNDER_SCALE, type PartModel } from './models';
+import { FlexRig, GIVE } from './flex';
+import { adjacentPairs, buildConnector, buildPart, seatHeight, stackOffset, toonMaterial, toonMesh, UNDER_LIFT, UNDER_SCALE, type Connector, type PartModel } from './models';
 
 const HALF = ARENA_SIZE / CELL / 2;
 const FOV = 50;
@@ -27,13 +28,24 @@ const smooth = (x: number) => {
   return t * t * (3 - 2 * t);
 };
 
-type PartView = { part: SimPart; model: PartModel; attached: boolean; shadow: THREE.Mesh; /** 1 when just hit, decays: the part pops. */ punch: number };
+type PartView = {
+  part: SimPart;
+  model: PartModel;
+  attached: boolean;
+  shadow: THREE.Mesh;
+  /** 1 when just hit, decays: the part pops. */
+  punch: number;
+  /** Index in the bug's FlexRig. */
+  flex: number;
+};
 type BugView = {
   group: THREE.Group;
   pose: THREE.Group;
   parts: PartView[];
   /** Frame struts between neighbouring parts; hidden once either end breaks off. */
-  links: { a: PartView; b: PartView; obj: THREE.Group }[];
+  links: { a: PartView; b: PartView; c: Connector }[];
+  /** Spring joints: parts sway and lag instead of moving as one rigid block. */
+  rig: FlexRig;
   /** On the floor (stays down when the bug flies): part shadows + thin team ring. */
   ground: THREE.Group;
   /** Shadows only (shrink as the bug climbs). */
@@ -72,6 +84,7 @@ export class ArenaRenderer {
   /** Direction the camera looks from (radians around +y; 0 = from the south side). */
   private camYaw = 0;
   private eventCursor = 0;
+  private tmpQ = new THREE.Quaternion();
   private bits: { m: THREE.Mesh; vel: THREE.Vector3; life: number; max: number }[] = [];
   private nextBit = 0;
   private waves: { m: THREE.Mesh; life: number }[] = [];
@@ -298,7 +311,7 @@ export class ArenaRenderer {
       shadow.position.set(p.lx / CELL, 0.022, p.ly / CELL);
       shadow.visible = !p.z;
       if (!p.z) shadows.add(shadow);
-      return { part: p, model, attached: true, shadow, punch: 0 };
+      return { part: p, model, attached: true, shadow, punch: 0, flex: -1 };
     });
     // Stacked parts rest on top of the part in their cell.
     for (const pv of parts) {
@@ -309,18 +322,41 @@ export class ArenaRenderer {
     const links = adjacentPairs(onGrid.map((pv) => pv.part)).map(([i, j]) => {
       const a = onGrid[i];
       const b = onGrid[j];
-      const obj = buildConnector(
-        a.part.part.category,
-        b.part.part.category,
-        b.part.x - a.part.x,
-        b.part.y - a.part.y,
-        lift(a.part),
-        lift(b.part),
-      );
-      obj.position.copy(a.model.root.position).setY(0);
-      pose.add(obj);
-      return { a, b, obj };
+      const c = buildConnector(a.part.part.category, b.part.part.category);
+      c.update(a.model.root.position, b.model.root.position);
+      pose.add(c.obj);
+      return { a, b, c };
     });
+
+    // Spring joints: each part hangs off the neighbour one step closer to the
+    // thorax (stacked/slung parts off the part in their cell).
+    const rig = new FlexRig(pose);
+    const at = new Map(onGrid.map((pv) => [`${pv.part.x},${pv.part.y}`, pv]));
+    const root = onGrid.find((pv) => pv.part.part.category === 'thorax') ?? onGrid[0];
+    const queue: { pv: PartView; parent: number; depth: number }[] = root ? [{ pv: root, parent: -1, depth: 0 }] : [];
+    const seen = new Set<PartView>(root ? [root] : []);
+    while (queue.length) {
+      const { pv, parent, depth } = queue.shift()!;
+      pv.flex = rig.add(pv.model.root, pv.model.root.position, parent, GIVE[pv.part.part.category], depth);
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ]) {
+        const n = at.get(`${pv.part.x + dx},${pv.part.y + dy}`);
+        if (n && !seen.has(n)) {
+          seen.add(n);
+          queue.push({ pv: n, parent: pv.flex, depth: depth + 1 });
+        }
+      }
+    }
+    for (const pv of parts) {
+      if (pv.flex >= 0) continue;
+      const base = at.get(`${pv.part.x},${pv.part.y}`);
+      pv.flex = rig.add(pv.model.root, pv.model.root.position, base && !pv.part.z ? -1 : (base?.flex ?? -1), GIVE[pv.part.part.category], 2);
+    }
+    rig.finalize();
 
     const r = bug.radius / CELL;
     const team = bug.index === 0 ? 0x3ddc97 : 0xff5d5d;
@@ -353,7 +389,7 @@ export class ArenaRenderer {
     shield.visible = false;
     group.add(shield);
     this.scene.add(group);
-    return { group, pose, parts, links, ground, shadows, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
+    return { group, pose, parts, links, rig, ground, shadows, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
   }
 
   private fitOffset(aspect: number) {
@@ -426,7 +462,12 @@ export class ArenaRenderer {
         const bob = bug.dead ? 0 : Math.abs(Math.sin(v.walk)) * 0.05 * speed + Math.sin(t * 2.2 + bi) * 0.012;
         v.pose.position.y += (bob - v.pose.position.y) * 0.3;
       }
-      for (const l of v.links) l.obj.visible = l.a.part.alive && l.b.part.alive;
+      // Spring joints, then re-seat the struts between the swaying parts.
+      v.rig.update(dt);
+      for (const l of v.links) {
+        l.c.obj.visible = l.a.attached && l.b.attached;
+        if (l.c.obj.visible) l.c.update(l.a.model.root.position, l.b.model.root.position);
+      }
       if (bug.dead) v.pose.rotation.z = Math.min(0.5, v.pose.rotation.z + dt);
       else v.pose.rotation.z = v.lean + Math.sin(v.walk) * 0.025 * speed;
 
@@ -486,6 +527,16 @@ export class ArenaRenderer {
         const v = this.bugs[e.bug];
         const pv = v.parts[e.part];
         if (pv) pv.punch = 1;
+        // Knock the struck part's joint away from the attacker (in the bug's pose space).
+        if (pv && e.by !== null) {
+          const from = sim.bugs[e.by].pos;
+          const dir = toWorld(e.x, e.y).sub(toWorld(from.x, from.y)).setY(0.4);
+          if (dir.lengthSq() > 1e-6) {
+            v.pose.getWorldQuaternion(this.tmpQ).invert();
+            dir.normalize().applyQuaternion(this.tmpQ);
+            v.rig.impulse(pv.flex, dir, THREE.MathUtils.clamp(e.dmg / 4, 1.5, 6));
+          }
+        }
         const at = toWorld(e.x, e.y, e.h / CELL + 0.7);
         const strength = THREE.MathUtils.clamp(e.dmg / 10, 0.5, 2.2);
         if (e.by !== null) {
@@ -548,6 +599,7 @@ export class ArenaRenderer {
 
   private detach(bug: Bug, pv: PartView) {
     pv.attached = false;
+    this.bugs[bug.index].rig.deactivate(pv.flex);
     const root = pv.model.root;
     const w = partWorld(bug, pv.part);
     const v = this.bugs[bug.index];

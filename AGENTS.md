@@ -61,6 +61,7 @@ src/render/         three.js only — reads sim state, never writes it
   models.ts         Rounded toon part models (one look per catalog part) + animation (walk cycle, attacks)
   scene.ts          ArenaRenderer: scene, camera (incl. ult cutscene camera), VFX
   garage-scene.ts   GarageRenderer: bug on its build grid, raycast picking for drag
+  flex.ts           FlexRig: spring joints so parts sway/lag/bounce (cosmetic)
   gl.ts             three.js renderer on an expo-gl context
 src/state/          Save data (React context) + platform storage
 src/components/     Shared UI (UltBanner, UpdateBanner, reward chips…); part-icons.ts is GENERATED

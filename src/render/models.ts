@@ -536,24 +536,53 @@ const BODY: Category[] = ['head', 'thorax', 'abdomen'];
 let frameMat: THREE.MeshToonMaterial | null = null;
 let collarMat: THREE.MeshToonMaterial | null = null;
 
+/** A frame strut between two parts that stretches and bends to follow them. */
+export type Connector = {
+  obj: THREE.Group;
+  /** Re-seat the strut between two part roots (positions in the parent's space). */
+  update: (aPos: THREE.Vector3, bPos: THREE.Vector3) => void;
+};
+
+const Y_AXIS = V(0, 1, 0);
+const fromP = new THREE.Vector3();
+const toP = new THREE.Vector3();
+const dirP = new THREE.Vector3();
+
 /**
- * A strut from part A's cell to its neighbour B, `dx`/`dz` cells away (one of them is ±1).
- * Body-to-body links are a thick spine with a collar; everything else is a slimmer strut.
- * Position the returned group at A's cell.
+ * A strut between neighbouring parts A and B. Body-to-body links are a thick
+ * spine with a collar; everything else is a slimmer strut. Call `update` with
+ * the two parts' current root positions (it adds each part's mount height),
+ * every frame if the parts move.
  */
-export function buildConnector(a: Category, b: Category, dx: number, dz: number, liftA = 0, liftB = 0): THREE.Group {
+export function buildConnector(a: Category, b: Category): Connector {
   frameMat ??= toonMaterial(GUNMETAL);
   collarMat ??= toonMaterial(STEEL);
   const spine = BODY.includes(a) && BODY.includes(b);
-  const from = V(dx * 0.1, (MOUNT_Y[a] ?? 0.5) + liftA, dz * 0.1);
-  const to = V(dx * 0.9, (MOUNT_Y[b] ?? 0.5) + liftB, dz * 0.9);
-  const g = new THREE.Group();
-  g.add(limb(from, to, spine ? 0.2 : 0.1, frameMat));
+  const r = spine ? 0.2 : 0.1;
+  const restLen = 0.8;
+  const obj = new THREE.Group();
+  const strut = new THREE.Group();
+  strut.add(shape(geo(`cap:${r}:${restLen}`, () => new THREE.CapsuleGeometry(r, restLen, 2, 8)), frameMat));
   const collar = new THREE.Mesh(torus(spine ? 0.24 : 0.13, 0.05), collarMat);
-  collar.position.copy(from).add(to).multiplyScalar(0.5);
-  collar.quaternion.setFromUnitVectors(V(0, 0, 1), to.clone().sub(from).normalize());
-  g.add(collar);
-  return g;
+  obj.add(strut, collar);
+  const ya = MOUNT_Y[a] ?? 0.5;
+  const yb = MOUNT_Y[b] ?? 0.5;
+  return {
+    obj,
+    update(aPos, bPos) {
+      const A = fromP.set(aPos.x, aPos.y + ya, aPos.z);
+      const B = toP.set(bPos.x, bPos.y + yb, bPos.z);
+      dirP.copy(B).sub(A);
+      const len = dirP.length() || 1;
+      dirP.divideScalar(len);
+      // Span the middle 80% of the gap.
+      strut.position.copy(A).addScaledVector(dirP, len * 0.5);
+      strut.quaternion.setFromUnitVectors(Y_AXIS, dirP);
+      strut.scale.set(1, (len * 0.8) / restLen, 1);
+      collar.position.copy(strut.position);
+      collar.quaternion.setFromUnitVectors(V(0, 0, 1), dirP);
+    },
+  };
 }
 
 /** Every orthogonally adjacent pair in a set of grid cells, as index pairs (each pair once). */
