@@ -1,4 +1,4 @@
-import type { Category, Rarity } from './parts';
+import type { Category, PartTag, Rarity } from './parts';
 
 /** Proc-point gains. Tune here. Points reset every match. */
 export const PROC = {
@@ -16,7 +16,18 @@ export const PROC = {
 export const MOVE_SLOTS = 2;
 export const ULT_SECONDS = 1.6;
 
-export type MoveId = 'mandible-crusher' | 'venom-barrage' | 'carapace-lock' | 'skitter-dash';
+export type MoveId =
+  | 'mandible-crusher'
+  | 'venom-barrage'
+  | 'carapace-lock'
+  | 'skitter-dash'
+  | 'web-snare'
+  | 'burrow-strike'
+  | 'ghost-shell'
+  | 'sunder-beam'
+  | 'static-burst'
+  | 'overclock'
+  | 'gale-flap';
 
 export type MoveDef = {
   id: MoveId;
@@ -28,8 +39,11 @@ export type MoveDef = {
   cost: number;
   cooldown: number;
   ultimate: boolean;
-  /** Parts that must still be attached (any one of the listed categories, at least `count`). */
-  requires: { category: Category; count: number };
+  /**
+   * Hardware that must still be attached: at least `count` parts of `category`
+   * and/or carrying `tag`. `label` names it for the player ("a stinger").
+   */
+  requires: { category?: Category; tag?: PartTag; count: number; label: string };
 };
 
 export const MOVES: readonly MoveDef[] = [
@@ -42,18 +56,18 @@ export const MOVES: readonly MoveDef[] = [
     cost: 60,
     cooldown: 10,
     ultimate: true,
-    requires: { category: 'mandibles', count: 1 },
+    requires: { category: 'mandibles', count: 1, label: 'mandibles' },
   },
   {
     id: 'venom-barrage',
     name: 'Venom Barrage',
-    description: 'Fires a fan of seven heavy venom darts. Needs a stinger.',
+    description: 'Swings its stinger onto the target and fires a fan of seven heavy venom darts. Needs a venom stinger.',
     rarity: 'rare',
     color: '#B65BE0',
     cost: 55,
     cooldown: 10,
     ultimate: true,
-    requires: { category: 'stinger', count: 1 },
+    requires: { tag: 'venom', count: 1, label: 'a venom stinger' },
   },
   {
     id: 'carapace-lock',
@@ -64,7 +78,7 @@ export const MOVES: readonly MoveDef[] = [
     cost: 50,
     cooldown: 14,
     ultimate: true,
-    requires: { category: 'armor', count: 1 },
+    requires: { category: 'armor', count: 1, label: 'armor' },
   },
   {
     id: 'skitter-dash',
@@ -75,9 +89,92 @@ export const MOVES: readonly MoveDef[] = [
     cost: 20,
     cooldown: 5,
     ultimate: false,
-    requires: { category: 'legs', count: 2 },
+    requires: { category: 'legs', count: 2, label: '2 sets of legs' },
+  },
+  {
+    id: 'web-snare',
+    name: 'Web Snare',
+    description: 'Spits a glob of silk. A webbed enemy crawls at a third of its speed and cannot fly for 3.5 seconds. Needs a Silk Spinneret.',
+    rarity: 'uncommon',
+    color: '#E8E6DA',
+    cost: 30,
+    cooldown: 9,
+    ultimate: false,
+    requires: { tag: 'silk', count: 1, label: 'a Silk Spinneret' },
+  },
+  {
+    id: 'burrow-strike',
+    name: 'Burrow Strike',
+    description: 'Digs under the arena, untouchable, tunnels to the enemy and erupts beneath it: heavy damage to its underside and legs, and it gets tossed. Needs Mole Diggers.',
+    rarity: 'rare',
+    color: '#C98B4A',
+    cost: 45,
+    cooldown: 12,
+    ultimate: false,
+    requires: { tag: 'dig', count: 1, label: 'Mole Diggers' },
+  },
+  {
+    id: 'ghost-shell',
+    name: 'Ghost Shell',
+    description: 'Turns invisible for 4.5 seconds. Enemies lose track of you, and your first strike out of hiding is a guaranteed critical hit. Needs a Mirage Plate.',
+    rarity: 'rare',
+    color: '#9BE8E0',
+    cost: 35,
+    cooldown: 14,
+    ultimate: false,
+    requires: { tag: 'cloak', count: 1, label: 'a Mirage Plate' },
+  },
+  {
+    id: 'sunder-beam',
+    name: 'Sunder Beam',
+    description: 'Overcharges the lens and fires a beam that cuts straight through the enemy, hitting every part in its path. Needs a Prism Cutter.',
+    rarity: 'epic',
+    color: '#5CF2FF',
+    cost: 65,
+    cooldown: 12,
+    ultimate: true,
+    requires: { tag: 'laser', count: 1, label: 'a Prism Cutter' },
+  },
+  {
+    id: 'static-burst',
+    name: 'Static Burst',
+    description: 'A ring of electricity: nearby enemies are stunned for 1.3 seconds and lose charge on their move meter. Needs Tesla Prongs.',
+    rarity: 'rare',
+    color: '#FFE14D',
+    cost: 35,
+    cooldown: 10,
+    ultimate: false,
+    requires: { tag: 'shock', count: 1, label: 'Tesla Prongs' },
+  },
+  {
+    id: 'overclock',
+    name: 'Overclock',
+    description: 'Runs the cores hot for 5 seconds: moves a third faster and attacks half again as fast. Needs 2 power cores.',
+    rarity: 'uncommon',
+    color: '#FF9A2E',
+    cost: 40,
+    cooldown: 14,
+    ultimate: false,
+    requires: { category: 'core', count: 2, label: '2 power cores' },
+  },
+  {
+    id: 'gale-flap',
+    name: 'Gale Flap',
+    description: 'A blast of wind that hurls nearby enemies back and knocks flyers out of the air. Needs wings.',
+    rarity: 'common',
+    color: '#BFE9FF',
+    cost: 25,
+    cooldown: 8,
+    ultimate: false,
+    requires: { category: 'wings', count: 1, label: 'wings' },
   },
 ];
+
+/** Does a set of (still attached) parts satisfy a move's hardware requirement? */
+export function meetsRequirement(m: MoveDef, parts: { category: Category; tag?: PartTag }[]) {
+  const r = m.requires;
+  return parts.filter((p) => (!r.category || p.category === r.category) && (!r.tag || p.tag === r.tag)).length >= r.count;
+}
 
 const MOVE_INDEX = Object.fromEntries(MOVES.map((m) => [m.id, m])) as Record<MoveId, MoveDef>;
 

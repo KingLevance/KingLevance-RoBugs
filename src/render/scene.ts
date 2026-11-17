@@ -7,7 +7,7 @@ import * as THREE from 'three';
 
 import { getMove, type MoveId } from '@/game/moves';
 import { CATEGORY_COLOR, type Category } from '@/game/parts';
-import { ARENA_SIZE, CELL, foeOf, partWorld, venomHeading, type Bug, type Sim, type SimPart } from '@/game/sim';
+import { aimHeading, ARENA_SIZE, CELL, foeOf, partWorld, type Bug, type Sim, type SimPart } from '@/game/sim';
 
 import { createRenderer } from './gl';
 import { ArenaDressing } from './arena';
@@ -820,7 +820,7 @@ export class ArenaRenderer {
         v.pose.rotation.x = -0.06 * crouch;
         // Swing the stinger round onto the target (the sim snaps to this heading on release).
         const caster = sim.bugs[c.caster];
-        let turn = venomHeading(caster, foeOf(sim, caster)) - caster.heading;
+        let turn = aimHeading(caster, foeOf(sim, caster), 'venom') - caster.heading;
         while (turn > Math.PI) turn -= Math.PI * 2;
         while (turn < -Math.PI) turn += Math.PI * 2;
         v.pose.rotation.y = -turn * smooth(k / 0.6);

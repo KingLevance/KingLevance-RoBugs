@@ -120,6 +120,7 @@ export function computeStats(parts: PlacedPart[]): BugStats {
     grip += part.grip ?? 0;
     totalHp += part.hp;
     if (part.weapon) dps += part.weapon.damage / part.weapon.cooldown;
+    crit += part.crit ?? 0;
     if (part.category === 'sensor') {
       reach += part.rarity === 'common' ? 0.1 : 0.2;
       crit += part.rarity === 'common' ? 0.04 : 0.07;

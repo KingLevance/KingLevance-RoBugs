@@ -19,7 +19,7 @@ import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { computeStats, connectedKeys, FACING_NAMES, facingsFor, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
 import { autoBuild, autoPlace, dropLayer, flipLayer, movePart, partAt, rankSlots, removeAt, rotatePart, sameSlot, type Slot } from '@/game/editor';
 import { GROUPS, GUIDE } from '@/game/guide';
-import { getMove, MOVE_SLOTS } from '@/game/moves';
+import { getMove, meetsRequirement, MOVE_SLOTS } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type Category, type PartDef } from '@/game/parts';
 import { CRIT } from '@/game/sim';
 import { GarageRenderer, type Cell, type ViewName } from '@/render/garage-scene';
@@ -525,7 +525,7 @@ export default function Garage() {
           {game.moves.map((id) => {
             const m = getMove(id);
             const on = game.equipped.includes(id);
-            const hasParts = placements.filter((p) => getPart(p.partId).category === m.requires.category).length >= m.requires.count;
+            const hasParts = meetsRequirement(m, placements.map((p) => getPart(p.partId)));
             return (
               <Pressable
                 key={id}
@@ -540,7 +540,7 @@ export default function Garage() {
                     </Text>
                   </Text>
                   <Text style={styles.dim}>{m.description}</Text>
-                  {on && !hasParts && <Text style={styles.error}>⚠ Your build has no {m.requires.category}, so this move can never fire.</Text>}
+                  {on && !hasParts && <Text style={styles.error}>⚠ Your build needs {m.requires.label} for this move to fire.</Text>}
                 </View>
               </Pressable>
             );

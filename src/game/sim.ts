@@ -6,9 +6,9 @@
  * (x right, y "down"/toward the player's start); the 3D renderer lifts it.
  */
 import { computeStats, connectedKeys, pkey, resolve, type Build, type BugStats, type Layer } from './build';
-import { getMove, MOVES, PROC, ULT_SECONDS, type MoveId } from './moves';
+import { getMove, meetsRequirement, MOVES, PROC, ULT_SECONDS, type MoveId } from './moves';
 import type { ArenaId } from './opponents';
-import type { Category, PartDef } from './parts';
+import type { Category, PartDef, PartTag } from './parts';
 
 export const CELL = 22;
 /** Arena width/depth in world px (22 px = one grid cell). */
@@ -67,6 +67,16 @@ export type Bug = {
   shield: number;
   /** Seconds of invulnerability left (Skitter Dash). */
   invuln: number;
+  /** Seconds left tangled in silk: crawls, can't fly (Web Snare). */
+  webbed: number;
+  /** Seconds left stunned: can't move or attack (Static Burst). */
+  stun: number;
+  /** Seconds of invisibility left (Ghost Shell). */
+  cloak: number;
+  /** Seconds of Overclock left: faster movement and attacks. */
+  haste: number;
+  /** Seconds left underground (Burrow Strike): untouchable, tunnelling at its target. */
+  burrow: number;
   /** Exponentially decaying recent damage taken, for move judgement. */
   recentDamage: number;
   /** Autonomous driver state (see aiInput). */
@@ -78,7 +88,7 @@ export type Hazard =
   | { kind: 'stomper'; x: number; y: number; r: number; period: number; t: number };
 
 /** `z`/`vz`: altitude and climb rate, so darts can be shot up at flyers (or down from them). */
-export type Projectile = { x: number; y: number; z: number; vx: number; vy: number; vz: number; damage: number; owner: number; ttl: number; big: boolean };
+export type Projectile = { x: number; y: number; z: number; vx: number; vy: number; vz: number; damage: number; owner: number; ttl: number; big: boolean; kind?: 'web' | 'laser' };
 /** `h`: altitude (world px). */
 export type Effect = { x: number; y: number; h: number; ttl: number; color: string; size: number };
 
@@ -92,7 +102,9 @@ export type SimEvent =
   | { type: 'wall'; bug: number; x: number; y: number; impact: number; spiked: boolean }
   | { type: 'ult-start'; bug: number; move: MoveId }
   | { type: 'ult-release'; bug: number; move: MoveId }
-  | { type: 'move'; bug: number; move: MoveId };
+  | { type: 'move'; bug: number; move: MoveId }
+  /** A burrowed bug bursts out of the floor. */
+  | { type: 'erupt'; bug: number; x: number; y: number };
 
 export type Ult = { id: MoveId; caster: number; t: number; dur: number };
 
@@ -248,6 +260,11 @@ function makeBug(index: number, team: 0 | 1, fighter: Fighter, pos: Vec, heading
     proc: 0,
     shield: 0,
     invuln: 0,
+    webbed: 0,
+    stun: 0,
+    cloak: 0,
+    haste: 0,
+    burrow: 0,
     recentDamage: 0,
     alt: 0,
     vAlt: 0,
@@ -384,7 +401,7 @@ function gainProc(bug: Bug, n: number) {
 }
 
 function canBeHurt(sim: Sim, bug: Bug) {
-  if (bug.dead || bug.invuln > 0) return false;
+  if (bug.dead || bug.invuln > 0 || bug.burrow > 0) return false;
   return !(sim.ult && sim.ult.caster === bug.index);
 }
 
@@ -401,6 +418,7 @@ export function critChance(attacker: Bug, victim: Bug, from: Vec) {
 
 function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug | null, crit = false) {
   if (!p.alive || !canBeHurt(sim, bug)) return;
+  if (bug.cloak > 0) bug.cloak = Math.min(bug.cloak, 0.4); // a hit flushes it out of hiding
   dmg *= DAMAGE_SCALE * (0.8 + rand(sim) * 0.4) * (crit ? CRIT.mult : 1);
   if (bug.shield > 0) dmg *= 0.3;
   p.hp -= dmg;
@@ -467,7 +485,7 @@ function moveReady(sim: Sim, bug: Bug, id: MoveId): boolean {
   const m = getMove(id);
   if ((bug.moveCd[id] ?? 0) > 0 || bug.proc < m.cost) return false;
   if (m.ultimate && sim.ult) return false;
-  return aliveCount(bug, m.requires.category) >= m.requires.count;
+  return meetsRequirement(m, bug.parts.filter((p) => p.alive).map((p) => p.part));
 }
 
 /** Does this move make sense right now? */
@@ -477,6 +495,16 @@ function judge(sim: Sim, bug: Bug, id: MoveId): boolean {
   const dy = foe.pos.y - bug.pos.y;
   const dist = Math.hypot(dx, dy);
   const facing = Math.abs(angleDiff(bug.heading, Math.atan2(dy, dx)));
+  // Can't aim a big attack at something it can't see.
+  if ((foe.cloak > 0 || foe.burrow > 0) && dist > 60 && AIMED.includes(id)) return false;
+  const near = (range: number, flyersOnly = false) =>
+    foesOf(sim, bug).some(
+      (e) =>
+        e.burrow <= 0 &&
+        Math.hypot(e.pos.x - bug.pos.x, e.pos.y - bug.pos.y) < range + e.radius * 0.5 &&
+        Math.abs(e.alt - bug.alt) < 45 &&
+        (!flyersOnly || e.alt > 8),
+    );
   switch (id) {
     case 'mandible-crusher': {
       return bug.parts.some((p) => {
@@ -500,13 +528,94 @@ function judge(sim: Sim, bug: Bug, id: MoveId): boolean {
       );
       return underStomper || (dist < 80 && bug.recentDamage > 14 && hpFraction(bug) < hpFraction(foe));
     }
+    case 'web-snare':
+      return foe.webbed <= 0 && dist > 40 && dist < 250;
+    case 'burrow-strike':
+      return bug.alt < 6 && bug.webbed <= 0 && foe.alt < 30 && dist > 70 && dist < 330;
+    case 'ghost-shell':
+      return bug.cloak <= 0 && dist > 90 && dist < 320 && foe.parts.some((p) => p.alive && p.part.weapon);
+    case 'sunder-beam':
+      return dist < 300 && Math.abs(foe.alt - bug.alt) < 40;
+    case 'static-burst':
+      return near(105);
+    case 'overclock':
+      return bug.haste <= 0 && dist < 170;
+    case 'gale-flap':
+      return near(120, true) || (near(120) && bug.recentDamage > 10);
   }
 }
 
-/** Heading that points `bug`'s stinger (whichever way it's mounted) at `foe`. */
-export function venomHeading(bug: Bug, foe: Bug) {
-  const sting = bug.parts.find((p) => p.alive && p.part.category === 'stinger');
-  return Math.atan2(foe.pos.y - bug.pos.y, foe.pos.x - bug.pos.x) - (sting?.r ?? 0) * (Math.PI / 2);
+/** Moves that need to see their target. */
+const AIMED: MoveId[] = ['mandible-crusher', 'venom-barrage', 'web-snare', 'burrow-strike', 'sunder-beam'];
+
+/** Heading that points `bug`'s part tagged `tag` (whichever way it's mounted) at `foe`. */
+export function aimHeading(bug: Bug, foe: Bug, tag: PartTag) {
+  const part = bug.parts.find((p) => p.alive && p.part.tag === tag);
+  return Math.atan2(foe.pos.y - bug.pos.y, foe.pos.x - bug.pos.x) - (part?.r ?? 0) * (Math.PI / 2);
+}
+
+/** Tangle a bug in silk. Spider-legged bugs shrug most of it off. */
+function snare(sim: Sim, bug: Bug) {
+  const spider = bug.parts.some((p) => p.alive && p.part.tag === 'spider');
+  bug.webbed = spider ? 1.2 : 3.5;
+  sim.log.push(spider ? `${bug.name} shrugs off the web.` : `${bug.name} is webbed!`);
+}
+
+/** A burrowed bug bursts out: hits what's above it from underneath and tosses it. */
+function erupt(sim: Sim, bug: Bug) {
+  sim.events.push({ type: 'erupt', bug: bug.index, x: bug.pos.x, y: bug.pos.y });
+  sim.effects.push({ x: bug.pos.x, y: bug.pos.y, h: 0, ttl: 0.4, color: '#C98B4A', size: bug.radius * 2.4 });
+  sim.shake = Math.max(sim.shake, 0.4);
+  for (const e of foesOf(sim, bug)) {
+    const d = Math.hypot(e.pos.x - bug.pos.x, e.pos.y - bug.pos.y);
+    if (e.burrow > 0 || e.alt > 30 || d > bug.radius + e.radius * 0.6 + 20) continue;
+    // From below: anything slung underneath first, then legs, then whatever's nearest.
+    const targets = e.parts
+      .filter((p) => p.alive)
+      .map((p) => {
+        const w = partWorld(e, p);
+        return { p, d: Math.hypot(w.x - bug.pos.x, w.y - bug.pos.y), pri: p.z === -1 ? 0 : p.part.category === 'legs' ? 1 : 2 };
+      })
+      .sort((a, b) => a.pri - b.pri || a.d - b.d)
+      .slice(0, 3);
+    for (const { p } of targets) damagePart(sim, e, p, 24, bug);
+    if (!e.dead) {
+      // Tossed into the air; it lands hard.
+      e.alt = Math.max(e.alt, 6);
+      e.vAlt = 150;
+      e.vel.x += ((e.pos.x - bug.pos.x) / (d || 1)) * 120;
+      e.vel.y += ((e.pos.y - bug.pos.y) / (d || 1)) * 120;
+    }
+  }
+}
+
+/** Underground: untouchable, tunnelling straight at its target, then erupting beneath it. */
+function stepBurrow(sim: Sim, bug: Bug, dt: number) {
+  const foe = foeOf(sim, bug);
+  const dx = foe.pos.x - bug.pos.x;
+  const dy = foe.pos.y - bug.pos.y;
+  const d = Math.hypot(dx, dy) || 1;
+  if (!foe.dead && d > 4) {
+    const go = Math.min(d, Math.max(150, bug.stats.topSpeed * 1.5) * dt);
+    bug.pos.x += (dx / d) * go;
+    bug.pos.y += (dy / d) * go;
+    const turn = angleDiff(bug.heading, Math.atan2(dy, dx));
+    bug.heading += Math.sign(turn) * Math.min(Math.abs(turn), 7 * dt);
+  }
+  const r = bug.radius;
+  bug.pos.x = Math.max(r, Math.min(ARENA_SIZE - r, bug.pos.x));
+  bug.pos.y = Math.max(r, Math.min(ARENA_SIZE - r, bug.pos.y));
+  bug.vel.x = 0;
+  bug.vel.y = 0;
+  bug.alt = 0;
+  bug.vAlt = 0;
+  bug.burrow -= dt;
+  // Right underneath: come up after a moment's rumble.
+  if (bug.burrow > 0.25 && d < (bug.radius + foe.radius) * 0.35) bug.burrow = 0.25;
+  if (bug.burrow <= 0) {
+    bug.burrow = 0;
+    erupt(sim, bug);
+  }
 }
 
 function castMove(sim: Sim, bug: Bug, id: MoveId) {
@@ -551,7 +660,7 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
     case 'venom-barrage': {
       const sting = bug.parts.find((p) => p.alive && p.part.category === 'stinger');
       // Swing round so the stinger points straight at the target (the cutscene shows the turn)…
-      bug.heading = venomHeading(bug, foe);
+      bug.heading = aimHeading(bug, foe, 'venom');
       const from = sting ? partWorld(bug, sting) : bug.pos;
       // …and fire a tight fan at where the target will be when the darts arrive.
       const tFly = Math.max(0.1, Math.hypot(foe.pos.x - from.x, foe.pos.y - from.y) / 380);
@@ -579,6 +688,75 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
       gainProc(bug, PROC.dodge);
       break;
     }
+    case 'web-snare': {
+      const gland = bug.parts.find((p) => p.alive && p.part.tag === 'silk');
+      const from = gland ? partWorld(bug, gland) : bug.pos;
+      const tFly = Math.max(0.1, Math.hypot(foe.pos.x - from.x, foe.pos.y - from.y) / 300);
+      const a = Math.atan2(foe.pos.y + foe.vel.y * tFly * 0.7 - from.y, foe.pos.x + foe.vel.x * tFly * 0.7 - from.x);
+      sim.projectiles.push({ x: from.x, y: from.y, z: bug.alt + 6, vx: Math.cos(a) * 300, vy: Math.sin(a) * 300, vz: (foe.alt - bug.alt - 6) / tFly, damage: 4, owner: bug.index, ttl: 1.3, big: true, kind: 'web' });
+      break;
+    }
+    case 'burrow-strike':
+      bug.burrow = 1.5;
+      bug.vel.x = 0;
+      bug.vel.y = 0;
+      break;
+    case 'ghost-shell':
+      bug.cloak = 4.5;
+      break;
+    case 'sunder-beam': {
+      // Swing the lens onto the target, then cut straight through everything in line.
+      bug.heading = aimHeading(bug, foe, 'laser');
+      const lens = bug.parts.find((p) => p.alive && p.part.tag === 'laser');
+      const from = lens ? partWorld(bug, lens) : bug.pos;
+      const a = Math.atan2(foe.pos.y - from.y, foe.pos.x - from.x);
+      const ux = Math.cos(a);
+      const uy = Math.sin(a);
+      for (const e of foesOf(sim, bug)) {
+        if (e.burrow > 0 || Math.abs(e.alt - bug.alt) > 45) continue;
+        e.parts
+          .filter((p) => p.alive && !shielded(e, p))
+          .map((p) => {
+            const w = partWorld(e, p);
+            return { p, along: (w.x - from.x) * ux + (w.y - from.y) * uy, off: Math.abs((w.x - from.x) * uy - (w.y - from.y) * ux) };
+          })
+          .filter((t) => t.along > 0 && t.off < CELL * 0.75)
+          .sort((x, y) => x.along - y.along)
+          .slice(0, 5)
+          .forEach(({ p }, k) => damagePart(sim, e, p, 22 * (1 - k * 0.08), bug));
+      }
+      break;
+    }
+    case 'static-burst':
+      for (const e of foesOf(sim, bug)) {
+        const d = Math.hypot(e.pos.x - bug.pos.x, e.pos.y - bug.pos.y);
+        if (e.burrow > 0 || d > 120 + e.radius * 0.5 || Math.abs(e.alt - bug.alt) > 45) continue;
+        e.stun = 1.3;
+        e.proc = Math.max(0, e.proc - 15);
+        e.parts
+          .filter((p) => p.alive)
+          .map((p) => ({ p, d: Math.hypot(partWorld(e, p).x - bug.pos.x, partWorld(e, p).y - bug.pos.y) }))
+          .sort((x, y) => x.d - y.d)
+          .slice(0, 2)
+          .forEach(({ p }) => damagePart(sim, e, p, 8, bug));
+      }
+      sim.effects.push({ x: bug.pos.x, y: bug.pos.y, h: bug.alt, ttl: 0.4, color: '#FFE14D', size: 240 });
+      break;
+    case 'overclock':
+      bug.haste = 5;
+      break;
+    case 'gale-flap':
+      for (const e of foesOf(sim, bug)) {
+        const d = Math.hypot(e.pos.x - bug.pos.x, e.pos.y - bug.pos.y) || 1;
+        if (e.burrow > 0 || d > 150 + e.radius * 0.5) continue;
+        // Lighter bugs fly further; anything in the air is knocked out of it.
+        const push = 320 * Math.max(0.5, Math.min(1.6, 90 / Math.max(1, e.stats.mass)));
+        e.vel.x += ((e.pos.x - bug.pos.x) / d) * push;
+        e.vel.y += ((e.pos.y - bug.pos.y) / d) * push;
+        if (e.alt > 6) e.stamina = 0;
+      }
+      gainProc(bug, PROC.dodge);
+      break;
   }
 }
 
@@ -598,6 +776,10 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
   bug.recentDamage *= Math.exp(-dt * 0.8);
   bug.shield = Math.max(0, bug.shield - dt);
   bug.invuln = Math.max(0, bug.invuln - dt);
+  bug.webbed = Math.max(0, bug.webbed - dt);
+  bug.stun = Math.max(0, bug.stun - dt);
+  bug.cloak = Math.max(0, bug.cloak - dt);
+  bug.haste = Math.max(0, bug.haste - dt);
   for (const id of bug.moves) bug.moveCd[id] = Math.max(0, (bug.moveCd[id] ?? 0) - dt);
   if (bug.dead) {
     bug.vel.x *= 0.9;
@@ -605,14 +787,21 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
     stepFlight(sim, bug, { x: 0, y: 0 }, dt);
     return;
   }
+  if (bug.burrow > 0) {
+    stepBurrow(sim, bug, dt);
+    return;
+  }
   const s = bug.stats;
-  const throttle = Math.min(1, Math.hypot(input.x, input.y));
+  const throttle = bug.stun > 0 ? 0 : Math.min(1, Math.hypot(input.x, input.y));
+  // Silk slows (spider legs mostly ignore it); Overclock speeds up.
+  const spider = bug.webbed > 0 && bug.parts.some((p) => p.alive && p.part.tag === 'spider');
+  const pace = (bug.webbed > 0 ? (spider ? 0.8 : 0.35) : 1) * (bug.haste > 0 ? 1.35 : 1);
   const want = Math.atan2(input.y, input.x);
   const crab = input.face !== undefined && throttle > 0.05;
   let align = 0;
   if (throttle > 0.05) {
     const d = angleDiff(bug.heading, crab ? input.face! : want);
-    const turn = Math.sign(d) * Math.min(Math.abs(d), s.turnRate * dt);
+    const turn = Math.sign(d) * Math.min(Math.abs(d), s.turnRate * (bug.webbed > 0 && !spider ? 0.55 : 1) * dt);
     bug.heading += turn;
     align = Math.max(0, Math.cos(angleDiff(bug.heading, want)));
   }
@@ -621,7 +810,7 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
 
   // Normally a bug walks where it points; crab-walking moves along the input, slower off-axis.
   const f = crab ? forward(want) : forward(bug.heading);
-  const speed = crab ? s.topSpeed * throttle * (0.42 + 0.58 * align) : s.topSpeed * throttle * (0.3 + 0.7 * align);
+  const speed = pace * (crab ? s.topSpeed * throttle * (0.42 + 0.58 * align) : s.topSpeed * throttle * (0.3 + 0.7 * align));
   const k = Math.min(1, 5 * dt);
   bug.vel.x += (f.x * speed - bug.vel.x) * k;
   bug.vel.y += (f.y * speed - bug.vel.y) * k;
@@ -630,18 +819,20 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
 
   // Weapons fire automatically when an enemy part is inside their cone and reach.
   const foes = foesOf(sim, bug);
-  if (foes.length) {
+  if (foes.length && bug.stun <= 0) {
     for (const p of bug.parts) {
       const w = p.part.weapon;
       if (!p.alive || !w) continue;
-      p.cooldown -= dt;
+      p.cooldown -= dt * (bug.haste > 0 ? 1.5 : 1);
       if (p.cooldown > 0) continue;
       const wp = partWorld(bug, p);
       // The nearest exposed part of any enemy.
       let target: ReturnType<typeof nearestPart> = null;
       let enemy = foes[0];
       for (const f of foes) {
+        if (f.burrow > 0) continue; // underground
         const t = nearestPart(f, wp, true);
+        if (t && f.cloak > 0 && t.d > CELL * 1.2) continue; // can't see it unless it's touching
         if (t && (!target || t.d < target.d)) {
           target = t;
           enemy = f;
@@ -655,6 +846,9 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
       const toward = Math.atan2(target.w.y - wp.y, target.w.x - wp.x);
       if (target.d > CELL && Math.abs(angleDiff(facingAngle(bug, p), toward)) > w.arc) continue;
       p.cooldown = w.cooldown;
+      // Striking gives away a cloaked bug, but the ambush always crits (melee).
+      const ambush = bug.cloak > 0;
+      if (ambush) bug.cloak = 0;
       if (w.projectileSpeed) {
         const dx = target.w.x - wp.x;
         const dy = target.w.y - wp.y;
@@ -671,6 +865,7 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
           owner: i,
           ttl: (reach * 1.3) / w.projectileSpeed,
           big: false,
+          kind: w.beam ? 'laser' : undefined,
         });
       } else {
         let dmg = w.damage;
@@ -678,7 +873,7 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
           const closing = (bug.vel.x - enemy.vel.x) * Math.cos(toward) + (bug.vel.y - enemy.vel.y) * Math.sin(toward);
           dmg += Math.max(0, closing) * w.ramBonus;
         }
-        const crit = rand(sim) < critChance(bug, enemy, wp);
+        const crit = rand(sim) < critChance(bug, enemy, wp) || ambush;
         damagePart(sim, enemy, strikeTarget(sim, enemy, wp, bug.alt > enemy.alt + 15) ?? target.p, dmg, bug, crit);
       }
     }
@@ -747,7 +942,7 @@ function stepFlight(sim: Sim, bug: Bug, input: Input, dt: number) {
     // Falling.
     bug.vAlt -= 420 * dt;
   } else {
-    const want = bug.grounded ? 0 : Math.max(0, Math.min(1, input.alt ?? 0)) * ceiling;
+    const want = bug.grounded || bug.webbed > 0 || bug.stun > 0 ? 0 : Math.max(0, Math.min(1, input.alt ?? 0)) * ceiling;
     const climb = Math.max(-120, Math.min(90, (want - bug.alt) * 5));
     bug.vAlt += (climb - bug.vAlt) * Math.min(1, dt * 8);
   }
@@ -801,6 +996,7 @@ function collideBugs(sim: Sim) {
 
 function collidePair(sim: Sim, a: Bug, b: Bug) {
   if (Math.abs(a.alt - b.alt) > 26) return; // one is flying over the other
+  if (a.burrow > 0 || b.burrow > 0) return; // one is underground
   const dx = b.pos.x - a.pos.x;
   const dy = b.pos.y - a.pos.y;
   const d = Math.hypot(dx, dy) || 0.01;
@@ -873,8 +1069,15 @@ export function step(sim: Sim, dt: number, inputs: Input[]) {
     pr.ttl -= dt;
     const attacker = sim.bugs[pr.owner];
     for (const target of foesOf(sim, attacker)) {
+      if (target.burrow > 0) continue;
       const hit = nearestPart(target, pr, true);
-      if (!(hit && hit.d < CELL * 0.6 && Math.abs(pr.z - target.alt) < 20)) continue;
+      if (!(hit && hit.d < CELL * (pr.kind === 'web' ? 1.1 : 0.6) && Math.abs(pr.z - target.alt) < (pr.kind === 'web' ? 30 : 20))) continue;
+      if (pr.kind === 'web') {
+        snare(sim, target);
+        damagePart(sim, target, hit.p, pr.damage, attacker);
+        pr.ttl = 0;
+        break;
+      }
       // Weapon darts can crit (judged by where they came from); move volleys can't.
       const from = { x: pr.x - pr.vx * 0.2, y: pr.y - pr.vy * 0.2 };
       const crit = !pr.big && rand(sim) < critChance(attacker, target, from);
@@ -939,10 +1142,13 @@ export type AiState = {
   guard: number;
   /** Index of the enemy it's fighting (it sticks with one until another is much closer). */
   foe: number;
+  /** Where it last saw that enemy (it hunts there while the enemy is cloaked). */
+  seenX: number;
+  seenY: number;
 };
 
 export function newAi(index: number): AiState {
-  return { mode: 'approach', t: 0, side: index % 2 === 0 ? 1 : -1, target: -1, engaged: 0, stuck: 0, guard: 0, foe: -1 };
+  return { mode: 'approach', t: 0, side: index % 2 === 0 ? 1 : -1, target: -1, engaged: 0, stuck: 0, guard: 0, foe: -1, seenX: 0, seenY: 0 };
 }
 
 /** How much we want to break each part category. */
@@ -1106,6 +1312,22 @@ export function aiInput(sim: Sim, me: number, aggression: number = sim.bugs[me].
   const dist = Math.hypot(toFoe.x, toFoe.y) || 1;
   const toFoeN = { x: toFoe.x / dist, y: toFoe.y / dist };
   const contact = bug.radius + foe.radius;
+
+  // Lost sight of it (cloaked): head for where it was last seen and prowl around there.
+  const hidden = foe.cloak > 0 && dist > 75;
+  if (!hidden) {
+    ai.seenX = foe.pos.x;
+    ai.seenY = foe.pos.y;
+  } else {
+    const to = { x: ai.seenX - bug.pos.x, y: ai.seenY - bug.pos.y };
+    const d = Math.hypot(to.x, to.y);
+    const prowl = d > 50 ? unit(to) : rotate(d > 1 ? unit(to) : toFoeN, (Math.PI / 2) * ai.side);
+    return steer(sim, bug, prowl, d > 50 ? 0.7 : 0.45, 0);
+  }
+  // Something is tunnelling at us: keep moving (flyers climb out of reach).
+  if (foe.burrow > 0) {
+    return steer(sim, bug, rotate({ x: -toFoeN.x, y: -toFoeN.y }, 0.5 * ai.side), 1, bug.stats.maxAlt > 12 && !bug.grounded ? 1 : 0);
+  }
 
   // Build-driven style.
   const weapons = bug.parts.filter((p) => p.alive && p.part.weapon);
@@ -1393,7 +1615,7 @@ function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number, alt = 0, goalDist
 
 // ── HUD summary (cheap, for React) ──────────────────────────────────
 
-export type HudBug = { name: string; team: 0 | 1; dead: boolean; hp: number; proc: number; shield: boolean; flying: boolean; wings: number; moves: { id: MoveId; cd: number; ready: boolean }[] };
+export type HudBug = { name: string; team: 0 | 1; dead: boolean; status: string; hp: number; proc: number; shield: boolean; flying: boolean; wings: number; moves: { id: MoveId; cd: number; ready: boolean }[] };
 export type Hud = { bugs: HudBug[]; time: number; log: string[]; over: boolean; winner: 0 | 1 | null; ult: Ult | null; flash: number };
 
 export function hud(sim: Sim): Hud {
@@ -1403,6 +1625,7 @@ export function hud(sim: Sim): Hud {
     dead: bug.dead,
     hp: hpFraction(bug),
     proc: bug.proc,
+    status: `${bug.webbed > 0 ? ' 🕸' : ''}${bug.stun > 0 ? ' ⚡' : ''}${bug.cloak > 0 ? ' 👻' : ''}${bug.burrow > 0 ? ' ⛏' : ''}${bug.haste > 0 ? ' 🔥' : ''}`,
     shield: bug.shield > 0,
     flying: bug.alt > 8,
     wings: maxStamina(bug) > 0 ? bug.stamina / maxStamina(bug) : -1,
