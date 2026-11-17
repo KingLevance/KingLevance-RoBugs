@@ -454,10 +454,11 @@ function judge(sim: Sim, bug: Bug, id: MoveId): boolean {
       });
     }
     case 'venom-barrage': {
-      // Aimed down whichever way the stinger points.
+      // The bug swings its stinger onto the target during the wind-up, so it only
+      // needs to be roughly on that side (whichever way the stinger points).
       const sting = bug.parts.find((p) => p.alive && p.part.category === 'stinger');
       const aim = sting ? Math.abs(angleDiff(facingAngle(bug, sting), Math.atan2(dy, dx))) : facing;
-      return Math.hypot(dist, foe.alt - bug.alt) < 280 && aim < 0.45;
+      return Math.hypot(dist, foe.alt - bug.alt) < 280 && aim < 1.4;
     }
     case 'carapace-lock':
       return bug.shield <= 0 && (bug.recentDamage > 22 || (hpFraction(bug) < 0.4 && dist < 100));
@@ -468,6 +469,12 @@ function judge(sim: Sim, bug: Bug, id: MoveId): boolean {
       return underStomper || (dist < 80 && bug.recentDamage > 14 && hpFraction(bug) < hpFraction(foe));
     }
   }
+}
+
+/** Heading that points `bug`'s stinger (whichever way it's mounted) at `foe`. */
+export function venomHeading(bug: Bug, foe: Bug) {
+  const sting = bug.parts.find((p) => p.alive && p.part.category === 'stinger');
+  return Math.atan2(foe.pos.y - bug.pos.y, foe.pos.x - bug.pos.x) - (sting?.r ?? 0) * (Math.PI / 2);
 }
 
 function castMove(sim: Sim, bug: Bug, id: MoveId) {
@@ -511,12 +518,16 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
     }
     case 'venom-barrage': {
       const sting = bug.parts.find((p) => p.alive && p.part.category === 'stinger');
+      // Swing round so the stinger points straight at the target (the cutscene shows the turn)…
+      bug.heading = venomHeading(bug, foe);
       const from = sting ? partWorld(bug, sting) : bug.pos;
-      const aim = sting ? facingAngle(bug, sting) : bug.heading;
+      // …and fire a tight fan at where the target will be when the darts arrive.
+      const tFly = Math.max(0.1, Math.hypot(foe.pos.x - from.x, foe.pos.y - from.y) / 380);
+      const lead = { x: foe.pos.x + foe.vel.x * tFly * 0.6, y: foe.pos.y + foe.vel.y * tFly * 0.6 };
+      const aim = Math.atan2(lead.y - from.y, lead.x - from.x);
       for (let k = -3; k <= 3; k++) {
-        const a = aim + k * 0.09;
+        const a = aim + k * 0.055;
         const dz = foe.alt - bug.alt;
-        const tFly = Math.max(0.1, Math.hypot(foe.pos.x - from.x, foe.pos.y - from.y) / 380);
         sim.projectiles.push({ x: from.x, y: from.y, z: bug.alt, vx: Math.cos(a) * 380, vy: Math.sin(a) * 380, vz: dz / tFly, damage: 14, owner: bug.index, ttl: 1, big: true });
       }
       break;

@@ -7,7 +7,7 @@ import * as THREE from 'three';
 
 import { getMove, type MoveId } from '@/game/moves';
 import { CATEGORY_COLOR, type Category } from '@/game/parts';
-import { ARENA_SIZE, CELL, partWorld, type Bug, type Sim, type SimPart } from '@/game/sim';
+import { ARENA_SIZE, CELL, partWorld, venomHeading, type Bug, type Sim, type SimPart } from '@/game/sim';
 
 import { createRenderer } from './gl';
 import { ArenaDressing } from './arena';
@@ -501,7 +501,7 @@ export class ArenaRenderer {
       // Signature-move choreography (see poseCine), or the normal locomotion pose.
       let ov: { weapon?: Category; attack?: number; air?: number; glow?: number } = {};
       if (cine && cine.caster === bi && cine.phase === 'charge') {
-        ov = this.poseCine(v, cine, t);
+        ov = this.poseCine(v, cine, t, sim);
       } else {
         if (cine && cine.caster === bi && cine.id === 'mandible-crusher') ov = { weapon: 'mandibles', attack: 1 - smooth(cine.p / 0.5) };
         v.pose.scale.lerp(new THREE.Vector3(1, 1, 1), 0.3);
@@ -636,6 +636,9 @@ export class ArenaRenderer {
       } else if (e.type === 'ult-release') {
         this.arena.hype(0.9);
         this.finisher = { id: e.move, caster: e.bug, t: 0 };
+        // Any turn the cutscene made is now in the sim's heading.
+        this.bugs[e.bug].pose.rotation.y = 0;
+        this.bugs[e.bug].lastHeading = sim.bugs[e.bug].heading;
         this.releaseFx(sim, e.move, e.bug);
       } else if (e.type === 'move' && e.move === 'skitter-dash') {
         const b = sim.bugs[e.bug];
@@ -794,7 +797,7 @@ export class ArenaRenderer {
    * Charge-up body language per move (pose space: −z is the bug's front).
    * Returns animation overrides for the caster's parts.
    */
-  private poseCine(v: BugView, c: Cine, t: number) {
+  private poseCine(v: BugView, c: Cine, t: number, sim: Sim) {
     const k = c.p;
     const crouch = smooth(k / 0.3);
     switch (c.id) {
@@ -815,7 +818,12 @@ export class ArenaRenderer {
         v.pose.scale.set(1 + crouch * 0.1, 1 - crouch * 0.14, 1 + crouch * 0.04);
         v.pose.position.set(0, -0.12 * crouch, 0.35 * charge + pulse * 0.05);
         v.pose.rotation.x = -0.06 * crouch;
-        v.pose.rotation.y = Math.sin(t * 3) * 0.04 * (1 - charge);
+        // Swing the stinger round onto the target (the sim snaps to this heading on release).
+        const caster = sim.bugs[c.caster];
+        let turn = venomHeading(caster, sim.bugs[c.caster === 0 ? 1 : 0]) - caster.heading;
+        while (turn > Math.PI) turn -= Math.PI * 2;
+        while (turn < -Math.PI) turn += Math.PI * 2;
+        v.pose.rotation.y = -turn * smooth(k / 0.6);
         return { weapon: 'stinger' as Category, attack: 0.25 + 0.75 * charge, glow: 0.1 * pulse };
       }
       case 'carapace-lock': {
@@ -1038,7 +1046,9 @@ export class ArenaRenderer {
       let aim: THREE.Vector3;
       if (c.id === 'venom-barrage') {
         // Over the shoulder, looking down the barrel at the target.
-        const behind = dirAt(Math.PI + 0.45 * side);
+        // (Behind = away from the target, whichever way the stinger is mounted.)
+        const away = Math.atan2(caster.pos.y - foe.pos.y, caster.pos.x - foe.pos.x) + 0.45 * side;
+        const behind = new THREE.Vector3(Math.cos(away), 0, Math.sin(away));
         const push = c.phase === 'charge' ? smooth((p - 0.6) / 0.4) : 1 - smooth(p);
         shot = center.clone().addScaledVector(behind, r + (4.2 - push * 1.2) * K).add(new THREE.Vector3(0, 1.5 + 0.8 * K, 0));
         aim = center.clone().lerp(foeAt, c.phase === 'charge' ? 0.35 : 0.35 + smooth(p) * 0.4).add(new THREE.Vector3(0, 0.6, 0));
