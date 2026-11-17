@@ -14,7 +14,21 @@ import { buildPart, toonMaterial, toonMesh, type PartModel } from './models';
 const BG = 0x14171c;
 const MIDX = (GRID_W - 1) / 2;
 const MIDY = (GRID_H - 1) / 2;
-const VIEW_DIR = new THREE.Vector3(0, 1, 0.72).normalize();
+const TARGET = new THREE.Vector3(0, 0.3, 0.2);
+const MIN_PITCH = (12 * Math.PI) / 180;
+const MAX_PITCH = (88 * Math.PI) / 180;
+
+/** Named camera angles. yaw 0 = looking from behind the bug (front at the top). */
+export const VIEWS = {
+  angle: { yaw: 0, pitch: 0.95 },
+  top: { yaw: 0, pitch: MAX_PITCH },
+  side: { yaw: Math.PI / 2, pitch: 0.3 },
+  front: { yaw: Math.PI, pitch: 0.35 },
+} as const;
+export type ViewName = keyof typeof VIEWS;
+
+const dirFor = (yaw: number, pitch: number) =>
+  new THREE.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
 
 const cellToWorld = (x: number, y: number) => new THREE.Vector3(x - MIDX, 0, y - MIDY);
 
@@ -32,6 +46,14 @@ export class GarageRenderer {
   private raycaster = new THREE.Raycaster();
   private floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private clock = 0;
+  private yaw: number = VIEWS.angle.yaw;
+  private pitch: number = VIEWS.angle.pitch;
+  private goalYaw: number = VIEWS.angle.yaw;
+  private goalPitch: number = VIEWS.angle.pitch;
+  /** Whole-bench bounds (editing views) and bug bounds (eye-level views): minX, maxX, minZ, maxZ. */
+  private benchBox = [-(MIDX + 0.9), MIDX + 0.9, -(MIDY + 1.1), MIDY + 1.1];
+  private bugBox = this.benchBox.slice();
+  private fitDirty = true;
   private selected: string | null = null;
   private dragging: { key: string; point: THREE.Vector3 } | null = null;
 
@@ -82,14 +104,17 @@ export class GarageRenderer {
     this.scene.add(this.bug);
   }
 
-  /** Pull the camera back until the whole bench fits the viewport. */
+  /** Place the camera at the current yaw/pitch, pulled back until the whole bench fits. */
   private fitCamera() {
-    const corners = [-1, 1].flatMap((sx) =>
-      [-1, 1].flatMap((sz) => [0, 1.4].map((y) => new THREE.Vector3(sx * (MIDX + 0.9), y, sz * (MIDY + 1.1)))),
-    );
-    const target = new THREE.Vector3(0, 0.3, 0.2);
-    for (let d = 4; d < 60; d += 0.25) {
-      this.camera.position.copy(target).addScaledVector(VIEW_DIR, d);
+    this.fitDirty = false;
+    const dir = dirFor(this.yaw, this.pitch);
+    // Low, eye-level angles zoom to the bug itself; higher angles show the whole bench for editing.
+    const t = THREE.MathUtils.smoothstep(0.75 - this.pitch, 0, 0.4);
+    const [x0, x1, z0, z1] = this.benchBox.map((v, i) => THREE.MathUtils.lerp(v, this.bugBox[i], t));
+    const target = new THREE.Vector3((x0 + x1) / 2, 0.4, (z0 + z1) / 2).lerp(TARGET, 1 - t);
+    const corners = [x0, x1].flatMap((x) => [z0, z1].flatMap((z) => [0, 1.4].map((y) => new THREE.Vector3(x, y, z))));
+    for (let d = 3; d < 60; d += 0.25) {
+      this.camera.position.copy(target).addScaledVector(dir, d);
       this.camera.lookAt(target);
       this.camera.updateMatrixWorld();
       const fits = corners.every((c) => {
@@ -98,6 +123,21 @@ export class GarageRenderer {
       });
       if (fits) break;
     }
+  }
+
+  /** Spin the view by a finger drag (pixels). */
+  orbit(dx: number, dy: number) {
+    this.goalYaw -= dx * 0.01;
+    this.goalPitch = THREE.MathUtils.clamp(this.goalPitch + dy * 0.008, MIN_PITCH, MAX_PITCH);
+  }
+
+  /** Ease to a named view. */
+  setView(name: ViewName) {
+    const v = VIEWS[name];
+    // Take the short way round.
+    const turns = Math.round((this.goalYaw - v.yaw) / (Math.PI * 2));
+    this.goalYaw = v.yaw + turns * Math.PI * 2;
+    this.goalPitch = v.pitch;
   }
 
   resize(w: number, h: number) {
@@ -120,6 +160,14 @@ export class GarageRenderer {
         this.models.delete(k);
       }
     }
+    if (placements.length) {
+      const xs = placements.map((p) => p.x - MIDX);
+      const zs = placements.map((p) => p.y - MIDY);
+      this.bugBox = [Math.min(...xs) - 0.9, Math.max(...xs) + 0.9, Math.min(...zs) - 0.9, Math.max(...zs) + 0.9];
+    } else {
+      this.bugBox = this.benchBox.slice();
+    }
+    this.fitDirty = true;
     for (const [k, p] of wanted) {
       if (this.models.has(k)) continue;
       const model = buildPart(getPart(p.partId).category, Math.sign(p.x - MIDX));
@@ -195,6 +243,13 @@ export class GarageRenderer {
 
   render(dt: number) {
     this.clock += dt;
+    if (Math.abs(this.goalYaw - this.yaw) > 1e-4 || Math.abs(this.goalPitch - this.pitch) > 1e-4) {
+      const k = 1 - Math.exp(-dt * 12);
+      this.yaw += (this.goalYaw - this.yaw) * k;
+      this.pitch += (this.goalPitch - this.pitch) * k;
+      this.fitDirty = true;
+    }
+    if (this.fitDirty && !this.dragging) this.fitCamera();
     const t = this.clock;
     for (const [k, m] of this.models) {
       m.animate?.(t);

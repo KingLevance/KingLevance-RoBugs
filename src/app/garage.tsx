@@ -20,11 +20,17 @@ import { computeStats, MAX_MASS, resolve, usage, validateBuild } from '@/game/bu
 import { autoPlace, movePart, partAt, removeAt } from '@/game/editor';
 import { getMove, MOVE_SLOTS } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type PartDef } from '@/game/parts';
-import { GarageRenderer, type Cell } from '@/render/garage-scene';
+import { GarageRenderer, type Cell, type ViewName } from '@/render/garage-scene';
 import { useGame } from '@/state/game-store';
 
 const CATALOG_ORDER = new Map(PARTS.map((p, i) => [p.id, i]));
 const DRAG_SLOP = 8;
+const VIEW_BUTTONS: [ViewName, string][] = [
+  ['angle', 'Angle'],
+  ['top', 'Top'],
+  ['side', 'Side'],
+  ['front', 'Front'],
+];
 
 function PartDetails({ part }: { part: PartDef }) {
   const lines: string[] = [`HP ${part.hp}`, `Mass ${part.mass}`];
@@ -48,7 +54,16 @@ function PartDetails({ part }: { part: PartDef }) {
   );
 }
 
-type Touch = { startX: number; startY: number; cell: Cell | null; dragging: boolean; last: { cell: Cell | null; inside: boolean } };
+type Touch = {
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  /** Part under the finger at touch start; null means the touch spins the view. */
+  cell: Cell | null;
+  dragging: boolean;
+  last: { cell: Cell | null; inside: boolean };
+};
 
 export default function Garage() {
   const game = useGame();
@@ -128,6 +143,8 @@ export default function Garage() {
     touch.current = {
       startX: e.nativeEvent.pageX,
       startY: e.nativeEvent.pageY,
+      lastX: e.nativeEvent.pageX,
+      lastY: e.nativeEvent.pageY,
       cell: cell && partAt(placements, cell.x, cell.y) ? cell : null,
       dragging: false,
       last: { cell, inside: !!cell },
@@ -137,9 +154,18 @@ export default function Garage() {
   function onMove(e: GestureResponderEvent) {
     const t = touch.current;
     const r = renderer.current;
-    if (!t || !t.cell || !r) return;
+    if (!t || !r) return;
+    const { pageX, pageY } = e.nativeEvent;
+    if (!t.cell) {
+      // Empty space: spin the view.
+      r.orbit(pageX - t.lastX, pageY - t.lastY);
+      t.lastX = pageX;
+      t.lastY = pageY;
+      if (Math.hypot(pageX - t.startX, pageY - t.startY) >= DRAG_SLOP) t.dragging = true;
+      return;
+    }
     if (!t.dragging) {
-      const moved = Math.hypot(e.nativeEvent.pageX - t.startX, e.nativeEvent.pageY - t.startY);
+      const moved = Math.hypot(pageX - t.startX, pageY - t.startY);
       if (moved < DRAG_SLOP) return;
       t.dragging = r.startDrag(t.cell);
       setSelected(t.cell);
@@ -154,6 +180,7 @@ export default function Garage() {
     touch.current = null;
     setDragHint(null);
     if (!t) return;
+    if (!t.cell && t.dragging) return; // finished spinning the view
     if (!t.dragging) {
       // Tap: select / deselect a part.
       const same = t.cell && selected && t.cell.x === selected.x && t.cell.y === selected.y;
@@ -219,14 +246,20 @@ export default function Garage() {
             onResponderRelease={onRelease}
             onResponderTerminate={onRelease}
           />
-          <View pointerEvents="none" style={styles.editorOverlay}>
-            <Text style={styles.front}>▲ FRONT</Text>
-            <Text style={[styles.hint, dragHint === 'remove' && { color: Colors.bad }]}>
+          <View pointerEvents="box-none" style={styles.editorOverlay}>
+            <View style={styles.views} pointerEvents="box-none">
+              {VIEW_BUTTONS.map(([name, label]) => (
+                <Pressable key={name} onPress={() => renderer.current?.setView(name)} style={styles.viewBtn}>
+                  <Text style={styles.viewBtnText}>{label}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <Text pointerEvents="none" style={[styles.hint, dragHint === 'remove' && { color: Colors.bad }]}>
               {dragHint === 'remove'
                 ? 'Release to put it back in the bin'
                 : dragHint === 'move'
                   ? 'Release to drop it here (swaps if taken)'
-                  : toast ?? 'Drag parts to move them · drag off the grid to remove'}
+                  : toast ?? 'Drag a part to move it · drag empty space to spin the view'}
             </Text>
           </View>
         </View>
@@ -342,7 +375,16 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
   },
   editorOverlay: { ...StyleSheet.absoluteFill, justifyContent: 'space-between', alignItems: 'center', paddingVertical: Spacing.sm },
-  front: { color: Colors.accent, fontWeight: '800', fontSize: 11, letterSpacing: 2 },
+  views: { flexDirection: 'row', gap: 6 },
+  viewBtn: {
+    backgroundColor: 'rgba(20,23,28,0.8)',
+    borderColor: Colors.border,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  viewBtnText: { color: Colors.text, fontSize: 12, fontWeight: '700' },
   hint: {
     color: Colors.text,
     fontSize: 12,
