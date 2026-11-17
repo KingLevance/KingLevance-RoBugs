@@ -44,7 +44,7 @@ function CountBeat({ label, final }: { label: string; final: boolean }) {
 function BugHud({ bug, color, align }: { bug: HudBug; color: string; align: 'left' | 'right' }) {
   const end = align === 'right';
   return (
-    <View style={{ flex: 1, gap: 3, alignItems: end ? 'flex-end' : 'flex-start' }}>
+    <View style={{ gap: 3, alignItems: end ? 'flex-end' : 'flex-start' }}>
       <Text style={[styles.hudName, { color }]} numberOfLines={1}>
         {bug.name}
         {bug.shield ? ' 🛡' : ''}
@@ -85,13 +85,29 @@ function BugHud({ bug, color, align }: { bug: HudBug; color: string; align: 'lef
   );
 }
 
+/** One-line health bar for the other bugs in a team fight. */
+function MiniHud({ bug, color, align }: { bug: HudBug; color: string; align: 'left' | 'right' }) {
+  const end = align === 'right';
+  return (
+    <View style={{ gap: 2, alignItems: end ? 'flex-end' : 'flex-start', opacity: bug.dead ? 0.4 : 1 }}>
+      <Text style={[styles.miniName, { color }]} numberOfLines={1}>
+        {bug.name}
+        {bug.dead ? ' ✕' : ''}
+      </Text>
+      <View style={[styles.track, { height: 5, width: '70%' }]}>
+        <View style={[styles.fill, { width: `${Math.max(0, bug.hp) * 100}%`, backgroundColor: color }, end && { alignSelf: 'flex-end' }]} />
+      </View>
+    </View>
+  );
+}
+
 export default function Arena() {
   const game = useGame();
   const [opponent] = useState(() => getOpponent(game.selected));
   const [sim] = useState(() =>
     createSim(
       { build: game.build, moves: game.equipped },
-      { build: opponent.build, moves: opponent.moves },
+      { build: opponent.build, moves: opponent.moves, aggression: opponent.aggression },
       opponent.arena,
       (Math.random() * 2 ** 31) | 0,
     ),
@@ -152,7 +168,7 @@ export default function Arena() {
         const p = renderer.project(e.x, e.y, h + (e.type === 'hit' ? 1.2 : 2));
         const x = Math.min(size.current.w - 50, Math.max(50, p.x * size.current.w)) + (Math.random() - 0.5) * 22;
         const y = Math.min(size.current.h - 120, Math.max(90, p.y * size.current.h));
-        const mine = e.bug === 0;
+        const mine = sim.bugs[e.bug].team === 0;
         if (e.type === 'crash') {
           items.push({ id: nextId++, x, y, text: 'CRASH!', color: '#D9D4C7', size: 22 });
         } else if (e.type === 'break') {
@@ -205,7 +221,11 @@ export default function Arena() {
       }
       while (acc >= STEP) {
         // Both bugs fight autonomously; the player's AI plays to its build.
-        step(sim, STEP, [aiInput(sim, 0, 0.7), aiInput(sim, 1, opponent.aggression)]);
+        step(
+          sim,
+          STEP,
+          sim.bugs.map((_, i) => aiInput(sim, i)),
+        );
         acc -= STEP;
       }
       renderer.render(sim, dt);
@@ -222,7 +242,10 @@ export default function Arena() {
     loop.current.raf = requestAnimationFrame(tick);
   }
 
-  const [me, foe] = view.bugs;
+  const me = view.bugs[0];
+  const foe = view.bugs.find((b) => b.team === 1 && !b.dead) ?? view.bugs.find((b) => b.team === 1)!;
+  const allies = view.bugs.filter((b, i) => b.team === 0 && i !== 0);
+  const others = view.bugs.filter((b) => b.team === 1 && b !== foe);
   const remaining = Math.max(0, Math.ceil(MATCH_SECONDS - view.time));
   const cutscene = !!view.ult;
 
@@ -249,9 +272,19 @@ export default function Arena() {
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         {!cutscene && (
           <View style={styles.hud}>
-            <BugHud bug={me} color={Colors.good} align="left" />
+            <View style={{ flex: 1, gap: 4 }}>
+              <BugHud bug={me} color={Colors.good} align="left" />
+              {allies.map((b, i) => (
+                <MiniHud key={i} bug={b} color="#58C7FF" align="left" />
+              ))}
+            </View>
             <Text style={styles.timer}>{remaining}</Text>
-            <BugHud bug={foe} color={Colors.bad} align="right" />
+            <View style={{ flex: 1, gap: 4 }}>
+              <BugHud bug={foe} color={Colors.bad} align="right" />
+              {others.map((b, i) => (
+                <MiniHud key={i} bug={b} color={Colors.bad} align="right" />
+              ))}
+            </View>
           </View>
         )}
 
@@ -309,6 +342,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.bg },
   overlay: { ...StyleSheet.absoluteFill, justifyContent: 'space-between' },
   hud: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.md, padding: Spacing.md, backgroundColor: 'rgba(20,23,28,0.55)' },
+  miniName: { fontFamily: Fonts.display, fontSize: 12 },
   hudName: { fontFamily: Fonts.display, fontSize: 17 },
   track: { height: 9, alignSelf: 'stretch', backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 4, overflow: 'hidden' },
   fill: { height: '100%', borderRadius: 4 },

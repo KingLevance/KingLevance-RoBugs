@@ -38,7 +38,11 @@ export type SimPart = {
 };
 
 export type Bug = {
-  index: 0 | 1;
+  index: number;
+  /** 0 = the player's side, 1 = the opposition. */
+  team: 0 | 1;
+  /** How hard its AI presses the attack (0..1). */
+  aggr: number;
   name: string;
   parts: SimPart[];
   pos: Vec;
@@ -74,26 +78,27 @@ export type Hazard =
   | { kind: 'stomper'; x: number; y: number; r: number; period: number; t: number };
 
 /** `z`/`vz`: altitude and climb rate, so darts can be shot up at flyers (or down from them). */
-export type Projectile = { x: number; y: number; z: number; vx: number; vy: number; vz: number; damage: number; owner: 0 | 1; ttl: number; big: boolean };
+export type Projectile = { x: number; y: number; z: number; vx: number; vy: number; vz: number; damage: number; owner: number; ttl: number; big: boolean };
 /** `h`: altitude (world px). */
 export type Effect = { x: number; y: number; h: number; ttl: number; color: string; size: number };
 
 export type SimEvent =
   /** A part took damage. `part` indexes the victim's parts; `by` is the attacking bug (null for hazards/walls). */
-  | { type: 'hit'; bug: 0 | 1; by: 0 | 1 | null; part: number; x: number; y: number; h: number; dmg: number; broke: boolean; shielded: boolean; crit: boolean }
-  | { type: 'break'; bug: 0 | 1; x: number; y: number; h: number; category: Category; time: number }
+  | { type: 'hit'; bug: number; by: number | null; part: number; x: number; y: number; h: number; dmg: number; broke: boolean; shielded: boolean; crit: boolean }
+  | { type: 'break'; bug: number; x: number; y: number; h: number; category: Category; time: number }
   /** A bug hit the floor after losing lift; `impact` is its fall speed. */
-  | { type: 'crash'; bug: 0 | 1; x: number; y: number; impact: number }
+  | { type: 'crash'; bug: number; x: number; y: number; impact: number }
   /** A bug slammed into the arena wall (`impact` = speed into it). */
-  | { type: 'wall'; bug: 0 | 1; x: number; y: number; impact: number; spiked: boolean }
-  | { type: 'ult-start'; bug: 0 | 1; move: MoveId }
-  | { type: 'ult-release'; bug: 0 | 1; move: MoveId }
-  | { type: 'move'; bug: 0 | 1; move: MoveId };
+  | { type: 'wall'; bug: number; x: number; y: number; impact: number; spiked: boolean }
+  | { type: 'ult-start'; bug: number; move: MoveId }
+  | { type: 'ult-release'; bug: number; move: MoveId }
+  | { type: 'move'; bug: number; move: MoveId };
 
-export type Ult = { id: MoveId; caster: 0 | 1; t: number; dur: number };
+export type Ult = { id: MoveId; caster: number; t: number; dur: number };
 
 export type Sim = {
-  bugs: [Bug, Bug];
+  /** Team 0 (the player's side, player first) then team 1. A 1v1 is [player, opponent]. */
+  bugs: Bug[];
   hazards: Hazard[];
   arena: ArenaId;
   spikedWalls: boolean;
@@ -103,7 +108,7 @@ export type Sim = {
   over: boolean;
   /** True if the match ended by forfeit (no rewards). */
   forfeited: boolean;
-  /** 0 = player, 1 = opponent, null = draw. */
+  /** Winning team: 0 = the player's side, 1 = the opposition, null = draw. */
   winner: 0 | 1 | null;
   log: string[];
   /** Append-only; renderers keep their own read cursor. */
@@ -116,7 +121,7 @@ export type Sim = {
   rng: number;
 };
 
-export type Fighter = { build: Build; moves: MoveId[] };
+export type Fighter = { build: Build; moves: MoveId[]; aggression?: number };
 
 /** Desired movement direction in world space; magnitude (0..1) is throttle. */
 export type Input = {
@@ -172,7 +177,25 @@ function angleDiff(a: number, b: number) {
   return d;
 }
 
-const other = (i: 0 | 1): 0 | 1 => (i === 0 ? 1 : 0);
+/** Living enemies of `bug`. */
+export function foesOf(sim: Sim, bug: Bug) {
+  return sim.bugs.filter((b) => b.team !== bug.team && !b.dead);
+}
+
+/** The enemy `bug` is dealing with: the nearest living one (or any enemy, if they're all down). */
+export function foeOf(sim: Sim, bug: Bug): Bug {
+  let best: Bug | null = null;
+  let bestD = Infinity;
+  for (const b of sim.bugs) {
+    if (b.team === bug.team || b.dead) continue;
+    const d = Math.hypot(b.pos.x - bug.pos.x, b.pos.y - bug.pos.y);
+    if (d < bestD) {
+      bestD = d;
+      best = b;
+    }
+  }
+  return best ?? sim.bugs.find((b) => b.team !== bug.team)!;
+}
 
 export function hpFraction(bug: Bug) {
   return bug.parts.reduce((a, p) => a + (p.alive ? Math.max(0, p.hp) : 0), 0) / bug.maxHp;
@@ -188,7 +211,7 @@ function aliveCount(bug: Bug, c: Category) {
 
 // ── Setup ───────────────────────────────────────────────────────────
 
-function makeBug(index: 0 | 1, fighter: Fighter, pos: Vec, heading: number): Bug {
+function makeBug(index: number, team: 0 | 1, fighter: Fighter, pos: Vec, heading: number): Bug {
   const placed = resolve(fighter.build.placements);
   const ground = placed.filter((p) => !p.z);
   const cx = ground.reduce((a, p) => a + p.x, 0) / ground.length;
@@ -208,6 +231,8 @@ function makeBug(index: 0 | 1, fighter: Fighter, pos: Vec, heading: number): Bug
   }));
   const bug: Bug = {
     index,
+    team,
+    aggr: fighter.aggression ?? 0.7,
     name: fighter.build.name,
     parts,
     pos,
@@ -275,12 +300,19 @@ function arenaHazards(arena: ArenaId): { hazards: Hazard[]; spikedWalls: boolean
 }
 
 export function createSim(player: Fighter, opponent: Fighter, arena: ArenaId, seed: number): Sim {
+  return createTeamSim([player], [opponent], arena, seed);
+}
+
+/** A fight between two sides of 1–3 bugs each. `allies[0]` is the player's own bug. */
+export function createTeamSim(allies: Fighter[], enemies: Fighter[], arena: ArenaId, seed: number): Sim {
   const { hazards, spikedWalls } = arenaHazards(arena);
+  // Line each side up across the arena.
+  const xs = (n: number, k: number) => ARENA_SIZE / 2 + (n === 1 ? 0 : (k - (n - 1) / 2) * (n === 2 ? 0.32 : 0.26) * ARENA_SIZE);
+  const bugs: Bug[] = [];
+  allies.forEach((f, k) => bugs.push(makeBug(bugs.length, 0, f, { x: xs(allies.length, k), y: ARENA_SIZE * 0.78 }, -Math.PI / 2)));
+  enemies.forEach((f, k) => bugs.push(makeBug(bugs.length, 1, f, { x: xs(enemies.length, k), y: ARENA_SIZE * 0.22 }, Math.PI / 2)));
   return {
-    bugs: [
-      makeBug(0, player, { x: ARENA_SIZE / 2, y: ARENA_SIZE * 0.78 }, -Math.PI / 2),
-      makeBug(1, opponent, { x: ARENA_SIZE / 2, y: ARENA_SIZE * 0.22 }, Math.PI / 2),
-    ],
+    bugs,
     hazards,
     arena,
     spikedWalls,
@@ -440,7 +472,7 @@ function moveReady(sim: Sim, bug: Bug, id: MoveId): boolean {
 
 /** Does this move make sense right now? */
 function judge(sim: Sim, bug: Bug, id: MoveId): boolean {
-  const foe = sim.bugs[other(bug.index)];
+  const foe = foeOf(sim, bug);
   const dx = foe.pos.x - bug.pos.x;
   const dy = foe.pos.y - bug.pos.y;
   const dist = Math.hypot(dx, dy);
@@ -493,7 +525,7 @@ function castMove(sim: Sim, bug: Bug, id: MoveId) {
 }
 
 function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
-  const foe = sim.bugs[other(bug.index)];
+  const foe = foeOf(sim, bug);
   const f = forward(bug.heading);
   switch (id) {
     case 'mandible-crusher': {
@@ -561,9 +593,8 @@ function tryMoves(sim: Sim, bug: Bug) {
 
 // ── Step ────────────────────────────────────────────────────────────
 
-function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
+function stepBug(sim: Sim, i: number, input: Input, dt: number) {
   const bug = sim.bugs[i];
-  const enemy = sim.bugs[other(i)];
   bug.recentDamage *= Math.exp(-dt * 0.8);
   bug.shield = Math.max(0, bug.shield - dt);
   bug.invuln = Math.max(0, bug.invuln - dt);
@@ -598,14 +629,24 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
   stepFlight(sim, bug, input, dt);
 
   // Weapons fire automatically when an enemy part is inside their cone and reach.
-  if (!enemy.dead) {
+  const foes = foesOf(sim, bug);
+  if (foes.length) {
     for (const p of bug.parts) {
       const w = p.part.weapon;
       if (!p.alive || !w) continue;
       p.cooldown -= dt;
       if (p.cooldown > 0) continue;
       const wp = partWorld(bug, p);
-      const target = nearestPart(enemy, wp, true);
+      // The nearest exposed part of any enemy.
+      let target: ReturnType<typeof nearestPart> = null;
+      let enemy = foes[0];
+      for (const f of foes) {
+        const t = nearestPart(f, wp, true);
+        if (t && (!target || t.d < target.d)) {
+          target = t;
+          enemy = f;
+        }
+      }
       if (!target) continue;
       const reach = w.range * s.reach + CELL * 0.5;
       // Height difference counts: ground jaws can't reach a bug flying overhead.
@@ -755,7 +796,10 @@ function stepStompers(sim: Sim, dt: number) {
 }
 
 function collideBugs(sim: Sim) {
-  const [a, b] = sim.bugs;
+  for (let i = 0; i < sim.bugs.length; i++) for (let j = i + 1; j < sim.bugs.length; j++) collidePair(sim, sim.bugs[i], sim.bugs[j]);
+}
+
+function collidePair(sim: Sim, a: Bug, b: Bug) {
   if (Math.abs(a.alt - b.alt) > 26) return; // one is flying over the other
   const dx = b.pos.x - a.pos.x;
   const dy = b.pos.y - a.pos.y;
@@ -778,7 +822,7 @@ function collideBugs(sim: Sim) {
   a.vel.y -= impulse * mb * ny * 0.8;
   b.vel.x += impulse * ma * nx * 0.8;
   b.vel.y += impulse * ma * ny * 0.8;
-  if (closing > 70) {
+  if (closing > 70 && a.team !== b.team) {
     const mid = { x: a.pos.x + nx * a.radius * 0.7, y: a.pos.y + ny * a.radius * 0.7 };
     damageNear(sim, a, mid, closing * 0.03 * (mb / ma), b);
     damageNear(sim, b, mid, closing * 0.03 * (ma / mb), a);
@@ -792,8 +836,8 @@ function stepEffects(sim: Sim, dt: number) {
   sim.flash = Math.max(0, sim.flash - dt * 2.5);
 }
 
-/** Advance the world by `dt` (use STEP). Inputs: [player, opponent]. */
-export function step(sim: Sim, dt: number, inputs: [Input, Input]) {
+/** Advance the world by `dt` (use STEP). `inputs[i]` drives `sim.bugs[i]`. */
+export function step(sim: Sim, dt: number, inputs: Input[]) {
   if (sim.over) return;
   stepEffects(sim, dt);
 
@@ -818,8 +862,7 @@ export function step(sim: Sim, dt: number, inputs: [Input, Input]) {
   }
 
   sim.time += dt;
-  stepBug(sim, 0, inputs[0], dt);
-  stepBug(sim, 1, inputs[1], dt);
+  for (let i = 0; i < sim.bugs.length; i++) stepBug(sim, i, inputs[i] ?? { x: 0, y: 0 }, dt);
   collideBugs(sim);
   stepStompers(sim, dt);
 
@@ -829,14 +872,15 @@ export function step(sim: Sim, dt: number, inputs: [Input, Input]) {
     pr.z = Math.max(0, pr.z + pr.vz * dt);
     pr.ttl -= dt;
     const attacker = sim.bugs[pr.owner];
-    const target = sim.bugs[other(pr.owner)];
-    const hit = nearestPart(target, pr, true);
-    if (hit && hit.d < CELL * 0.6 && Math.abs(pr.z - target.alt) < 20) {
+    for (const target of foesOf(sim, attacker)) {
+      const hit = nearestPart(target, pr, true);
+      if (!(hit && hit.d < CELL * 0.6 && Math.abs(pr.z - target.alt) < 20)) continue;
       // Weapon darts can crit (judged by where they came from); move volleys can't.
       const from = { x: pr.x - pr.vx * 0.2, y: pr.y - pr.vy * 0.2 };
       const crit = !pr.big && rand(sim) < critChance(attacker, target, from);
       damagePart(sim, target, strikeTarget(sim, target, pr, pr.z > target.alt + 8) ?? hit.p, pr.damage, attacker, crit);
       pr.ttl = 0;
+      break;
     }
   }
   sim.projectiles = sim.projectiles.filter((p) => p.ttl > 0);
@@ -845,25 +889,32 @@ export function step(sim: Sim, dt: number, inputs: [Input, Input]) {
 }
 
 function checkOver(sim: Sim) {
-  const [p, o] = sim.bugs;
-  if (p.dead || o.dead) {
+  const up = (team: 0 | 1) => sim.bugs.some((b) => b.team === team && !b.dead);
+  if (!up(0) || !up(1)) {
     sim.over = true;
-    sim.winner = p.dead && o.dead ? null : p.dead ? 1 : 0;
+    sim.winner = !up(0) && !up(1) ? null : !up(0) ? 1 : 0;
   } else if (sim.time >= MATCH_SECONDS) {
     sim.over = true;
-    const fp = hpFraction(p);
-    const fo = hpFraction(o);
+    const fp = teamHp(sim, 0);
+    const fo = teamHp(sim, 1);
     sim.winner = Math.abs(fp - fo) < 0.01 ? null : fp > fo ? 0 : 1;
     sim.log.push('Time! Judges decide on remaining integrity.');
   }
 }
 
-export function forfeit(sim: Sim, who: 0 | 1) {
+/** Remaining integrity of a whole side (0..1). */
+export function teamHp(sim: Sim, team: 0 | 1) {
+  const mine = sim.bugs.filter((b) => b.team === team);
+  const hp = mine.reduce((a, b) => a + b.parts.reduce((s, p) => s + (p.alive ? Math.max(0, p.hp) : 0), 0), 0);
+  return hp / Math.max(1, mine.reduce((a, b) => a + b.maxHp, 0));
+}
+
+export function forfeit(sim: Sim, team: 0 | 1) {
   if (sim.over) return;
   sim.over = true;
   sim.forfeited = true;
-  sim.winner = other(who);
-  sim.log.push(`${sim.bugs[who].name} forfeits.`);
+  sim.winner = team === 0 ? 1 : 0;
+  sim.log.push(`${sim.bugs.find((b) => b.team === team)!.name} forfeits.`);
 }
 
 // ── AI ──────────────────────────────────────────────────────────────
@@ -886,10 +937,12 @@ export type AiState = {
   stuck: number;
   /** Smoothed body angle (radians) used to turn precious parts away from the enemy. */
   guard: number;
+  /** Index of the enemy it's fighting (it sticks with one until another is much closer). */
+  foe: number;
 };
 
-export function newAi(index: 0 | 1): AiState {
-  return { mode: 'approach', t: 0, side: index === 0 ? 1 : -1, target: -1, engaged: 0, stuck: 0, guard: 0 };
+export function newAi(index: number): AiState {
+  return { mode: 'approach', t: 0, side: index % 2 === 0 ? 1 : -1, target: -1, engaged: 0, stuck: 0, guard: 0, foe: -1 };
 }
 
 /** How much we want to break each part category. */
@@ -1031,13 +1084,22 @@ function hazardNear(sim: Sim, at: Vec, within: number) {
 }
 
 /** Autonomous driver for bug `me`. Mutates only `bug.ai`; deterministic. */
-export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = STEP): Input {
+export function aiInput(sim: Sim, me: number, aggression: number = sim.bugs[me].aggr, dt: number = STEP): Input {
   const bug = sim.bugs[me];
-  const foe = sim.bugs[other(me)];
-  if (bug.dead || foe.dead) return { x: 0, y: 0 };
+  if (bug.dead) return { x: 0, y: 0 };
   // The world is frozen during cutscenes and hit-stop: don't let AI timers run on.
   if (sim.ult || sim.hitstop > 0) return { x: 0, y: 0 };
   const ai = bug.ai;
+  // Pick a fight: stay on the current enemy unless it's down or another is much closer.
+  const nearest = foeOf(sim, bug);
+  const current = sim.bugs[ai.foe];
+  const gap = (b: Bug) => Math.hypot(b.pos.x - bug.pos.x, b.pos.y - bug.pos.y);
+  if (!current || current.dead || current.team === bug.team || gap(nearest) < gap(current) * 0.65) {
+    if (ai.foe !== nearest.index) ai.target = -1;
+    ai.foe = nearest.index;
+  }
+  const foe = sim.bugs[ai.foe];
+  if (foe.dead) return { x: 0, y: 0 };
   ai.t += dt;
 
   const toFoe = { x: foe.pos.x - bug.pos.x, y: foe.pos.y - bug.pos.y };
@@ -1331,12 +1393,14 @@ function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number, alt = 0, goalDist
 
 // ── HUD summary (cheap, for React) ──────────────────────────────────
 
-export type HudBug = { name: string; hp: number; proc: number; shield: boolean; flying: boolean; wings: number; moves: { id: MoveId; cd: number; ready: boolean }[] };
-export type Hud = { bugs: [HudBug, HudBug]; time: number; log: string[]; over: boolean; winner: 0 | 1 | null; ult: Ult | null; flash: number };
+export type HudBug = { name: string; team: 0 | 1; dead: boolean; hp: number; proc: number; shield: boolean; flying: boolean; wings: number; moves: { id: MoveId; cd: number; ready: boolean }[] };
+export type Hud = { bugs: HudBug[]; time: number; log: string[]; over: boolean; winner: 0 | 1 | null; ult: Ult | null; flash: number };
 
 export function hud(sim: Sim): Hud {
   const b = (bug: Bug): HudBug => ({
     name: bug.name,
+    team: bug.team,
+    dead: bug.dead,
     hp: hpFraction(bug),
     proc: bug.proc,
     shield: bug.shield > 0,
@@ -1345,7 +1409,7 @@ export function hud(sim: Sim): Hud {
     moves: bug.moves.map((id) => ({ id, cd: bug.moveCd[id] ?? 0, ready: moveReady(sim, bug, id) })),
   });
   return {
-    bugs: [b(sim.bugs[0]), b(sim.bugs[1])],
+    bugs: sim.bugs.map(b),
     time: sim.time,
     log: sim.log.slice(-3),
     over: sim.over,

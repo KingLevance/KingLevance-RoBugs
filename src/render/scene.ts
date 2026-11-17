@@ -7,7 +7,7 @@ import * as THREE from 'three';
 
 import { getMove, type MoveId } from '@/game/moves';
 import { CATEGORY_COLOR, type Category } from '@/game/parts';
-import { ARENA_SIZE, CELL, partWorld, venomHeading, type Bug, type Sim, type SimPart } from '@/game/sim';
+import { ARENA_SIZE, CELL, foeOf, partWorld, venomHeading, type Bug, type Sim, type SimPart } from '@/game/sim';
 
 import { createRenderer } from './gl';
 import { ArenaDressing } from './arena';
@@ -76,7 +76,7 @@ type BugView = {
  * cutscene (p = progress through it), then `strike` for a moment after it
  * resolves (the payoff: impacts, recoil, slow motion).
  */
-type Cine = { id: MoveId; caster: 0 | 1; phase: 'charge' | 'strike'; p: number };
+type Cine = { id: MoveId; caster: number; phase: 'charge' | 'strike'; p: number };
 /** Seconds of follow-through after an ultimate resolves. */
 const FINISH = 0.8;
 /** Which weapon each move channels through (for the charge glow). */
@@ -182,7 +182,7 @@ export class ArenaRenderer {
   private waves: { m: THREE.Mesh; life: number }[] = [];
   private nextWave = 0;
   /** Follow-through after an ultimate resolves. */
-  private finisher: { id: MoveId; caster: 0 | 1; t: number } | null = null;
+  private finisher: { id: MoveId; caster: number; t: number } | null = null;
   /** Glowing orb that gathers at the weapon during a charge. */
   private orb: THREE.Mesh;
   /** Speed streaks behind a lunging / dashing bug. */
@@ -366,7 +366,7 @@ export class ArenaRenderer {
     );
 
     const r = bug.radius / CELL;
-    const team = bug.index === 0 ? 0x3ddc97 : 0xff5d5d;
+    const team = bug.team === 0 ? (bug.index === 0 ? 0x3ddc97 : 0x58c7ff) : 0xff5d5d;
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(r + 0.22, r + 0.29, 40),
       new THREE.MeshBasicMaterial({ color: team, transparent: true, opacity: 0.14, depthWrite: false }),
@@ -820,7 +820,7 @@ export class ArenaRenderer {
         v.pose.rotation.x = -0.06 * crouch;
         // Swing the stinger round onto the target (the sim snaps to this heading on release).
         const caster = sim.bugs[c.caster];
-        let turn = venomHeading(caster, sim.bugs[c.caster === 0 ? 1 : 0]) - caster.heading;
+        let turn = venomHeading(caster, foeOf(sim, caster)) - caster.heading;
         while (turn > Math.PI) turn -= Math.PI * 2;
         while (turn < -Math.PI) turn += Math.PI * 2;
         v.pose.rotation.y = -turn * smooth(k / 0.6);
@@ -841,7 +841,7 @@ export class ArenaRenderer {
   }
 
   /** World position just in front of the caster's channelling weapon (or its centre). */
-  private weaponTip(bi: 0 | 1, sim: Sim, cat: Category | undefined) {
+  private weaponTip(bi: number, sim: Sim, cat: Category | undefined) {
     const v = this.bugs[bi];
     const bug = sim.bugs[bi];
     const pv = cat ? v.parts.find((p) => p.attached && p.part.part.category === cat) : undefined;
@@ -879,12 +879,12 @@ export class ArenaRenderer {
   }
 
   /** The payoff the moment an ultimate resolves. */
-  private releaseFx(sim: Sim, id: MoveId, bi: 0 | 1) {
+  private releaseFx(sim: Sim, id: MoveId, bi: number) {
     const color = getMove(id).color;
     const { at, f } = this.weaponTip(bi, sim, MOVE_PART[id]);
     const v = this.bugs[bi];
     if (id === 'mandible-crusher') {
-      const foe = sim.bugs[bi === 0 ? 1 : 0];
+      const foe = foeOf(sim, sim.bugs[bi]);
       const bite = at.clone().lerp(toWorld(foe.pos.x, foe.pos.y, 0.8), 0.4);
       this.flash(bite, color, 1.5, 0.4);
       this.flash(bite, 0xffffff, 0.7, 0.18);
@@ -981,13 +981,25 @@ export class ArenaRenderer {
     // the opponent (so on a tall phone screen the fight runs up the screen, with
     // real depth), swinging round smoothly as they circle and pulling back/up as
     // they separate or take to the air.
-    const [a, b] = sim.bugs;
+    // Follow the player's bug (or an ally once it's down) and whoever it's fighting.
+    const a = sim.bugs[0].dead ? (sim.bugs.find((x) => x.team === 0 && !x.dead) ?? sim.bugs[0]) : sim.bugs[0];
+    const picked = sim.bugs[a.ai.foe];
+    const b = picked && !picked.dead && picked.team !== a.team ? picked : foeOf(sim, a);
     const pa = toWorld(a.pos.x, a.pos.y, a.alt / CELL);
     const pb = toWorld(b.pos.x, b.pos.y, b.alt / CELL);
     const target = pa.clone().multiplyScalar(0.5).add(pb.clone().multiplyScalar(0.5));
-    target.y = target.y * 0.7 + 0.6;
     const axis = pb.clone().sub(pa).setY(0);
-    const sep = axis.length();
+    let sep = axis.length();
+    if (sim.bugs.length > 2) {
+      // Team fights: lean toward the middle of everyone still standing and widen to keep them in view.
+      const alive = sim.bugs.filter((x) => !x.dead);
+      const mid = new THREE.Vector3();
+      for (const x of alive) mid.add(toWorld(x.pos.x, x.pos.y, x.alt / CELL));
+      mid.multiplyScalar(1 / Math.max(1, alive.length));
+      target.lerp(mid, 0.5);
+      for (const x of alive) sep = Math.max(sep, toWorld(x.pos.x, x.pos.y).sub(target).setY(0).length() * 1.7);
+    }
+    target.y = target.y * 0.7 + 0.6;
     if (sep > 2.5) {
       // Camera direction (target → camera) = behind the player, 35° off the axis.
       const behind = Math.atan2(-axis.x, -axis.z);
@@ -1000,10 +1012,10 @@ export class ArenaRenderer {
       const turn = Math.abs(options[0]) < Math.abs(options[1]) ? options[0] : options[1];
       this.camYaw += THREE.MathUtils.clamp(turn, -0.8 * dt, 0.8 * dt);
     }
-    const high = Math.max(a.alt, b.alt) / CELL;
+    const high = Math.max(...sim.bugs.map((x) => (x.dead ? 0 : x.alt))) / CELL;
     // Drop to a lower, more side-on angle while anyone's flying, so height reads.
     const pitch = 0.72 - Math.min(0.24, high * 0.07);
-    const dist = THREE.MathUtils.clamp(sep * 0.7 + 25, 25, 38) * Math.sqrt(this.aspectK);
+    const dist = THREE.MathUtils.clamp(sep * 0.7 + 25, 25, sim.bugs.length > 2 ? 46 : 38) * Math.sqrt(this.aspectK);
     const dir = new THREE.Vector3(Math.sin(this.camYaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(this.camYaw) * Math.cos(pitch));
     const followPos = target.clone().addScaledVector(dir, dist);
     const k = 1 - Math.exp(-dt * 3.5);
@@ -1028,7 +1040,7 @@ export class ArenaRenderer {
     if (!c) this.ultSide = 0;
     if (c) {
       const caster = sim.bugs[c.caster];
-      const foe = sim.bugs[c.caster === 0 ? 1 : 0];
+      const foe = foeOf(sim, caster);
       const center = toWorld(caster.pos.x, caster.pos.y, caster.alt / CELL);
       const foeAt = toWorld(foe.pos.x, foe.pos.y, foe.alt / CELL);
       const r = caster.radius / CELL;
