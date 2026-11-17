@@ -10,7 +10,7 @@ import { CATEGORY_COLOR } from '@/game/parts';
 import { ARENA_SIZE, CELL, partWorld, stompWarning, type Bug, type Sim, type SimPart } from '@/game/sim';
 
 import { createRenderer } from './gl';
-import { adjacentPairs, buildConnector, buildPart, toonMaterial, toonMesh, type PartModel } from './models';
+import { adjacentPairs, buildConnector, buildPart, seatHeight, stackOffset, toonMaterial, toonMesh, type PartModel } from './models';
 
 const HALF = ARENA_SIZE / CELL / 2;
 const FOV = 50;
@@ -208,20 +208,28 @@ export class ArenaRenderer {
     const shadowGeo = new THREE.CircleGeometry(0.62, 16);
     const shadowMat = new THREE.MeshBasicMaterial({ color: 0x1d2128 });
     const ground = new THREE.Group();
+    const seats = new Map<string, number>();
     const parts = bug.parts.map((p) => {
-      const model = buildPart(p.part.id, Math.sign(Math.round(p.lx)), p.y);
+      const model = buildPart(p.part.id, p.z ? 0 : Math.sign(Math.round(p.lx)), p.y);
       model.root.position.set(p.lx / CELL, 0, p.ly / CELL);
       pose.add(model.root);
+      if (!p.z) seats.set(`${p.x},${p.y}`, seatHeight(model));
       const shadow = new THREE.Mesh(shadowGeo, shadowMat);
       shadow.rotation.x = -Math.PI / 2;
       shadow.position.set(p.lx / CELL, 0.022, p.ly / CELL);
-      group.add(shadow);
+      shadow.visible = !p.z;
+      if (!p.z) group.add(shadow);
       return { part: p, model, attached: true, shadow, punch: 0 };
     });
+    // Stacked parts rest on top of the part in their cell.
+    for (const pv of parts) {
+      if (pv.part.z) pv.model.root.position.y = stackOffset(pv.model, seats.get(`${pv.part.x},${pv.part.y}`) ?? 0.9);
+    }
 
-    const links = adjacentPairs(bug.parts).map(([i, j]) => {
-      const a = parts[i];
-      const b = parts[j];
+    const onGrid = parts.filter((pv) => !pv.part.z);
+    const links = adjacentPairs(onGrid.map((pv) => pv.part)).map(([i, j]) => {
+      const a = onGrid[i];
+      const b = onGrid[j];
       const obj = buildConnector(a.part.part.category, b.part.part.category, b.part.x - a.part.x, b.part.y - a.part.y);
       obj.position.copy(a.model.root.position);
       pose.add(obj);
@@ -337,7 +345,7 @@ export class ArenaRenderer {
 
       for (const pv of v.parts) {
         if (pv.attached && !pv.part.alive) this.detach(bug, pv);
-        pv.shadow.visible = pv.attached;
+        pv.shadow.visible = pv.attached && !pv.part.z;
         if (!pv.attached) continue;
         const p = pv.part;
         pv.model.tint(Math.max(0, p.hp) / p.part.hp, p.flash > 0);
@@ -447,8 +455,9 @@ export class ArenaRenderer {
     const root = pv.model.root;
     const w = partWorld(bug, pv.part);
     const v = this.bugs[bug.index];
+    const height = root.position.y;
     v.pose.remove(root);
-    root.position.copy(toWorld(w.x, w.y));
+    root.position.copy(toWorld(w.x, w.y, height));
     root.rotation.y = yaw(bug.heading);
     this.scene.add(root);
     const out = toWorld(w.x - bug.pos.x, w.y - bug.pos.y).add(new THREE.Vector3(HALF, 0, HALF)).normalize();

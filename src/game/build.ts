@@ -4,11 +4,22 @@ export const GRID_W = 5;
 export const GRID_H = 7;
 export const MAX_MASS = 150;
 
-/** One part placed on the build grid. Row 0 is the front of the bug. */
-export type Placement = { x: number; y: number; partId: string };
+/**
+ * One part placed on the build grid. Row 0 is the front of the bug.
+ * `z` is the layer: 0 (default) sits on the grid; 1 is stacked on top of the
+ * layer-0 part in the same cell (only STACKABLE parts, only on STACK_BASES).
+ */
+export type Placement = { x: number; y: number; partId: string; z?: 0 | 1 };
 export type Build = { name: string; placements: Placement[] };
 
-export type PlacedPart = { x: number; y: number; part: PartDef };
+export type PlacedPart = { x: number; y: number; z?: 0 | 1; part: PartDef };
+
+/** Parts that can be stacked on top of another part. */
+export const STACKABLE: readonly Category[] = ['wings', 'sensor'];
+/** Parts that something can be stacked on. */
+export const STACK_BASES: readonly Category[] = ['head', 'thorax', 'abdomen', 'armor'];
+
+export const canStack = (top: Category, base: Category) => STACKABLE.includes(top) && STACK_BASES.includes(base);
 
 export type BugStats = {
   mass: number;
@@ -28,10 +39,13 @@ export type BugStats = {
   thrustBias: number;
 };
 
+/** Key of a grid cell (layer 0). */
 export const key = (x: number, y: number) => `${x},${y}`;
+/** Key of a placed part, including its layer. */
+export const pkey = (p: { x: number; y: number; z?: number }) => (p.z ? `${p.x},${p.y},top` : `${p.x},${p.y}`);
 
 export function resolve(placements: Placement[]): PlacedPart[] {
-  return placements.map((p) => ({ x: p.x, y: p.y, part: getPart(p.partId) }));
+  return placements.map((p) => ({ x: p.x, y: p.y, z: p.z ?? 0, part: getPart(p.partId) }));
 }
 
 export function computeStats(parts: PlacedPart[]): BugStats {
@@ -93,17 +107,19 @@ const NEIGHBORS = [
 ] as const;
 
 /**
- * Returns the set of cell keys still structurally attached to the bug:
- * the largest connected group of parts that contains a thorax.
- * Parts link to any orthogonal neighbour, so a weapon bolted onto an
- * armor plate falls off when that plate is destroyed.
+ * Returns the set of part keys (see `pkey`) still structurally attached to the
+ * bug: the largest group of grid parts that contains a thorax, linked through
+ * orthogonal neighbours, plus anything stacked on a part in that group.
+ * So a weapon bolted onto an armor plate falls off when that plate is destroyed,
+ * and wings stacked on a thorax fall off when the thorax goes.
  */
 export function connectedKeys(parts: PlacedPart[]): Set<string> {
-  const byKey = new Map(parts.map((p) => [key(p.x, p.y), p]));
+  const ground = parts.filter((p) => !p.z);
+  const byKey = new Map(ground.map((p) => [key(p.x, p.y), p]));
   const seen = new Set<string>();
   let best = new Set<string>();
 
-  for (const start of parts) {
+  for (const start of ground) {
     const startKey = key(start.x, start.y);
     if (start.part.category !== 'thorax' || seen.has(startKey)) continue;
     const group = new Set<string>([startKey]);
@@ -122,7 +138,13 @@ export function connectedKeys(parts: PlacedPart[]): Set<string> {
     }
     if (group.size > best.size) best = group;
   }
-  return best;
+  const out = new Set(best);
+  for (const p of parts) {
+    if (!p.z) continue;
+    const base = byKey.get(key(p.x, p.y));
+    if (base && best.has(key(p.x, p.y)) && canStack(p.part.category, base.part.category)) out.add(pkey(p));
+  }
+  return out;
 }
 
 export function countCategory(parts: PlacedPart[], c: Category) {
@@ -137,8 +159,12 @@ export function validateBuild(placements: Placement[]): string[] {
   if (countCategory(parts, 'thorax') < 1) errors.push('Needs a middle body segment (a thorax)');
   if (countCategory(parts, 'core') < 1) errors.push('Needs a power core');
 
+  const ground = new Map(parts.filter((p) => !p.z).map((p) => [key(p.x, p.y), p]));
+  const badStack = parts.filter((p) => p.z && !(ground.get(key(p.x, p.y)) && canStack(p.part.category, ground.get(key(p.x, p.y))!.part.category)));
+  if (badStack.length) errors.push(`${badStack[0].part.name} can't stack there`);
+
   const connected = connectedKeys(parts);
-  const loose = parts.filter((p) => !connected.has(key(p.x, p.y)));
+  const loose = parts.filter((p) => !connected.has(pkey(p)) && !badStack.includes(p));
   if (loose.length) errors.push(loose.length === 1 ? "1 part isn't touching the rest of the bug" : `${loose.length} parts aren't touching the rest of the bug`);
 
   const s = computeStats(parts);

@@ -16,8 +16,8 @@ import {
 import { PartCell } from '@/components/part-cell';
 import { Button, Meter, Panel } from '@/components/ui';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
-import { computeStats, connectedKeys, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
-import { autoBuild, autoPlace, movePart, partAt, rankSlots, removeAt } from '@/game/editor';
+import { canStack, computeStats, connectedKeys, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
+import { autoBuild, autoPlace, movePart, partAt, rankSlots, removeAt, sameSlot, type Slot } from '@/game/editor';
 import { GROUPS, GUIDE } from '@/game/guide';
 import { getMove, MOVE_SLOTS } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type Category, type PartDef } from '@/game/parts';
@@ -109,7 +109,7 @@ type Touch = {
   lastX: number;
   lastY: number;
   /** Part under the finger at touch start; null means the touch spins the view. */
-  cell: Cell | null;
+  cell: Slot | null;
   dragging: boolean;
   last: { cell: Cell | null; inside: boolean };
 };
@@ -117,7 +117,7 @@ type Touch = {
 export default function Garage() {
   const game = useGame();
   const { width, height } = useWindowDimensions();
-  const [selected, setSelected] = useState<Cell | null>(null);
+  const [selected, setSelected] = useState<Slot | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [dragHint, setDragHint] = useState<'move' | 'remove' | null>(null);
   const renderer = useRef<GarageRenderer | null>(null);
@@ -132,7 +132,7 @@ export default function Garage() {
   const errors = validateBuild(placements);
   const editorW = Math.min(width, MaxContentWidth);
   const editorH = Math.min(editorW * 1.05, height * 0.48);
-  const selPart = selected ? partAt(placements, selected.x, selected.y) : undefined;
+  const selPart = selected ? partAt(placements, selected.x, selected.y, selected.z) : undefined;
   const binW = Math.floor((editorW - Spacing.lg * 2 - Spacing.sm * 3) / 4);
 
   const owned = Object.entries(game.inventory)
@@ -155,13 +155,25 @@ export default function Garage() {
       r.setHints([]);
       return;
     }
-    const others = removeAt(placements, selected.x, selected.y);
+    const others = selected.z ? removeAt(placements, selected) : placements.filter((p) => p !== selPart);
     r.setHints(
       rankSlots(others, selPart.partId)
         .slice(0, 3)
-        .filter((c) => !(c.x === selected.x && c.y === selected.y)),
+        .filter((c) => !sameSlot(c, selected)),
     );
   }, [selected, selPart, placements]);
+
+  // While dragging, tell the renderer whether a drop on a cell would stack on top.
+  useEffect(() => {
+    renderer.current?.setStackTest((cell) => {
+      const t = touch.current;
+      if (!t?.cell) return false;
+      const moving = partAt(placements, t.cell.x, t.cell.y, t.cell.z);
+      const base = partAt(placements, cell.x, cell.y, 0);
+      if (!moving || !base || base === moving) return false;
+      return canStack(getPart(moving.partId).category, getPart(base.partId).category);
+    });
+  }, [placements]);
 
   useEffect(() => {
     if (!toast) return;
@@ -211,7 +223,7 @@ export default function Garage() {
       startY: e.nativeEvent.pageY,
       lastX: e.nativeEvent.pageX,
       lastY: e.nativeEvent.pageY,
-      cell: cell && partAt(placements, cell.x, cell.y) ? cell : null,
+      cell: cell && partAt(placements, cell.x, cell.y, cell.z) ? cell : null,
       dragging: false,
       last: { cell, inside: !!cell },
     };
@@ -249,18 +261,24 @@ export default function Garage() {
     if (!t.cell && t.dragging) return; // finished spinning the view
     if (!t.dragging) {
       // Tap: select / deselect a part.
-      const same = t.cell && selected && t.cell.x === selected.x && t.cell.y === selected.y;
+      const same = t.cell && selected && sameSlot(t.cell, selected);
       setSelected(t.cell && !same ? t.cell : null);
       return;
     }
     renderer.current?.endDrag();
     const from = t.cell!;
-    const moving = partAt(placements, from.x, from.y);
+    const moving = partAt(placements, from.x, from.y, from.z);
     if (t.last.inside && t.last.cell) {
-      game.setPlacements(movePart(placements, from, t.last.cell));
-      setSelected(t.last.cell);
+      const res = movePart(placements, from, t.last.cell);
+      if (!res) {
+        setToast("Can't drop that there");
+        return;
+      }
+      game.setPlacements(res.placements);
+      setSelected(res.at);
+      if (res.at.z && !from.z && moving) setToast(`${getPart(moving.partId).name} stacked on top`);
     } else {
-      game.setPlacements(removeAt(placements, from.x, from.y));
+      game.setPlacements(removeAt(placements, from));
       setSelected(null);
       if (moving) setToast(`${getPart(moving.partId).name} back in the bin`);
     }
@@ -279,13 +297,13 @@ export default function Garage() {
       return;
     }
     game.setPlacements([...placements, spot]);
-    setSelected({ x: spot.x, y: spot.y });
-    setToast(`${part.name} attached. Drag it to move it.`);
+    setSelected({ x: spot.x, y: spot.y, z: spot.z ?? 0 });
+    setToast(spot.z ? `${part.name} stacked on top. Drag it to move it.` : `${part.name} attached. Drag it to move it.`);
   }
 
   function removeSelected() {
     if (!selected || !selPart) return;
-    game.setPlacements(removeAt(placements, selected.x, selected.y));
+    game.setPlacements(removeAt(placements, selected));
     setToast(`${getPart(selPart.partId).name} back in the bin`);
     setSelected(null);
   }

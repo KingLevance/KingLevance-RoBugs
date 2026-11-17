@@ -5,11 +5,11 @@
 import type { ExpoWebGLRenderingContext } from 'expo-gl';
 import * as THREE from 'three';
 
-import { GRID_H, GRID_W, key, type Placement } from '@/game/build';
+import { GRID_H, GRID_W, pkey, type Placement } from '@/game/build';
 import { getPart } from '@/game/parts';
 
 import { createRenderer } from './gl';
-import { adjacentPairs, buildConnector, buildPart, IDLE, toonMaterial, toonMesh, type PartModel } from './models';
+import { adjacentPairs, buildConnector, buildPart, IDLE, seatHeight, stackOffset, toonMaterial, toonMesh, type PartModel } from './models';
 
 const BG = 0x14171c;
 const MIDX = (GRID_W - 1) / 2;
@@ -32,7 +32,16 @@ const dirFor = (yaw: number, pitch: number) =>
 
 const cellToWorld = (x: number, y: number) => new THREE.Vector3(x - MIDX, 0, y - MIDY);
 
+/** A grid cell (floor). */
 export type Cell = { x: number; y: number };
+/** A part's position: cell + layer (1 = stacked on top). */
+export type Slot = Cell & { z: 0 | 1 };
+
+const slotKey = (s: { x: number; y: number; z?: number }) => pkey(s);
+const parseKey = (k: string): Slot => {
+  const [x, y] = k.split(',').map(Number);
+  return { x, y, z: k.endsWith(',top') ? 1 : 0 };
+};
 export type DragState = { cell: Cell | null; inside: boolean };
 
 export class GarageRenderer {
@@ -41,6 +50,10 @@ export class GarageRenderer {
   private camera: THREE.PerspectiveCamera;
   private bug = new THREE.Group();
   private models = new Map<string, PartModel>();
+  /** Height of the top surface of each grid part, by cell key (for stacking). */
+  private baseTop = new Map<string, number>();
+  /** Lets the garage say whether the dragged part would stack on a given cell. */
+  private stackTest: (cell: Cell) => boolean = () => false;
   private links: { a: string; b: string; obj: THREE.Group }[] = [];
   /** Green "good spot" tiles for the selected part. */
   private hints: THREE.Mesh[] = [];
@@ -152,24 +165,25 @@ export class GarageRenderer {
   }
 
   setPlacements(placements: Placement[]) {
-    const wanted = new Map(placements.map((p) => [key(p.x, p.y), p]));
-    // Drop models that changed or vanished.
+    const wanted = new Map(placements.map((p) => [slotKey(p), p]));
+    // Drop models that changed or vanished; stacked models are always re-seated below.
     for (const [k, m] of this.models) {
       const p = wanted.get(k);
-      if (!p || m.root.userData.partId !== p.partId) {
+      if (!p || m.root.userData.partId !== p.partId || p.z) {
         this.bug.remove(m.root);
         this.models.delete(k);
       }
     }
-    // Rebuild the frame struts between neighbouring parts.
+    // Rebuild the frame struts between neighbouring grid parts.
+    const ground = placements.filter((p) => !p.z);
     for (const l of this.links) this.bug.remove(l.obj);
-    this.links = adjacentPairs(placements).map(([i, j]) => {
-      const a = placements[i];
-      const b = placements[j];
+    this.links = adjacentPairs(ground).map(([i, j]) => {
+      const a = ground[i];
+      const b = ground[j];
       const obj = buildConnector(getPart(a.partId).category, getPart(b.partId).category, b.x - a.x, b.y - a.y);
       obj.position.copy(cellToWorld(a.x, a.y));
       this.bug.add(obj);
-      return { a: key(a.x, a.y), b: key(b.x, b.y), obj };
+      return { a: slotKey(a), b: slotKey(b), obj };
     });
     if (placements.length) {
       const xs = placements.map((p) => p.x - MIDX);
@@ -179,48 +193,65 @@ export class GarageRenderer {
       this.bugBox = this.benchBox.slice();
     }
     this.fitDirty = true;
-    for (const [k, p] of wanted) {
-      if (this.models.has(k)) continue;
-      const model = buildPart(p.partId, Math.sign(p.x - MIDX), p.y);
-      model.root.userData.partId = p.partId;
-      model.root.userData.cellKey = k;
+    // Grid parts first (so we know how tall each one is), then stacked parts on top.
+    this.baseTop.clear();
+    for (const p of [...ground, ...placements.filter((q) => q.z)]) {
+      const k = slotKey(p);
+      let model = this.models.get(k);
+      if (!model) {
+        model = buildPart(p.partId, p.z ? 0 : Math.sign(p.x - MIDX), p.y);
+        model.root.userData.partId = p.partId;
+        model.root.userData.cellKey = k;
+        this.bug.add(model.root);
+        this.models.set(k, model);
+      }
       model.root.position.copy(cellToWorld(p.x, p.y));
-      this.bug.add(model.root);
-      this.models.set(k, model);
+      if (p.z) model.root.position.y = this.stackHeight(p.x, p.y, model);
+      else this.baseTop.set(slotKey({ x: p.x, y: p.y }), seatHeight(model));
     }
   }
 
-  /** Light up recommended slots (best first). Pass [] to clear. */
-  setHints(cells: Cell[]) {
-    while (this.hints.length < cells.length) {
+  /** Y at which a stacked model sits so its underside rests on the part below. */
+  private stackHeight(x: number, y: number, model: PartModel) {
+    return stackOffset(model, this.baseTop.get(slotKey({ x, y })) ?? 0.9);
+  }
+
+  setStackTest(fn: (cell: Cell) => boolean) {
+    this.stackTest = fn;
+  }
+
+  /** Light up recommended slots (best first). Pass [] to clear. Stacked slots glow on top of their base. */
+  setHints(slots: Slot[]) {
+    while (this.hints.length < slots.length) {
       const m = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.05, 0.9), this.hintMat);
       this.scene.add(m);
       this.hints.push(m);
     }
     this.hints.forEach((m, i) => {
-      m.visible = i < cells.length;
-      if (i < cells.length) m.position.copy(cellToWorld(cells[i].x, cells[i].y)).setY(0.035);
+      m.visible = i < slots.length;
+      if (i >= slots.length) return;
+      const s = slots[i];
+      m.position.copy(cellToWorld(s.x, s.y)).setY(s.z ? (this.baseTop.get(slotKey({ x: s.x, y: s.y })) ?? 0.9) + 0.04 : 0.035);
+      m.scale.setScalar(s.z ? 0.7 : 1);
     });
   }
 
-  setSelected(cell: Cell | null) {
-    this.selected = cell ? key(cell.x, cell.y) : null;
+  setSelected(slot: Slot | null) {
+    this.selected = slot ? slotKey(slot) : null;
   }
 
   /** Grid cell under a point given in view-relative 0..1 coordinates (null if off the grid). */
-  pick(nx: number, ny: number): { cell: Cell | null; point: THREE.Vector3 | null } {
+  pick(nx: number, ny: number): { cell: Slot | null; point: THREE.Vector3 | null } {
     this.raycaster.setFromCamera(new THREE.Vector2(nx * 2 - 1, -(ny * 2 - 1)), this.camera);
     // Parts stand up off the grid, so test the models first: a touch on a part's
     // visible body picks that part, not the floor tile behind it.
     for (const hit of this.raycaster.intersectObjects(this.bug.children, true)) {
       let o: THREE.Object3D | null = hit.object;
       while (o && o.userData.cellKey === undefined) o = o.parent;
-      if (o) {
-        const [x, y] = (o.userData.cellKey as string).split(',').map(Number);
-        return { cell: { x, y }, point: hit.point };
-      }
+      if (o) return { cell: parseKey(o.userData.cellKey as string), point: hit.point };
     }
-    return this.floorAt(nx, ny);
+    const f = this.floorAt(nx, ny);
+    return { cell: f.cell ? { ...f.cell, z: 0 } : null, point: f.point };
   }
 
   /** Grid cell on the floor under a screen point (ignores parts). */
@@ -234,15 +265,10 @@ export class GarageRenderer {
     return { cell: inside ? { x, y } : null, point };
   }
 
-  /** Is there a part on this cell? */
-  has(cell: Cell) {
-    return this.models.has(key(cell.x, cell.y));
-  }
-
-  startDrag(cell: Cell) {
-    const k = key(cell.x, cell.y);
+  startDrag(slot: Slot) {
+    const k = slotKey(slot);
     if (!this.models.has(k)) return false;
-    this.dragging = { key: k, point: cellToWorld(cell.x, cell.y) };
+    this.dragging = { key: k, point: cellToWorld(slot.x, slot.y) };
     return true;
   }
 
@@ -257,8 +283,9 @@ export class GarageRenderer {
     if (!this.dragging) return;
     const m = this.models.get(this.dragging.key);
     if (m) {
-      const [x, y] = this.dragging.key.split(',').map(Number);
+      const { x, y, z } = parseKey(this.dragging.key);
       m.root.position.copy(cellToWorld(x, y));
+      if (z) m.root.position.y = this.stackHeight(x, y, m);
       m.root.scale.setScalar(1);
     }
     this.dragging = null;
@@ -293,16 +320,18 @@ export class GarageRenderer {
       const x = Math.round(p.x + MIDX);
       const y = Math.round(p.z + MIDY);
       const inside = x >= 0 && y >= 0 && x < GRID_W && y < GRID_H;
+      const stack = inside && this.stackTest({ x, y });
       this.hover.visible = true;
-      (this.hover.material as THREE.MeshBasicMaterial).color.set(inside ? 0x3ddc97 : 0xff5d5d);
-      if (inside) this.hover.position.copy(cellToWorld(x, y)).setY(0.04);
+      this.hover.scale.setScalar(stack ? 0.7 : 1);
+      (this.hover.material as THREE.MeshBasicMaterial).color.set(inside ? (stack ? 0x7fd8ff : 0x3ddc97) : 0xff5d5d);
+      if (inside) this.hover.position.copy(cellToWorld(x, y)).setY(stack ? (this.baseTop.get(slotKey({ x, y })) ?? 0.9) + 0.05 : 0.04);
       else this.hover.position.set(p.x, 0.04, p.z);
     }
 
     if (this.selected && !this.dragging) {
-      const [x, y] = this.selected.split(',').map(Number);
+      const { x, y, z } = parseKey(this.selected);
       this.selRing.visible = this.models.has(this.selected);
-      this.selRing.position.copy(cellToWorld(x, y)).setY(0.05);
+      this.selRing.position.copy(cellToWorld(x, y)).setY(z ? (this.baseTop.get(slotKey({ x, y })) ?? 0.9) + 0.05 : 0.05);
     } else {
       this.selRing.visible = false;
     }

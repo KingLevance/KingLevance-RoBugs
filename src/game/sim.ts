@@ -5,7 +5,7 @@
  * input arrives through `step()`. The world is a 2D floor plane
  * (x right, y "down"/toward the player's start); the 3D renderer lifts it.
  */
-import { computeStats, connectedKeys, key, resolve, type Build, type BugStats } from './build';
+import { computeStats, connectedKeys, pkey, resolve, type Build, type BugStats } from './build';
 import { getMove, MOVES, PROC, ULT_SECONDS, type MoveId } from './moves';
 import type { ArenaId } from './opponents';
 import type { Category, PartDef } from './parts';
@@ -22,6 +22,8 @@ export type Vec = { x: number; y: number };
 export type SimPart = {
   x: number;
   y: number;
+  /** Layer: 1 = stacked on top of the part in the same cell. */
+  z: 0 | 1;
   /** Offset from bug center in local space (−y is forward). */
   lx: number;
   ly: number;
@@ -151,11 +153,13 @@ function aliveCount(bug: Bug, c: Category) {
 
 function makeBug(index: 0 | 1, fighter: Fighter, pos: Vec, heading: number): Bug {
   const placed = resolve(fighter.build.placements);
-  const cx = placed.reduce((a, p) => a + p.x, 0) / placed.length;
-  const cy = placed.reduce((a, p) => a + p.y, 0) / placed.length;
+  const ground = placed.filter((p) => !p.z);
+  const cx = ground.reduce((a, p) => a + p.x, 0) / ground.length;
+  const cy = ground.reduce((a, p) => a + p.y, 0) / ground.length;
   const parts: SimPart[] = placed.map((p) => ({
     x: p.x,
     y: p.y,
+    z: p.z ?? 0,
     lx: (p.x - cx) * CELL,
     ly: (p.y - cy) * CELL,
     part: p.part,
@@ -249,7 +253,7 @@ export function createSim(player: Fighter, opponent: Fighter, arena: ArenaId, se
 /** Recompute derived stats after parts are lost. */
 function refresh(bug: Bug) {
   const alive = bug.parts.filter((p) => p.alive);
-  bug.stats = computeStats(alive.map((p) => ({ x: p.x, y: p.y, part: p.part })));
+  bug.stats = computeStats(alive.map((p) => ({ x: p.x, y: p.y, z: p.z, part: p.part })));
   bug.radius = alive.reduce((m, p) => Math.max(m, Math.hypot(p.lx, p.ly)), 0) + CELL * 0.5;
   const hasCore = alive.some((p) => p.part.category === 'core');
   const hasThorax = alive.some((p) => p.part.category === 'thorax');
@@ -332,9 +336,9 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
 
   // Anything no longer connected to the body falls off.
   const alive = bug.parts.filter((q) => q.alive);
-  const keep = connectedKeys(alive.map((q) => ({ x: q.x, y: q.y, part: q.part })));
+  const keep = connectedKeys(alive.map((q) => ({ x: q.x, y: q.y, z: q.z, part: q.part })));
   for (const q of alive) {
-    if (!keep.has(key(q.x, q.y))) {
+    if (!keep.has(pkey(q))) {
       q.alive = false;
       const qw = partWorld(bug, q);
       sim.events.push({ type: 'break', bug: bug.index, x: qw.x, y: qw.y, category: q.part.category, time: sim.time });

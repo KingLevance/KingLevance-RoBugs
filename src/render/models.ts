@@ -567,3 +567,32 @@ export function adjacentPairs(cells: { x: number; y: number }[]): [number, numbe
   });
   return out;
 }
+
+/** Top surface of a grid part's model (where stacked parts sit). Ignores thin bits like antennae. */
+export function seatHeight(model: PartModel): number {
+  model.animate({ t: 0, ...IDLE });
+  const y0 = model.root.position.y;
+  model.root.position.y = 0;
+  model.root.updateMatrixWorld(true);
+  let top = 0;
+  model.root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh) || !o.geometry.boundingBox) return;
+    const size = o.geometry.boundingBox.getSize(new THREE.Vector3());
+    if (Math.min(size.x, size.z) < 0.3) return;
+    top = Math.max(top, new THREE.Box3().setFromObject(o).max.y);
+  });
+  model.root.position.y = y0;
+  model.root.updateMatrixWorld(true);
+  return top || 0.9;
+}
+
+/** Y offset that rests a stacked model's underside on a surface at height `seat`. */
+export function stackOffset(model: PartModel, seat: number): number {
+  model.animate({ t: 0, ...IDLE });
+  const y0 = model.root.position.y;
+  model.root.position.y = 0;
+  model.root.updateMatrixWorld(true);
+  const bottom = new THREE.Box3().setFromObject(model.root).min.y;
+  model.root.position.y = y0;
+  return seat - bottom - 0.04;
+}

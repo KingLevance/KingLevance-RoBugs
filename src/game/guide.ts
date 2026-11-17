@@ -8,7 +8,7 @@ export type GuideGroup = 'body' | 'move' | 'weapon' | 'system';
 
 export const GROUPS: { id: GuideGroup; title: string; blurb: string }[] = [
   { id: 'body', title: 'BODY', blurb: 'The frame everything bolts onto. You need 1 head and at least 1 thorax, in a line down the middle.' },
-  { id: 'move', title: 'MOVEMENT', blurb: 'You need legs or wings. Put the same number on the left and right.' },
+  { id: 'move', title: 'MOVEMENT', blurb: 'You need legs or wings. Put the same number of legs on the left and right. Wings can stack on top of the body.' },
   { id: 'weapon', title: 'WEAPONS', blurb: 'They only hit what is in front of them, so mount them at the front.' },
   { id: 'system', title: 'POWER & DEFENSE', blurb: 'At least 1 power core. Armor goes on the outside to shield what is behind it.' },
 ];
@@ -42,7 +42,7 @@ export const GUIDE: Record<Category, { label: string; group: GuideGroup; does: s
     label: 'Wings',
     group: 'move',
     does: 'Extra speed, and lift that makes the bug handle like a lighter one. Fragile.',
-    where: 'On the sides, mirrored left and right.',
+    where: 'Stack them on top of the thorax (drop them onto it), like real bug wings. Or put them on the sides, mirrored left and right.',
   },
   mandibles: {
     label: 'Jaws',
@@ -84,6 +84,6 @@ export const GUIDE: Record<Category, { label: string; group: GuideGroup; does: s
     label: 'Sensor',
     group: 'system',
     does: 'Sharper turning and longer weapon reach. Fragile.',
-    where: 'Any spare spot. Beside the head is safest.',
+    where: 'Stack it on top of the head (drop it onto it), like real antennae. Or use any spare spot.',
   },
 };
