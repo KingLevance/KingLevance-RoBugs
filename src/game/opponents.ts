@@ -287,7 +287,7 @@ export const OPPONENTS: Opponent[] = [
   {
     id: 'twins',
     name: 'Rivet & Ratchet',
-    blurb: 'Two-on-two. The scrapyard twins never fight alone, so Snapclaw has your back.',
+    blurb: 'Two-on-two. The scrapyard twins never fight alone. Bring a second bug from your garage (or borrow Snapclaw).',
     arena: 'foundry',
     aggression: 0.75,
     build: bug('Rivet', ['.PHP.', 'cBOBc', '.sKs.', '.s.s.']),
@@ -346,7 +346,7 @@ export const OPPONENTS: Opponent[] = [
   {
     id: 'tunnelkings',
     name: 'The Tunnel Kings',
-    blurb: 'Two-on-two. One digs, one bites. Silkjaw joins you to even the odds.',
+    blurb: 'Two-on-two. One digs, one bites. Bring a partner bug (or borrow Silkjaw).',
     arena: 'foundry',
     aggression: 0.85,
     build: bug('Burrowbane', ['.qVq.', 'sBOBs', '.KKK.', '.s.s.']),
@@ -362,7 +362,7 @@ export const OPPONENTS: Opponent[] = [
   {
     id: 'hiveguard',
     name: 'The Hive Guard',
-    blurb: 'Three-on-three. The Empress’s finest. Ironback and Arcfly march with you.',
+    blurb: 'Three-on-three. The Empress’s finest. Bring your squad (or borrow Ironback and Arcfly).',
     arena: 'hive',
     aggression: 0.85,
     build: bug('Hive Warden', ['.PHP.', 'cBOBc', '.sKs.', '.s.s.']),
@@ -381,7 +381,7 @@ export const OPPONENTS: Opponent[] = [
   {
     id: 'kalyx',
     name: 'Empress Kalyx',
-    blurb: 'Three-on-three finale. Web, beam and jaws, with two royal guards. Glimmer and Lenswing fight for you. Farmable.',
+    blurb: 'Three-on-three finale. Web, beam and jaws, with two royal guards. Bring your best squad (or borrow Glimmer and Lenswing). Farmable.',
     arena: 'hive',
     aggression: 0.95,
     build: bug('Empress Kalyx', ['.MzM.', 'cBVBc', 'GBOBG', 'vKOKv', '.vSv.']),
@@ -419,6 +419,31 @@ export function lineup(o: Opponent): { allies: Teammate[]; enemies: Teammate[] }
       return { build: a.build, moves: a.moves, aggression: a.aggression };
     }),
     enemies: [{ build: o.build, moves: o.moves, aggression: o.aggression }, ...(o.team ?? [])],
+  };
+}
+
+/** How many of your other bugs can join you against this opponent (0 for a 1v1). */
+export function allySlots(o: Opponent) {
+  return o.team?.length ?? 0;
+}
+
+/**
+ * Your side in a team fight: your own squad bugs first, and any slots you
+ * can't fill are covered by the opponents you've beaten (`o.allies`), "borrowed".
+ */
+export function alliesFor(o: Opponent, squad: Teammate[]): { allies: Teammate[]; borrowed: string[] } {
+  const slots = allySlots(o);
+  const mine = squad.slice(0, slots);
+  const borrowed = (o.allies ?? []).slice(0, slots - mine.length);
+  return {
+    allies: [
+      ...mine,
+      ...borrowed.map((id) => {
+        const a = getOpponent(id);
+        return { build: a.build, moves: a.moves, aggression: a.aggression };
+      }),
+    ],
+    borrowed,
   };
 }
 

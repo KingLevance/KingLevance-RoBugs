@@ -9,7 +9,7 @@ import { Button, Label, Pill } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { validateBuild } from '@/game/build';
 import { getMove } from '@/game/moves';
-import { ARENA_NAMES, fightSize, getOpponent, isUnlocked, OPPONENTS, type Opponent } from '@/game/opponents';
+import { alliesFor, allySlots, ARENA_NAMES, fightSize, getOpponent, isUnlocked, OPPONENTS, type Opponent } from '@/game/opponents';
 import { useGame } from '@/state/game-store';
 
 const ARENA_TINT = { pit: '#7CE654', foundry: '#FF8A3D', hive: '#F2C14E' } as const;
@@ -61,6 +61,13 @@ export default function Campaign() {
   const selUnlocked = isUnlocked(sel, game.cleared);
   const firstClear = !game.cleared.includes(sel.id);
   const size = fightSize(sel);
+  // Team fights: your squad bugs (valid ones, in order), then borrowed opponents for any gaps.
+  const slots = allySlots(sel);
+  const readySquad = game.squad.filter((i) => game.bugs[i] && validateBuild(game.bugs[i].placements).length === 0);
+  const { borrowed } = alliesFor(
+    sel,
+    readySquad.map((i) => ({ build: game.bugs[i], moves: game.bugs[i].equipped, aggression: 0.7 })),
+  );
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   // Open the map on the selected fight.
   const startY = Math.max(0, sel.map.y * mapH - height * 0.22);
@@ -160,15 +167,40 @@ export default function Campaign() {
         <Text style={styles.dim} numberOfLines={3}>
           {selUnlocked ? sel.blurb : `Beat ${sel.unlockedBy.map((id) => getOpponent(id).name).join(' or ')} to unlock.`}
         </Text>
-        {selUnlocked && (sel.allies?.length ?? 0) > 0 && (
-          <View style={styles.allies}>
-            <Text style={styles.alliesLabel}>WITH YOU</Text>
-            {sel.allies!.map((id) => (
-              <View key={id} style={styles.ally}>
-                <Image source={BUG_PORTRAITS[id]} style={styles.allyPortrait} />
-                <Text style={styles.allyName}>{getOpponent(id).name}</Text>
-              </View>
-            ))}
+        {selUnlocked && slots > 0 && (
+          <View style={{ gap: 6 }}>
+            <Text style={styles.alliesLabel}>
+              YOUR SQUAD · {game.build.name} + {slots} MORE {slots > 1 ? '(TAP UP TO 2)' : '(TAP 1)'}
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.allies}>
+              {game.bugs.map((b, i) => {
+                if (i === game.active) return null;
+                const ready = validateBuild(b.placements).length === 0;
+                const pos = readySquad.indexOf(i);
+                const fighting = pos >= 0 && pos < slots;
+                return (
+                  <Pressable
+                    key={i}
+                    disabled={!ready}
+                    onPress={() => game.toggleSquad(i)}
+                    style={[styles.ally, fighting && styles.allyOn, !ready && { opacity: 0.45 }]}>
+                    <Text style={[styles.allyName, fighting && { color: Colors.bg }]}>
+                      {fighting ? '✓ ' : ''}
+                      {b.name}
+                    </Text>
+                    {!ready && <Text style={styles.allyNote}>needs work</Text>}
+                  </Pressable>
+                );
+              })}
+              {borrowed.map((id) => (
+                <View key={id} style={[styles.ally, styles.allyBorrowed]}>
+                  <Image source={BUG_PORTRAITS[id]} style={styles.allyPortrait} />
+                  <Text style={styles.allyName}>{getOpponent(id).name}</Text>
+                  <Text style={styles.allyNote}>borrowed</Text>
+                </View>
+              ))}
+            </ScrollView>
+            {game.bugs.length < 2 && <Text style={styles.dim}>Build more bugs in the Garage (＋ New bug) to bring your own squad.</Text>}
           </View>
         )}
         {selUnlocked && sel.moves.length > 0 && (
@@ -296,9 +328,14 @@ const styles = StyleSheet.create({
     borderColor: '#58C7FF',
     borderWidth: 1.5,
     borderRadius: 999,
+    paddingLeft: 10,
     paddingRight: 10,
+    minHeight: 32,
     overflow: 'hidden',
   },
+  allyOn: { backgroundColor: '#58C7FF', borderColor: '#58C7FF' },
+  allyBorrowed: { borderStyle: 'dashed', borderColor: Colors.border },
+  allyNote: { color: Colors.textDim, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
   allyPortrait: { width: 30, height: 30 },
   allyName: { color: Colors.text, fontFamily: Fonts.display, fontSize: 13 },
   chips: { flexDirection: 'row', gap: Spacing.sm },

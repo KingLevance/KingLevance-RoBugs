@@ -23,7 +23,7 @@ import { getMove, meetsRequirement, MOVE_SLOTS } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type Category, type PartDef } from '@/game/parts';
 import { CRIT } from '@/game/sim';
 import { GarageRenderer, type Cell, type ViewName } from '@/render/garage-scene';
-import { useGame } from '@/state/game-store';
+import { MAX_BUGS, useGame } from '@/state/game-store';
 
 const CATALOG_ORDER = new Map(PARTS.map((p, i) => [p.id, i]));
 const DRAG_SLOP = 8;
@@ -125,6 +125,7 @@ export default function Garage() {
   const { width, height } = useWindowDimensions();
   const [selected, setSelected] = useState<Slot | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [dragHint, setDragHint] = useState<'move' | 'remove' | null>(null);
   const renderer = useRef<GarageRenderer | null>(null);
   const raf = useRef(0);
@@ -142,7 +143,7 @@ export default function Garage() {
   const missing = checks.filter((c) => !c.ok && !c.optional && !(noCore && c.short.startsWith('Less power')));
   const tips = checks.filter((c) => !c.ok && c.optional);
   const editorW = Math.min(width, MaxContentWidth);
-  const editorH = Math.min(editorW * 1.05, height * 0.48);
+  const editorH = Math.min(editorW * 1.05, height * 0.44);
   const selPart = selected ? partAt(placements, selected.x, selected.y, selected.z) : undefined;
   const binW = Math.floor((editorW - Spacing.lg * 2 - Spacing.sm * 3) / 4);
 
@@ -351,13 +352,81 @@ export default function Garage() {
   return (
     <View style={styles.root}>
       <View style={[styles.top, { width: editorW }]}>
-        <TextInput
-          value={game.build.name}
-          onChangeText={(t) => game.setBugName(t.slice(0, 18))}
-          style={styles.nameInput}
-          placeholder="Name your bug"
-          placeholderTextColor={Colors.textDim}
-        />
+        {/* Your bugs: tap to switch, + to add, ⧉ to copy, 🗑 to scrap. */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bugTabs}>
+          {game.bugs.map((b, i) => {
+            const on = i === game.active;
+            const ready = validateBuild(b.placements).length === 0;
+            const squad = game.squad.includes(i);
+            return (
+              <Pressable
+                key={i}
+                onPress={() => {
+                  if (on) return;
+                  game.selectBug(i);
+                  setSelected(null);
+                  setConfirmDelete(false);
+                }}
+                style={[styles.bugTab, on && styles.bugTabOn]}>
+                <View style={[styles.bugDot, { backgroundColor: ready ? Colors.good : Colors.bad }]} />
+                <Text style={[styles.bugTabText, on && { color: Colors.bg }]} numberOfLines={1}>
+                  {b.name || 'Unnamed'}
+                </Text>
+                {squad && <Text style={[styles.bugTabTag, on && { color: Colors.bg }]}>SQUAD</Text>}
+              </Pressable>
+            );
+          })}
+          {game.bugs.length < MAX_BUGS && (
+            <Pressable
+              onPress={() => {
+                game.addBug();
+                setSelected(null);
+                setToast('New bug: tap parts in the bin or Auto-build');
+              }}
+              style={[styles.bugTab, styles.bugTabAdd]}>
+              <Text style={[styles.bugTabText, { color: Colors.accent }]}>＋ New bug</Text>
+            </Pressable>
+          )}
+        </ScrollView>
+        <View style={styles.nameRow}>
+          <TextInput
+            value={game.build.name}
+            onChangeText={(t) => game.setBugName(t.slice(0, 18))}
+            style={[styles.nameInput, { flex: 1 }]}
+            placeholder="Name your bug"
+            placeholderTextColor={Colors.textDim}
+          />
+          {game.bugs.length < MAX_BUGS && (
+            <Pressable
+              accessibilityLabel="Copy this bug"
+              onPress={() => {
+                game.addBug(game.active);
+                setSelected(null);
+                setToast('Copied. Tweak away!');
+              }}
+              style={styles.iconBtn}>
+              <Text style={styles.iconBtnText}>⧉</Text>
+            </Pressable>
+          )}
+          {game.bugs.length > 1 && (
+            <Pressable
+              accessibilityLabel="Scrap this bug"
+              onPress={() => {
+                if (!confirmDelete) {
+                  setConfirmDelete(true);
+                  return;
+                }
+                game.deleteBug(game.active);
+                setConfirmDelete(false);
+                setSelected(null);
+              }}
+              style={[styles.iconBtn, confirmDelete && { borderColor: Colors.bad, backgroundColor: '#3A1A1D', paddingHorizontal: 10 }]}>
+              <Text style={[styles.iconBtnText, confirmDelete && { color: Colors.bad, fontSize: 13, fontWeight: '800' }]}>
+                {confirmDelete ? 'Scrap it?' : '🗑'}
+              </Text>
+            </Pressable>
+          )}
+        </View>
         <View ref={viewRef} onLayout={measure} style={{ width: editorW, height: editorH }}>
           <GLView
             style={StyleSheet.absoluteFill}
@@ -577,6 +646,36 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingBottom: Spacing.xl * 2,
   },
+  bugTabs: { gap: 6, paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm },
+  bugTab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.panel,
+    borderColor: Colors.border,
+    borderWidth: 1.5,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    maxWidth: 170,
+  },
+  bugTabOn: { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  bugTabAdd: { borderStyle: 'dashed', borderColor: Colors.accent, backgroundColor: 'transparent' },
+  bugTabText: { color: Colors.text, fontFamily: Fonts.display, fontSize: 14 },
+  bugTabTag: { color: '#58C7FF', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  bugDot: { width: 8, height: 8, borderRadius: 4 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', paddingRight: Spacing.lg, gap: 6 },
+  iconBtn: {
+    minWidth: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.panel,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  iconBtnText: { color: Colors.text, fontSize: 17 },
   nameInput: {
     color: Colors.text,
     fontFamily: Fonts.display,

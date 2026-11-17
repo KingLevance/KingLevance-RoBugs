@@ -9,7 +9,8 @@ import { UltBanner } from '@/components/ult-banner';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
 import { GUIDE } from '@/game/guide';
 import { getMove, PROC } from '@/game/moves';
-import { getOpponent, lineup } from '@/game/opponents';
+import { alliesFor, getOpponent, lineup } from '@/game/opponents';
+import { validateBuild } from '@/game/build';
 import { aiInput, CELL, createTeamSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug } from '@/game/sim';
 import { ArenaRenderer } from '@/render/scene';
 import { useGame } from '@/state/game-store';
@@ -106,8 +107,14 @@ export default function Arena() {
   const game = useGame();
   const [opponent] = useState(() => getOpponent(game.selected));
   const [sim] = useState(() => {
-    // Your bug, plus any allies this fight gives you, against the opponent's whole team.
-    const { allies, enemies } = lineup(opponent);
+    // Your lead bug and your squad (borrowing beaten opponents for any empty slots)
+    // against the opponent's whole team.
+    const squad = game.squad
+      .map((i) => game.bugs[i])
+      .filter((b) => b && validateBuild(b.placements).length === 0)
+      .map((b) => ({ build: { name: b.name, placements: b.placements }, moves: b.equipped, aggression: 0.7 }));
+    const { allies } = alliesFor(opponent, squad);
+    const { enemies } = lineup(opponent);
     return createTeamSim([{ build: game.build, moves: game.equipped }, ...allies], enemies, opponent.arena, (Math.random() * 2 ** 31) | 0);
   });
   const [view, setView] = useState(() => hud(sim));

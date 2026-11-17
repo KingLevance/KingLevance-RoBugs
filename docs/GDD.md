@@ -179,7 +179,9 @@ The campaign (`src/game/opponents.ts`) is a scrolling map of 18 stops in three z
 | **The Undergrowth** | Silkjaw (webs) → Gravelgrub (burrows) / Arcfly (static, gale) / Bloodgnat (vampire) → **Queen Vexa** (boss). Optional: **Mother Lattice**. |
 | **The Deep Hive** | Rivet & Ratchet (2v2) → Glimmer (cloak) / Lenswing (laser) → The Tunnel Kings (2v2) → **The Hive Guard** (3v3 boss) → **Empress Kalyx** (3v3 finale, farmable). Optional: **Nullshade**. |
 
-**Team fights:** an opponent can bring a `team` of extra bugs, and names `allies` (ids of earlier opponents) whose bugs fight on the player's side. The sim handles 1–3 bugs a side (`createTeamSim`): each bug's AI picks the nearest enemy and sticks with it until it's down or another is much closer; a side loses when all its bugs are disabled; on time, the side with more total integrity wins. The HUD shows allies and extra enemies as small health bars. *(Assumption: allies are campaign partners, not extra bugs the player builds. See Open decisions.)*
+**Your garage holds up to 6 bugs** (`SaveData.bugs`), each with its own build, name and equipped moves. Tabs at the top of the garage switch between them; ＋ adds an empty one, ⧉ copies the current one, and 🗑 scraps it (after a confirm). The active bug is the one you edit and lead into battle. Bugs are blueprints: they all draw on the same parts inventory, so two bugs can use the same part. *(Assumption; see Open decisions.)* Old single-bug saves migrate automatically.
+
+**Team fights:** an opponent can bring a `team` of extra bugs. Your side is your lead bug plus your **squad**: other garage bugs you tap on the campaign sheet (up to 2, only finished builds). Any slot you can't fill is covered by a beaten opponent from `allies`, shown as **borrowed**. The sim handles 1–3 bugs a side (`createTeamSim`): each bug's AI picks the nearest enemy and sticks with it until it's down or another is much closer; a side loses when all its bugs are disabled; on time, the side with more total integrity wins. The HUD shows allies and extra enemies as small health bars. *(Assumption: allies are campaign partners, not extra bugs the player builds. See Open decisions.)*
 
 **Optional bosses** (`optional: true`) sit off the main path, are harder than the stops around them, and pay out signature parts.
 
@@ -215,5 +217,6 @@ Saves are stored on the device (SQLite key-value store on native, localStorage o
 4. **Economy.** Should there be scrap or currency to craft or upgrade parts? Duplicates currently just stack.
 5. **Monetisation.** None, premium, or cosmetic-only? (No pay-to-win is assumed.)
 6. **Move slots.** 2 for now. Should more unlock through the campaign?
-8. **Team fights: who are your allies?** For now they're campaign partners (bugs you've beaten fight beside you). Should the player build and bring their own second and third bug instead?
+8. ~~Team fight allies~~ Decided: your own garage bugs (borrowed opponents fill any gaps).
+9. **Shared parts.** Garage bugs are blueprints sharing one inventory, so one head can be on three bugs at once. Should a squad instead need enough parts for every bug in it?
 7. **Balance.** First-pass numbers. Fights often go to time, and melee mirror matches can snowball.
