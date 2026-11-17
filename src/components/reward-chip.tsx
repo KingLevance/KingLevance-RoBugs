@@ -26,7 +26,7 @@ export function RewardChip({ reward, dim, note }: { reward: Reward; dim?: boolea
   const p = getPart(reward.id);
   return (
     <View style={[styles.chip, { borderColor: RARITY_COLOR[p.rarity], opacity: dim ? 0.45 : 1 }]}>
-      <PartCell part={p} size={26} />
+      <PartCell part={p} size={40} />
       <View>
         <Text style={[styles.name, { color: RARITY_COLOR[p.rarity] }]}>{p.name}</Text>
         <Text style={styles.sub}>{note ?? `${p.rarity} ${p.category}`}</Text>

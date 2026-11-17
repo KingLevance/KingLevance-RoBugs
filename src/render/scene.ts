@@ -27,8 +27,21 @@ const smooth = (x: number) => {
   return t * t * (3 - 2 * t);
 };
 
-type PartView = { part: SimPart; model: PartModel; attached: boolean };
-type BugView = { group: THREE.Group; pose: THREE.Group; parts: PartView[]; ring: THREE.Mesh; shield: THREE.Mesh };
+type PartView = { part: SimPart; model: PartModel; attached: boolean; shadow: THREE.Mesh };
+type BugView = {
+  group: THREE.Group;
+  pose: THREE.Group;
+  parts: PartView[];
+  /** Thin, faint team-coloured ring on the floor, scaled as the bug shrinks. */
+  ground: THREE.Group;
+  baseRadius: number;
+  /** Small bobbing pointer above the player's bug only. */
+  marker: THREE.Mesh | null;
+  shield: THREE.Mesh;
+  walk: number;
+  lean: number;
+  lastHeading: number;
+};
 type Debris = { obj: THREE.Object3D; vel: THREE.Vector3; spin: THREE.Vector3; age: number };
 
 export class ArenaRenderer {
@@ -163,27 +176,54 @@ export class ArenaRenderer {
     const group = new THREE.Group();
     const pose = new THREE.Group();
     group.add(pose);
+    // Opaque, slightly-darker-than-floor blobs under each part: a shadow that follows the bug's
+    // shape and loses pieces as parts break off (opaque so overlaps don't stack up).
+    const shadowGeo = new THREE.CircleGeometry(0.62, 16);
+    const shadowMat = new THREE.MeshBasicMaterial({ color: 0x1d2128 });
+    const ground = new THREE.Group();
     const parts = bug.parts.map((p) => {
-      const model = buildPart(p.part.category, Math.sign(Math.round(p.lx)));
+      const model = buildPart(p.part.id, Math.sign(Math.round(p.lx)), p.y);
       model.root.position.set(p.lx / CELL, 0, p.ly / CELL);
       pose.add(model.root);
-      return { part: p, model, attached: true };
+      const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+      shadow.rotation.x = -Math.PI / 2;
+      shadow.position.set(p.lx / CELL, 0.022, p.ly / CELL);
+      group.add(shadow);
+      return { part: p, model, attached: true, shadow };
     });
+
+    const r = bug.radius / CELL;
+    const team = bug.index === 0 ? 0x3ddc97 : 0xff5d5d;
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(bug.radius / CELL + 0.2, bug.radius / CELL + 0.45, 32),
-      new THREE.MeshBasicMaterial({ color: bug.index === 0 ? 0x3ddc97 : 0xff5d5d, transparent: true, opacity: 0.55, side: THREE.DoubleSide }),
+      new THREE.RingGeometry(r + 0.22, r + 0.29, 40),
+      new THREE.MeshBasicMaterial({ color: team, transparent: true, opacity: 0.28, depthWrite: false }),
     );
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.03;
-    group.add(ring);
+    ground.add(ring);
+    group.add(ground);
+
+    // A small camera-facing pointer over the player's bug.
+    let marker: THREE.Mesh | null = null;
+    if (bug.index === 0) {
+      const tri = new THREE.Shape();
+      tri.moveTo(-0.26, 0.3);
+      tri.lineTo(0.26, 0.3);
+      tri.lineTo(0, -0.12);
+      tri.closePath();
+      marker = new THREE.Mesh(new THREE.ShapeGeometry(tri), new THREE.MeshBasicMaterial({ color: team, depthTest: false, transparent: true, opacity: 0.9 }));
+      marker.renderOrder = 10;
+      this.scene.add(marker);
+    }
+
     const shield = new THREE.Mesh(
-      new THREE.SphereGeometry(bug.radius / CELL + 0.5, 16, 12),
+      new THREE.SphereGeometry(r + 0.5, 16, 12),
       new THREE.MeshBasicMaterial({ color: 0x4fa8ff, transparent: true, opacity: 0.25, wireframe: true }),
     );
     shield.visible = false;
     group.add(shield);
     this.scene.add(group);
-    return { group, pose, parts, ring, shield };
+    return { group, pose, parts, ground, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading };
   }
 
   private followTarget(sim: Sim) {
@@ -209,13 +249,34 @@ export class ArenaRenderer {
     const ult = sim.ult;
 
     // Bugs
+    const frozen = !!ult || sim.hitstop > 0 || sim.over;
     sim.bugs.forEach((bug, bi) => {
       const v = this.bugs[bi];
       v.group.position.copy(toWorld(bug.pos.x, bug.pos.y));
       v.group.rotation.y = yaw(bug.heading);
       v.shield.visible = bug.shield > 0;
       v.shield.rotation.y = t;
-      v.ring.visible = !bug.dead;
+      v.ground.visible = !bug.dead;
+      v.ground.scale.setScalar(Math.max(0.4, bug.radius / CELL / v.baseRadius));
+      if (v.marker) {
+        v.marker.visible = !bug.dead && !ult;
+        v.marker.position.copy(v.group.position).setY(3.6 + Math.sin(t * 3) * 0.1);
+        v.marker.quaternion.copy(this.camera.quaternion);
+      }
+
+      // Locomotion: the walk cycle advances with distance covered; the body bobs and leans into turns.
+      const speedAbs = Math.hypot(bug.vel.x, bug.vel.y);
+      const speed = bug.dead ? 0 : Math.min(1, speedAbs / 90);
+      let turn = bug.heading - v.lastHeading;
+      while (turn > Math.PI) turn -= Math.PI * 2;
+      while (turn < -Math.PI) turn += Math.PI * 2;
+      v.lastHeading = bug.heading;
+      if (!frozen && !bug.dead) {
+        v.walk += (speedAbs / CELL) * dt * 2.4;
+        const want = THREE.MathUtils.clamp((-turn / Math.max(dt, 1e-3)) * 0.05, -0.16, 0.16);
+        v.lean += (want - v.lean) * Math.min(1, dt * 8);
+      }
+
       // Pose: crouch → rise → rear back while charging an ultimate.
       if (ult && ult.caster === bi) {
         const k = ult.t / ult.dur;
@@ -227,17 +288,24 @@ export class ArenaRenderer {
       } else {
         v.pose.scale.lerp(new THREE.Vector3(1, 1, 1), 0.3);
         v.pose.rotation.x *= 0.7;
-        v.pose.position.y *= 0.7;
+        const bob = bug.dead ? 0 : Math.abs(Math.sin(v.walk)) * 0.05 * speed + Math.sin(t * 2.2 + bi) * 0.012;
+        v.pose.position.y += (bob - v.pose.position.y) * 0.3;
       }
       if (bug.dead) v.pose.rotation.z = Math.min(0.5, v.pose.rotation.z + dt);
+      else v.pose.rotation.z = v.lean + Math.sin(v.walk) * 0.025 * speed;
 
       for (const pv of v.parts) {
         if (pv.attached && !pv.part.alive) this.detach(bug, pv);
+        pv.shadow.visible = pv.attached;
         if (!pv.attached) continue;
-        const wear = Math.max(0, pv.part.hp) / pv.part.part.hp;
-        pv.model.mat.color.copy(pv.model.base).multiplyScalar(0.45 + 0.55 * wear);
-        pv.model.mat.emissive.setScalar(pv.part.flash > 0 ? 0.9 : 0);
-        if (!ult && !bug.dead) pv.model.animate?.(t);
+        const p = pv.part;
+        pv.model.tint(Math.max(0, p.hp) / p.part.hp, p.flash > 0);
+        pv.model.root.scale.setScalar(p.flash > 0 ? 1.07 : 1);
+        if (bug.dead) continue;
+        // 1 at the moment the weapon fires, fading over ~0.28 s.
+        const w = p.part.weapon;
+        const attack = w && sim.time > 1 ? THREE.MathUtils.clamp(1 - (w.cooldown - p.cooldown) / 0.28, 0, 1) : 0;
+        pv.model.animate({ t, walk: v.walk, speed, attack });
       }
     });
 

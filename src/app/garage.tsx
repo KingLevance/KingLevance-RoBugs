@@ -84,6 +84,7 @@ export default function Garage() {
   const editorW = Math.min(width, MaxContentWidth);
   const editorH = Math.min(editorW * 1.05, height * 0.48);
   const selPart = selected ? partAt(placements, selected.x, selected.y) : undefined;
+  const binW = Math.floor((editorW - Spacing.lg * 2 - Spacing.sm * 3) / 4);
 
   const owned = Object.entries(game.inventory)
     .filter(([, n]) => n > 0)
@@ -268,6 +269,7 @@ export default function Garage() {
       <ScrollView contentContainerStyle={styles.content}>
         {selPart && (
           <Panel style={styles.detailRow}>
+            <PartCell part={getPart(selPart.partId)} size={52} />
             <PartDetails part={getPart(selPart.partId)} />
             <Button label="Remove" variant="danger" onPress={removeSelected} />
           </Panel>
@@ -305,14 +307,22 @@ export default function Garage() {
             const part = getPart(id);
             const free = count - (used[id] ?? 0);
             return (
-              <Pressable key={id} onPress={() => addPart(id)} style={({ pressed }) => [styles.binItem, pressed && styles.binSelected]}>
-                <PartCell part={part} size={34} dim={free <= 0} />
+              <Pressable
+                key={id}
+                onPress={() => addPart(id)}
+                style={({ pressed }) => [styles.binItem, { width: binW }, pressed && styles.binSelected]}>
+                <View>
+                  <PartCell part={part} size={binW - 16} dim={free <= 0} />
+                  <View style={[styles.countBadge, free <= 0 && { backgroundColor: Colors.border }]}>
+                    <Text style={styles.countText}>
+                      {free}/{count}
+                    </Text>
+                  </View>
+                </View>
                 <Text style={styles.binName} numberOfLines={2}>
                   {part.name}
                 </Text>
-                <Text style={styles.binCount}>
-                  {free}/{count}
-                </Text>
+                <Text style={[styles.binRarity, { color: RARITY_COLOR[part.rarity] }]}>{part.rarity.toUpperCase()}</Text>
               </Pressable>
             );
           })}
@@ -405,18 +415,29 @@ const styles = StyleSheet.create({
   section: { color: Colors.accent, fontSize: 12, fontWeight: '800', letterSpacing: 1.5 },
   bin: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   binItem: {
-    width: 76,
     alignItems: 'center',
-    gap: 2,
-    padding: Spacing.xs,
-    borderRadius: 10,
+    gap: 3,
+    paddingVertical: Spacing.sm,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: Colors.border,
     backgroundColor: Colors.panel,
   },
   binSelected: { borderColor: Colors.accent, backgroundColor: Colors.panelHi },
-  binName: { color: Colors.text, fontSize: 10, textAlign: 'center', minHeight: 26 },
-  binCount: { color: Colors.textDim, fontSize: 11, fontVariant: ['tabular-nums'] },
+  binName: { color: Colors.text, fontSize: 11, fontWeight: '600', textAlign: 'center', minHeight: 28, paddingHorizontal: 2 },
+  binRarity: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  countBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -7,
+    backgroundColor: Colors.accent,
+    borderRadius: 999,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderWidth: 1.5,
+    borderColor: Colors.panel,
+  },
+  countText: { color: Colors.bg, fontSize: 10, fontWeight: '900', fontVariant: ['tabular-nums'] },
   actions: { flexDirection: 'row', gap: Spacing.sm },
   moveRow: {
     flexDirection: 'row',

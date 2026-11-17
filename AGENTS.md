@@ -30,6 +30,7 @@ npx expo start              # dev server (press w for web)
 npx expo lint               # lint
 npx tsc --noEmit            # typecheck
 npx tsx scripts/simulate.ts # headless balance check: validates builds, runs AI-vs-AI matches
+node scripts/render-part-icons.mjs  # re-render part icons (assets/parts) after changing models or the catalog
 npx expo-doctor             # diagnose dependency/config issues
 ```
 
@@ -56,12 +57,12 @@ src/game/           Pure TypeScript game logic — no React, no three
   opponents.ts      Starter kit, opponents, loot tables, campaign map data
   rewards.ts        Loot rolls (guaranteed + weighted table)
 src/render/         three.js only — reads sim state, never writes it
-  models.ts         Toon voxel part models with outlines
+  models.ts         Rounded toon part models (one look per catalog part) + animation (walk cycle, attacks)
   scene.ts          ArenaRenderer: scene, camera (incl. ult cutscene camera), VFX
   garage-scene.ts   GarageRenderer: bug on its build grid, raycast picking for drag
   gl.ts             three.js renderer on an expo-gl context
 src/state/          Save data (React context) + platform storage
-src/components/     Shared UI (UltBanner, UpdateBanner, reward chips…)
+src/components/     Shared UI (UltBanner, UpdateBanner, reward chips…); part-icons.ts is GENERATED
 src/updates.ts      OTA update checks (expo-updates); no-op on web/dev
 src/constants/      Theme tokens
 scripts/            Dev tools (not shipped)

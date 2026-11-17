@@ -9,7 +9,8 @@ RoBugs is an original 3D mobile game. You collect robotic bug parts, snap them o
 | Topic | Decision |
 |---|---|
 | Dimension | **3D.** `expo-gl` + `three`; the sim stays 2D on the arena floor plane and the renderer lifts it into 3D. |
-| Art style | Cartoony and chunky: blocky voxel-style parts, bright colours, toon shading and bold outlines. All our own designs. |
+| Art style | Cartoony and chunky: rounded toy-robot parts, bright colours, toon shading and bold outlines. All our own designs. Every catalog part has its own model. Parts animate: a walking gait tied to distance travelled, body bob and lean into turns, jaws and claws that snap when they strike, flapping wings, swaying antennae. |
+| Readability | Rarity is shown in the UI only (coloured frame, 1–4 pips and a printed label on bin tiles), never on the 3D models. Part chips use renders of the real 3D models. In fights, teams are marked subtly: a thin faint ring under each bug and a small pointer over the player's. |
 | Main mode | **Single-player campaign**: a map of opponents with guaranteed first-clear drops and farmable bosses. |
 | Signature moves | Equippable, unlockable moves that **auto-proc** and play a short cutscene. See §6. |
 | Controls | **Fights are autonomous.** Your bug's AI plays to its build: melee charges, ranged kites, hurt bugs circle. The player's skill is in building and choosing moves. A 1×/2× speed toggle is available while watching. |

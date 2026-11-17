@@ -6,10 +6,9 @@ import type { ExpoWebGLRenderingContext } from 'expo-gl';
 import * as THREE from 'three';
 
 import { GRID_H, GRID_W, key, type Placement } from '@/game/build';
-import { getPart } from '@/game/parts';
 
 import { createRenderer } from './gl';
-import { buildPart, toonMaterial, toonMesh, type PartModel } from './models';
+import { buildPart, IDLE, toonMaterial, toonMesh, type PartModel } from './models';
 
 const BG = 0x14171c;
 const MIDX = (GRID_W - 1) / 2;
@@ -154,9 +153,6 @@ export class GarageRenderer {
       const p = wanted.get(k);
       if (!p || m.root.userData.partId !== p.partId) {
         this.bug.remove(m.root);
-        m.root.traverse((o) => {
-          if (o instanceof THREE.Mesh) o.geometry.dispose();
-        });
         this.models.delete(k);
       }
     }
@@ -170,7 +166,7 @@ export class GarageRenderer {
     this.fitDirty = true;
     for (const [k, p] of wanted) {
       if (this.models.has(k)) continue;
-      const model = buildPart(getPart(p.partId).category, Math.sign(p.x - MIDX));
+      const model = buildPart(p.partId, Math.sign(p.x - MIDX), p.y);
       model.root.userData.partId = p.partId;
       model.root.userData.cellKey = k;
       model.root.position.copy(cellToWorld(p.x, p.y));
@@ -252,9 +248,8 @@ export class GarageRenderer {
     if (this.fitDirty && !this.dragging) this.fitCamera();
     const t = this.clock;
     for (const [k, m] of this.models) {
-      m.animate?.(t);
-      const isSel = k === this.selected;
-      m.mat.emissive.setScalar(isSel ? 0.12 + Math.sin(t * 6) * 0.08 : 0);
+      m.animate({ t, ...IDLE });
+      m.tint(1, false, k === this.selected ? 0.12 + Math.sin(t * 6) * 0.08 : 0);
     }
 
     if (this.dragging) {
