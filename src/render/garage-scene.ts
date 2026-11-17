@@ -217,6 +217,7 @@ export class GarageRenderer {
         this.models.set(k, model);
       }
       this.seat(p.x, p.y, (p.z ?? 0) as Layer, model);
+      model.root.rotation.y = -(p.r ?? 0) * (Math.PI / 2); // weapon facing
     }
   }
 

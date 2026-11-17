@@ -41,6 +41,7 @@ export function buildBugModel(placements: Placement[]): BugModel {
   for (const p of [...ground, ...placements.filter((q) => q.z)]) {
     const m = buildPart(p.partId, p.z ? 0 : Math.sign(p.x - midX), p.y);
     m.root.position.copy(pos(p.x, p.y));
+    m.root.rotation.y = -(p.r ?? 0) * (Math.PI / 2); // weapon facing
     if (!p.z) {
       m.root.position.y = lift(p);
       tops.set(key(p.x, p.y), seatHeight(m) + lift(p));

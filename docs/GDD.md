@@ -114,6 +114,10 @@ Moves are unlocked like parts (from drops) and **equipped** in the Garage. There
 | Take damage | +1 per 5 dmg (comeback) |
 | Survive a stomper / dodge (Skitter) | +6 |
 
+**Weapon facing** (`Placement.r`, `FACINGS` in `build.ts`): horns and stingers can point front, right, back or left, pincers front or to either side, and jaws only forward. A weapon placed (or moved) on the grid automatically points outward from the body at that spot. For example, a stinger behind the abdomen points backwards, and a horn beside the thorax points sideways. **↻ Rotate** in the garage's selected-part chip cycles through the allowed facings. Weapons only fire within their arc around the way they point, and models are rotated to match, so a rear stinger has its bulb against the body and its barrel out the back. Only a front horn gets the charging ram bonus; side and rear horns work as spiked bumpers.
+
+**Crab-walking:** `Input.face` lets a bug turn to one heading while moving another way, at 42% speed sideways or backwards (rising to full speed when moving forwards). The AI uses it to keep its main weapon facing the enemy. A rear-stinger sniper backs away while it shoots, and side or rear melee bugs turn their armed side in for the last stretch and crab into the enemy. The flanking logic also treats every way an enemy's weapons point as dangerous, not just its front.
+
 **Critical hits** (`CRIT` in `sim.ts`): weapon hits (jaws, pincers, horns, stinger darts; not hazards, collisions or move volleys) can crit for ×1.6 damage. Chance = 6% base, +6% from the victim's side or +12% from behind, plus sensors (+4% Feeler Antennae, +7% Echo Array, capped at +15%), max 35%. Crits give +4 extra proc, a beat of hit-stop and shake, an orange flash, ring and sparks, and a big orange **CRIT n!** number. Flanking AI therefore pays off. The garage shows each build's crit chance. About 8–11% of hits crit in the balance script.
 
 **Ultimates** (`isUltimate(id)`) play a cutscene:

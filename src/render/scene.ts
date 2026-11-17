@@ -294,6 +294,7 @@ export class ArenaRenderer {
     const parts = bug.parts.map((p) => {
       const model = buildPart(p.part.id, p.z ? 0 : Math.sign(Math.round(p.lx)), p.y);
       model.root.position.set(p.lx / CELL, 0, p.ly / CELL);
+      model.root.rotation.y = -p.r * (Math.PI / 2); // weapons can point sideways or backwards
       pose.add(model.root);
       if (!p.z) {
         model.root.position.y = lift(p);
@@ -651,7 +652,7 @@ export class ArenaRenderer {
     const height = root.position.y + v.group.position.y;
     v.pose.remove(root);
     root.position.copy(toWorld(w.x, w.y, height));
-    root.rotation.y = yaw(bug.heading);
+    root.rotation.y = yaw(bug.heading) - pv.part.r * (Math.PI / 2);
     this.scene.add(root);
     const out = toWorld(w.x - bug.pos.x, w.y - bug.pos.y).add(new THREE.Vector3(HALF, 0, HALF)).normalize();
     this.debris.push({
@@ -787,8 +788,10 @@ export class ArenaRenderer {
   private weaponTip(bi: 0 | 1, sim: Sim, cat: Category | undefined) {
     const v = this.bugs[bi];
     const bug = sim.bugs[bi];
-    const f = new THREE.Vector3(Math.cos(bug.heading), 0, Math.sin(bug.heading));
     const pv = cat ? v.parts.find((p) => p.attached && p.part.part.category === cat) : undefined;
+    // The way the weapon points (it may face sideways or backwards).
+    const a = bug.heading + (pv?.part.r ?? 0) * (Math.PI / 2);
+    const f = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
     const at = new THREE.Vector3();
     if (pv) pv.model.root.getWorldPosition(at).add(new THREE.Vector3(0, 0.55, 0));
     else v.group.getWorldPosition(at).add(new THREE.Vector3(0, 0.8, 0));

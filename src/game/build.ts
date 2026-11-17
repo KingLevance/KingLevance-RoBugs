@@ -10,10 +10,44 @@ export const MAX_MASS = 150;
  * grid part in the same cell; −1 is slung underneath it (see STACK_TOP/UNDER).
  */
 export type Layer = -1 | 0 | 1;
-export type Placement = { x: number; y: number; partId: string; z?: Layer };
+/**
+ * Which way a weapon points, in quarter turns clockwise seen from above:
+ * 0 front (default), 1 right, 2 back, 3 left.
+ */
+export type Facing = 0 | 1 | 2 | 3;
+export type Placement = { x: number; y: number; partId: string; z?: Layer; r?: Facing };
 export type Build = { name: string; placements: Placement[] };
 
-export type PlacedPart = { x: number; y: number; z?: Layer; part: PartDef };
+export type PlacedPart = { x: number; y: number; z?: Layer; r?: Facing; part: PartDef };
+
+/** Directions each weapon may point. Anything not listed only faces forward. */
+export const FACINGS: Partial<Record<Category, readonly Facing[]>> = {
+  horn: [0, 1, 2, 3],
+  stinger: [0, 1, 2, 3],
+  pincers: [0, 1, 3],
+};
+export const facingsFor = (c: Category): readonly Facing[] => FACINGS[c] ?? [0];
+export const FACING_NAMES = ['front', 'right', 'back', 'left'] as const;
+
+/**
+ * The way a part at (x, y) should point: straight out from the body (away from
+ * the thorax), or the nearest direction it's allowed to face.
+ */
+export function outwardFacing(placements: Placement[], x: number, y: number, c: Category): Facing {
+  const allowed = facingsFor(c);
+  if (allowed.length === 1) return allowed[0];
+  const core = placements.filter((p) => !p.z && ['thorax', 'abdomen', 'head'].includes(getPart(p.partId).category));
+  const ref = core.length ? core : placements.filter((p) => !p.z);
+  const cx = ref.reduce((a, p) => a + p.x, 0) / Math.max(1, ref.length);
+  const cy = ref.reduce((a, p) => a + p.y, 0) / Math.max(1, ref.length);
+  const dx = x - cx;
+  const dy = y - cy;
+  const side: Facing = dx > 0 ? 1 : 3;
+  const want: Facing = Math.abs(dy) >= Math.abs(dx) && Math.abs(dy) > 0.01 ? (dy < 0 ? 0 : 2) : Math.abs(dx) > 0.01 ? side : 0;
+  if (allowed.includes(want)) return want;
+  if (want === 2 && Math.abs(dx) > 0.01 && allowed.includes(side)) return side;
+  return allowed.includes(0) ? 0 : allowed[0];
+}
 
 /** Parts that can be stacked on top of another part. */
 export const STACK_TOP: readonly Category[] = ['wings', 'sensor', 'core'];
@@ -55,7 +89,11 @@ export const pkey = (p: { x: number; y: number; z?: number }) =>
   p.z === 1 ? `${p.x},${p.y},top` : p.z === -1 ? `${p.x},${p.y},under` : `${p.x},${p.y}`;
 
 export function resolve(placements: Placement[]): PlacedPart[] {
-  return placements.map((p) => ({ x: p.x, y: p.y, z: p.z ?? 0, part: getPart(p.partId) }));
+  return placements.map((p) => {
+    const part = getPart(p.partId);
+    const r = p.r && facingsFor(part.category).includes(p.r) ? p.r : 0;
+    return { x: p.x, y: p.y, z: p.z ?? 0, r, part };
+  });
 }
 
 export function computeStats(parts: PlacedPart[]): BugStats {

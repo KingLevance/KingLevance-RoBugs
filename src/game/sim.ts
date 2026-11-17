@@ -25,6 +25,8 @@ export type SimPart = {
   y: number;
   /** Layer: 1 = stacked on top of the part in the same cell, −1 = slung underneath it. */
   z: Layer;
+  /** Facing in quarter turns clockwise from the front (weapons): 0 front, 1 right, 2 back, 3 left. */
+  r: number;
   /** Offset from bug center in local space (−y is forward). */
   lx: number;
   ly: number;
@@ -122,6 +124,11 @@ export type Input = {
   y: number;
   /** Wanted altitude as a fraction (0..1) of the bug's flight ceiling. Ignored if it can't fly. */
   alt?: number;
+  /**
+   * Heading to turn to while moving (radians). Without it the bug turns toward
+   * where it's going; with it, it crab-walks: sideways or backwards, more slowly.
+   */
+  face?: number;
 };
 
 const STOMP_WARN = 1.2;
@@ -140,6 +147,11 @@ function rand(sim: Sim) {
   t = Math.imul(t ^ (t >>> 15), t | 1);
   t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+/** World angle a part points (its facing added to the bug's heading). */
+export function facingAngle(bug: Bug, p: SimPart) {
+  return bug.heading + p.r * (Math.PI / 2);
 }
 
 export function forward(h: number): Vec {
@@ -185,6 +197,7 @@ function makeBug(index: 0 | 1, fighter: Fighter, pos: Vec, heading: number): Bug
     x: p.x,
     y: p.y,
     z: p.z ?? 0,
+    r: p.r ?? 0,
     lx: (p.x - cx) * CELL,
     ly: (p.y - cy) * CELL,
     part: p.part,
@@ -440,8 +453,12 @@ function judge(sim: Sim, bug: Bug, id: MoveId): boolean {
         return !!near && near.d < 70 && facing < 0.9 && Math.abs(foe.alt - bug.alt) < 30;
       });
     }
-    case 'venom-barrage':
-      return Math.hypot(dist, foe.alt - bug.alt) < 280 && facing < 0.45;
+    case 'venom-barrage': {
+      // Aimed down whichever way the stinger points.
+      const sting = bug.parts.find((p) => p.alive && p.part.category === 'stinger');
+      const aim = sting ? Math.abs(angleDiff(facingAngle(bug, sting), Math.atan2(dy, dx))) : facing;
+      return Math.hypot(dist, foe.alt - bug.alt) < 280 && aim < 0.45;
+    }
     case 'carapace-lock':
       return bug.shield <= 0 && (bug.recentDamage > 22 || (hpFraction(bug) < 0.4 && dist < 100));
     case 'skitter-dash': {
@@ -495,8 +512,9 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
     case 'venom-barrage': {
       const sting = bug.parts.find((p) => p.alive && p.part.category === 'stinger');
       const from = sting ? partWorld(bug, sting) : bug.pos;
+      const aim = sting ? facingAngle(bug, sting) : bug.heading;
       for (let k = -3; k <= 3; k++) {
-        const a = bug.heading + k * 0.09;
+        const a = aim + k * 0.09;
         const dz = foe.alt - bug.alt;
         const tFly = Math.max(0.1, Math.hypot(foe.pos.x - from.x, foe.pos.y - from.y) / 380);
         sim.projectiles.push({ x: from.x, y: from.y, z: bug.alt, vx: Math.cos(a) * 380, vy: Math.sin(a) * 380, vz: dz / tFly, damage: 14, owner: bug.index, ttl: 1, big: true });
@@ -547,10 +565,11 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
   }
   const s = bug.stats;
   const throttle = Math.min(1, Math.hypot(input.x, input.y));
+  const want = Math.atan2(input.y, input.x);
+  const crab = input.face !== undefined && throttle > 0.05;
   let align = 0;
   if (throttle > 0.05) {
-    const want = Math.atan2(input.y, input.x);
-    const d = angleDiff(bug.heading, want);
+    const d = angleDiff(bug.heading, crab ? input.face! : want);
     const turn = Math.sign(d) * Math.min(Math.abs(d), s.turnRate * dt);
     bug.heading += turn;
     align = Math.max(0, Math.cos(angleDiff(bug.heading, want)));
@@ -558,8 +577,9 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
   // Lopsided legs make the bug pull to one side.
   bug.heading -= s.thrustBias * 1.4 * throttle * dt;
 
-  const f = forward(bug.heading);
-  const speed = s.topSpeed * throttle * (0.3 + 0.7 * align);
+  // Normally a bug walks where it points; crab-walking moves along the input, slower off-axis.
+  const f = crab ? forward(want) : forward(bug.heading);
+  const speed = crab ? s.topSpeed * throttle * (0.42 + 0.58 * align) : s.topSpeed * throttle * (0.3 + 0.7 * align);
   const k = Math.min(1, 5 * dt);
   bug.vel.x += (f.x * speed - bug.vel.x) * k;
   bug.vel.y += (f.y * speed - bug.vel.y) * k;
@@ -581,7 +601,7 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
       const dz = enemy.alt - bug.alt;
       if (Math.hypot(target.d, dz) > reach) continue;
       const toward = Math.atan2(target.w.y - wp.y, target.w.x - wp.x);
-      if (target.d > CELL && Math.abs(angleDiff(bug.heading, toward)) > w.arc) continue;
+      if (target.d > CELL && Math.abs(angleDiff(facingAngle(bug, p), toward)) > w.arc) continue;
       p.cooldown = w.cooldown;
       if (w.projectileSpeed) {
         const dx = target.w.x - wp.x;
@@ -944,7 +964,19 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
   const weapons = bug.parts.filter((p) => p.alive && p.part.weapon);
   const ranged = weapons.some((p) => p.part.weapon!.projectileSpeed);
   const melee = weapons.filter((p) => !p.part.weapon!.projectileSpeed);
-  const rammer = melee.some((p) => p.part.weapon!.ramBonus);
+  // Which way do most of our weapons point? (0 front, 1 right, 2 back, 3 left.)
+  const mainFacing = (list: SimPart[]) => {
+    const dps = [0, 0, 0, 0];
+    for (const p of list) dps[p.r] += p.part.weapon!.damage / p.part.weapon!.cooldown;
+    return dps.reduce((best, v, i) => (v > dps[best] + 1e-6 ? i : best), 0);
+  };
+  const meleeR = mainFacing(melee);
+  const rangedR = mainFacing(weapons.filter((p) => p.part.weapon!.projectileSpeed));
+  /** Heading that points facing `r` at the world angle `a`. */
+  const faceFor = (r: number, a: number) => a - r * (Math.PI / 2);
+  let face: number | undefined;
+  // Only a front horn can build a charge.
+  const rammer = melee.some((p) => p.part.weapon!.ramBonus && p.r === 0);
   const nimble = bug.stats.turnRate > foe.stats.turnRate * 1.1 || bug.stats.topSpeed > foe.stats.topSpeed * 1.15;
   const heavy = bug.stats.mass > foe.stats.mass * 1.3;
   const myHp = hpFraction(bug);
@@ -952,7 +984,11 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
 
   // Where are we relative to the enemy's weapons? (0 = dead ahead of it)
   const fromFoe = Math.atan2(bug.pos.y - foe.pos.y, bug.pos.x - foe.pos.x);
-  const inFoeFront = Math.abs(angleDiff(foe.heading, fromFoe)) < 1.1;
+  // In front of any of its melee weapons (they can point sideways or backwards).
+  const foeMelee = foe.parts.filter((p) => p.alive && p.part.weapon && !p.part.weapon.projectileSpeed);
+  const inFoeFront = (foeMelee.length ? foeMelee.map((p) => facingAngle(foe, p)) : [foe.heading]).some(
+    (a) => Math.abs(angleDiff(a, fromFoe)) < 1.1,
+  );
   const foeArmed = foe.parts.some((p) => p.alive && p.part.weapon);
 
   // Retarget when the old target is gone.
@@ -1028,7 +1064,10 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
     }
     const radial = (dist - want) / 60;
     dir = unit({ x: tangent.x + toFoeN.x * radial, y: tangent.y + toFoeN.y * radial });
-    if (ready && dist < 240) {
+    if (rangedR !== 0) {
+      // Stinger points sideways or backwards: keep it on the target while circling (or backing off).
+      face = faceFor(rangedR, Math.atan2(targetW.y - bug.pos.y, targetW.x - bug.pos.x));
+    } else if (ready && dist < 240) {
       dir = unit({ x: targetW.x - bug.pos.x, y: targetW.y - bug.pos.y });
       throttle = 0.25;
       goalDist = Math.max(0, dist - contact);
@@ -1085,6 +1124,8 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
         dir = unit(toGoal);
         goalDist = goalDist0;
       }
+      // Side or rear weapons: turn them toward the enemy for the last stretch and crab in.
+      if (meleeR !== 0 && dist < contact + 100) face = faceFor(meleeR, Math.atan2(targetW.y - bug.pos.y, targetW.x - bug.pos.x));
       if (goalDist0 < 30 || dist < contact * 0.95) setMode('strike');
       if (ai.t > 5) setMode('strike'); // stop dancing eventually
       // Start the dive a little before arriving.
@@ -1096,6 +1137,7 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
       const lead = { x: targetW.x + foe.vel.x * eta - bug.pos.x, y: targetW.y + foe.vel.y * eta - bug.pos.y };
       dir = unit(lead);
       goalDist = Math.max(0, dist - contact * 0.5);
+      if (meleeR !== 0) face = faceFor(meleeR, Math.atan2(lead.y, lead.x));
       const touching = dist < contact * 0.95;
       if (touching) ai.engaged += dt;
       else if (ai.t > 2.2) setMode('approach'); // lost them: re-set up the attack
@@ -1124,7 +1166,7 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
     }
   }
 
-  return steer(sim, bug, dir, throttle, alt, goalDist);
+  return steer(sim, bug, dir, throttle, alt, goalDist, face);
 }
 
 /**
@@ -1162,7 +1204,7 @@ const STEER_DIRS = Array.from({ length: 16 }, (_, k) => ({ x: Math.cos((k * Math
  * where we want to go minus how dangerous they are, and take the best. Slows
  * down to turn when the bug is pointed at something it shouldn't run into.
  */
-function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number, alt = 0, goalDist = Infinity): Input {
+function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number, alt = 0, goalDist = Infinity, face?: number): Input {
   const airborne = bug.alt > 10 && alt * bug.stats.maxAlt > 10;
   const speed = Math.hypot(bug.vel.x, bug.vel.y);
   // Never look less far than we need to stop.
@@ -1179,10 +1221,11 @@ function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number, alt = 0, goalDist
   }
   // Facing danger and needing to turn hard? Ease off so we turn on the spot
   // (bugs move along their heading, so full throttle would carry us into it).
+  // (Crab-walking moves along `best` directly, so there's no turn to wait for.)
   const f = forward(bug.heading);
   const align = f.x * best.x + f.y * best.y;
-  if (align < 0.3 && danger(sim, bug, f, look, airborne) > 0.35) throttle *= 0.15;
-  return { x: best.x * throttle, y: best.y * throttle, alt };
+  if (face === undefined && align < 0.3 && danger(sim, bug, f, look, airborne) > 0.35) throttle *= 0.15;
+  return { x: best.x * throttle, y: best.y * throttle, alt, face };
 }
 
 // ── HUD summary (cheap, for React) ──────────────────────────────────

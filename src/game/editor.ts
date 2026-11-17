@@ -2,7 +2,7 @@
  * Garage editing helpers (pure): auto-attach a new part to a sensible slot,
  * move/swap parts, remove parts. Handles the stacking layer (z = 1).
  */
-import { canStack, computeStats, GRID_H, GRID_W, key, MAX_MASS, resolve, type Layer, type Placement } from './build';
+import { canStack, computeStats, facingsFor, GRID_H, GRID_W, key, MAX_MASS, outwardFacing, resolve, type Facing, type Layer, type Placement } from './build';
 import { getPart, isBody, PARTS, type Category } from './parts';
 
 const MID = (GRID_W - 1) / 2;
@@ -156,7 +156,32 @@ export function rankSlots(placements: Placement[], partId: string): (Slot & { sc
 export function autoPlace(placements: Placement[], partId: string): Placement | null {
   const best = rankSlots(placements, partId)[0];
   if (!best) return null;
-  return best.z ? { x: best.x, y: best.y, z: best.z, partId } : { x: best.x, y: best.y, partId };
+  return faceOut(placements, best.z ? { x: best.x, y: best.y, z: best.z, partId } : { x: best.x, y: best.y, partId });
+}
+
+/** Point a (grid) weapon outward from the body at its spot. Other parts are returned as they are. */
+function faceOut(others: Placement[], p: Placement): Placement {
+  const c = getPart(p.partId).category;
+  if (p.z || facingsFor(c).length < 2) return p;
+  const r = outwardFacing(others, p.x, p.y, c);
+  if (r) return { ...p, r };
+  const { r: _drop, ...rest } = p;
+  return rest;
+}
+
+/** Re-aim every grid part in `moved` outward at its new spot. */
+const reface = (placements: Placement[], moved: Placement[]) =>
+  placements.map((p) => (moved.includes(p) ? faceOut(placements.filter((q) => q !== p), p) : p));
+
+/** Turn a weapon to the next direction it's allowed to face. */
+export function rotatePart(placements: Placement[], slot: Slot): Placement[] | null {
+  const part = partAt(placements, slot.x, slot.y, slot.z);
+  if (!part) return null;
+  const allowed = facingsFor(getPart(part.partId).category);
+  if (allowed.length < 2) return null;
+  const i = allowed.indexOf((part.r ?? 0) as Facing);
+  const r = allowed[(i + 1) % allowed.length];
+  return placements.map((p) => (p === part ? { ...p, r } : p));
 }
 
 const RARITY_RANK = { common: 0, uncommon: 1, rare: 2, epic: 3 } as const;
@@ -252,18 +277,26 @@ export function movePart(placements: Placement[], from: Slot, to: { x: number; y
   if (from.z) {
     // A stacked part coming down onto the grid: only into an empty cell.
     if (base) return null;
-    return { placements: placements.map((p) => (p === moving ? { ...p, x: to.x, y: to.y, z: undefined } : p)), at };
+    const next = placements.map((p) => (p === moving ? { ...p, x: to.x, y: to.y, z: undefined } : p));
+    return { placements: reface(next, next.filter((p) => p.x === to.x && p.y === to.y && !p.z)), at };
   }
 
-  // Grid part ↔ grid part swap; each takes its stacked part along.
-  return {
-    placements: placements.map((p) => {
-      if (p.x === from.x && p.y === from.y) return { ...p, x: to.x, y: to.y };
-      if (p.x === to.x && p.y === to.y) return { ...p, x: from.x, y: from.y };
-      return p;
-    }),
-    at,
-  };
+  // Grid part ↔ grid part swap; each takes its stacked part along. Weapons re-aim outward.
+  const swapped: Placement[] = [];
+  const next = placements.map((p) => {
+    if (p.x === from.x && p.y === from.y) {
+      const q = { ...p, x: to.x, y: to.y };
+      swapped.push(q);
+      return q;
+    }
+    if (p.x === to.x && p.y === to.y) {
+      const q = { ...p, x: from.x, y: from.y };
+      swapped.push(q);
+      return q;
+    }
+    return p;
+  });
+  return { placements: reface(next, swapped.filter((p) => !p.z)), at };
 }
 
 /**

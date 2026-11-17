@@ -16,8 +16,8 @@ import {
 import { PartCell } from '@/components/part-cell';
 import { Button, Meter, Panel } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
-import { computeStats, connectedKeys, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
-import { autoBuild, autoPlace, dropLayer, flipLayer, movePart, partAt, rankSlots, removeAt, sameSlot, type Slot } from '@/game/editor';
+import { computeStats, connectedKeys, FACING_NAMES, facingsFor, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
+import { autoBuild, autoPlace, dropLayer, flipLayer, movePart, partAt, rankSlots, removeAt, rotatePart, sameSlot, type Slot } from '@/game/editor';
 import { GROUPS, GUIDE } from '@/game/guide';
 import { getMove, MOVE_SLOTS } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type Category, type PartDef } from '@/game/parts';
@@ -334,6 +334,13 @@ export default function Garage() {
     setSelected(res.at);
   }
 
+  function rotateSelected() {
+    if (!selected) return;
+    const next = rotatePart(placements, selected);
+    if (!next) return;
+    game.setPlacements(next); // (the selected chip shows the new facing)
+  }
+
   function removeSelected() {
     if (!selected || !selPart) return;
     game.setPlacements(removeAt(placements, selected));
@@ -380,6 +387,11 @@ export default function Garage() {
                     {getPart(selPart.partId).name}
                   </Text>
                 </View>
+                {facingsFor(getPart(selPart.partId).category).length > 1 && (
+                  <Pressable onPress={rotateSelected} style={[styles.selBtn, { borderColor: Colors.accent }]}>
+                    <Text style={[styles.selBtnText, { color: Colors.accent }]}>↻ {FACING_NAMES[selPart.r ?? 0]}</Text>
+                  </Pressable>
+                )}
                 <Pressable onPress={removeSelected} style={[styles.selBtn, { borderColor: Colors.bad }]}>
                   <Text style={[styles.selBtnText, { color: Colors.bad }]}>Remove</Text>
                 </Pressable>
