@@ -7,19 +7,24 @@ export const MAX_MASS = 150;
 /**
  * One part placed on the build grid. Row 0 is the front of the bug.
  * `z` is the layer: 0 (default) sits on the grid; 1 is stacked on top of the
- * layer-0 part in the same cell (only STACKABLE parts, only on STACK_BASES).
+ * grid part in the same cell; −1 is slung underneath it (see STACK_TOP/UNDER).
  */
-export type Placement = { x: number; y: number; partId: string; z?: 0 | 1 };
+export type Layer = -1 | 0 | 1;
+export type Placement = { x: number; y: number; partId: string; z?: Layer };
 export type Build = { name: string; placements: Placement[] };
 
-export type PlacedPart = { x: number; y: number; z?: 0 | 1; part: PartDef };
+export type PlacedPart = { x: number; y: number; z?: Layer; part: PartDef };
 
 /** Parts that can be stacked on top of another part. */
-export const STACKABLE: readonly Category[] = ['wings', 'sensor'];
-/** Parts that something can be stacked on. */
+export const STACK_TOP: readonly Category[] = ['wings', 'sensor', 'core'];
+/** Parts that can be slung underneath another part. */
+export const STACK_UNDER: readonly Category[] = ['core'];
+/** Parts that something can be stacked on / slung under. */
 export const STACK_BASES: readonly Category[] = ['head', 'thorax', 'abdomen', 'armor'];
 
-export const canStack = (top: Category, base: Category) => STACKABLE.includes(top) && STACK_BASES.includes(base);
+/** Can `part` go in layer `z` (±1) of a cell whose grid part is `base`? */
+export const canStack = (part: Category, base: Category, z: Layer = 1) =>
+  STACK_BASES.includes(base) && (z === 1 ? STACK_TOP.includes(part) : z === -1 ? STACK_UNDER.includes(part) : false);
 
 export type BugStats = {
   mass: number;
@@ -37,12 +42,15 @@ export type BugStats = {
   reach: number;
   /** -1..1: positive means the right side pushes harder (bug drifts left). */
   thrustBias: number;
+  /** Highest it can fly (world px); 0 = can't fly. Needs lots of wing lift for its weight. */
+  maxAlt: number;
 };
 
 /** Key of a grid cell (layer 0). */
 export const key = (x: number, y: number) => `${x},${y}`;
 /** Key of a placed part, including its layer. */
-export const pkey = (p: { x: number; y: number; z?: number }) => (p.z ? `${p.x},${p.y},top` : `${p.x},${p.y}`);
+export const pkey = (p: { x: number; y: number; z?: number }) =>
+  p.z === 1 ? `${p.x},${p.y},top` : p.z === -1 ? `${p.x},${p.y},under` : `${p.x},${p.y}`;
 
 export function resolve(placements: Placement[]): PlacedPart[] {
   return placements.map((p) => ({ x: p.x, y: p.y, z: p.z ?? 0, part: getPart(p.partId) }));
@@ -96,7 +104,15 @@ export function computeStats(parts: PlacedPart[]): BugStats {
     dps,
     reach: Math.min(1.4, reach),
     thrustBias,
+    maxAlt: flightCeiling(lift, mass),
   };
+}
+
+/** World px of altitude a bug can reach for a given wing lift and mass. */
+export function flightCeiling(lift: number, mass: number) {
+  if (mass <= 0) return 0;
+  const k = lift / mass - 0.16;
+  return k <= 0.02 ? 0 : Math.min(70, k * 230);
 }
 
 const NEIGHBORS = [
@@ -109,7 +125,7 @@ const NEIGHBORS = [
 /**
  * Returns the set of part keys (see `pkey`) still structurally attached to the
  * bug: the largest group of grid parts that contains a thorax, linked through
- * orthogonal neighbours, plus anything stacked on a part in that group.
+ * orthogonal neighbours, plus anything stacked on / slung under a part in that group.
  * So a weapon bolted onto an armor plate falls off when that plate is destroyed,
  * and wings stacked on a thorax fall off when the thorax goes.
  */
@@ -142,7 +158,7 @@ export function connectedKeys(parts: PlacedPart[]): Set<string> {
   for (const p of parts) {
     if (!p.z) continue;
     const base = byKey.get(key(p.x, p.y));
-    if (base && best.has(key(p.x, p.y)) && canStack(p.part.category, base.part.category)) out.add(pkey(p));
+    if (base && best.has(key(p.x, p.y)) && canStack(p.part.category, base.part.category, p.z)) out.add(pkey(p));
   }
   return out;
 }
@@ -160,7 +176,9 @@ export function validateBuild(placements: Placement[]): string[] {
   if (countCategory(parts, 'core') < 1) errors.push('Needs a power core');
 
   const ground = new Map(parts.filter((p) => !p.z).map((p) => [key(p.x, p.y), p]));
-  const badStack = parts.filter((p) => p.z && !(ground.get(key(p.x, p.y)) && canStack(p.part.category, ground.get(key(p.x, p.y))!.part.category)));
+  const badStack = parts.filter(
+    (p) => p.z && !(ground.get(key(p.x, p.y)) && canStack(p.part.category, ground.get(key(p.x, p.y))!.part.category, p.z)),
+  );
   if (badStack.length) errors.push(`${badStack[0].part.name} can't stack there`);
 
   const connected = connectedKeys(parts);

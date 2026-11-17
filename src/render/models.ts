@@ -537,12 +537,12 @@ let collarMat: THREE.MeshToonMaterial | null = null;
  * Body-to-body links are a thick spine with a collar; everything else is a slimmer strut.
  * Position the returned group at A's cell.
  */
-export function buildConnector(a: Category, b: Category, dx: number, dz: number): THREE.Group {
+export function buildConnector(a: Category, b: Category, dx: number, dz: number, liftA = 0, liftB = 0): THREE.Group {
   frameMat ??= toonMaterial(GUNMETAL);
   collarMat ??= toonMaterial(STEEL);
   const spine = BODY.includes(a) && BODY.includes(b);
-  const from = V(dx * 0.1, MOUNT_Y[a] ?? 0.5, dz * 0.1);
-  const to = V(dx * 0.9, MOUNT_Y[b] ?? 0.5, dz * 0.9);
+  const from = V(dx * 0.1, (MOUNT_Y[a] ?? 0.5) + liftA, dz * 0.1);
+  const to = V(dx * 0.9, (MOUNT_Y[b] ?? 0.5) + liftB, dz * 0.9);
   const g = new THREE.Group();
   g.add(limb(from, to, spine ? 0.2 : 0.1, frameMat));
   const collar = new THREE.Mesh(torus(spine ? 0.24 : 0.13, 0.05), collarMat);
@@ -596,3 +596,8 @@ export function stackOffset(model: PartModel, seat: number): number {
   model.root.position.y = y0;
   return seat - bottom - 0.04;
 }
+
+/** How far a grid part rides up when a part is slung underneath it. */
+export const UNDER_LIFT = 0.42;
+/** Scale of a part slung underneath. */
+export const UNDER_SCALE = 0.55;

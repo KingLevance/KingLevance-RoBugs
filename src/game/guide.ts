@@ -78,7 +78,7 @@ export const GUIDE: Record<Category, { label: string; group: GuideGroup; does: s
     label: 'Power core',
     group: 'system',
     does: 'Supplies the power every other part uses. Lose every core and the bug shuts down.',
-    where: 'Tucked in the middle or rear with parts around it. Never at the front.',
+    where: 'Tucked in the middle or rear, or stack it: drop it onto a body or armor part to sling it underneath (safe from weapons, but not from acid or crash landings) or put it on top.',
   },
   sensor: {
     label: 'Sensor',

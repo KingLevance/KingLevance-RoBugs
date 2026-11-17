@@ -5,7 +5,7 @@
  * input arrives through `step()`. The world is a 2D floor plane
  * (x right, y "down"/toward the player's start); the 3D renderer lifts it.
  */
-import { computeStats, connectedKeys, pkey, resolve, type Build, type BugStats } from './build';
+import { computeStats, connectedKeys, pkey, resolve, type Build, type BugStats, type Layer } from './build';
 import { getMove, MOVES, PROC, ULT_SECONDS, type MoveId } from './moves';
 import type { ArenaId } from './opponents';
 import type { Category, PartDef } from './parts';
@@ -22,8 +22,8 @@ export type Vec = { x: number; y: number };
 export type SimPart = {
   x: number;
   y: number;
-  /** Layer: 1 = stacked on top of the part in the same cell. */
-  z: 0 | 1;
+  /** Layer: 1 = stacked on top of the part in the same cell, −1 = slung underneath it. */
+  z: Layer;
   /** Offset from bug center in local space (−y is forward). */
   lx: number;
   ly: number;
@@ -46,6 +46,13 @@ export type Bug = {
   maxHp: number;
   dead: boolean;
   hazardTimer: number;
+  /** Altitude above the floor (world px). Flying needs wing lift: see stats.maxAlt. */
+  alt: number;
+  vAlt: number;
+  /** Wing stamina in seconds of flight left; drains in the air, refills on the ground. */
+  stamina: number;
+  /** Grounded until stamina refills to this fraction (after running out). */
+  grounded: boolean;
   moves: MoveId[];
   moveCd: Partial<Record<MoveId, number>>;
   proc: number;
@@ -63,13 +70,17 @@ export type Hazard =
   | { kind: 'acid'; x: number; y: number; r: number }
   | { kind: 'stomper'; x: number; y: number; r: number; period: number; t: number };
 
-export type Projectile = { x: number; y: number; vx: number; vy: number; damage: number; owner: 0 | 1; ttl: number; big: boolean };
-export type Effect = { x: number; y: number; ttl: number; color: string; size: number };
+/** `z`/`vz`: altitude and climb rate, so darts can be shot up at flyers (or down from them). */
+export type Projectile = { x: number; y: number; z: number; vx: number; vy: number; vz: number; damage: number; owner: 0 | 1; ttl: number; big: boolean };
+/** `h`: altitude (world px). */
+export type Effect = { x: number; y: number; h: number; ttl: number; color: string; size: number };
 
 export type SimEvent =
   /** A part took damage. `part` indexes the victim's parts; `by` is the attacking bug (null for hazards/walls). */
-  | { type: 'hit'; bug: 0 | 1; by: 0 | 1 | null; part: number; x: number; y: number; dmg: number; broke: boolean; shielded: boolean }
-  | { type: 'break'; bug: 0 | 1; x: number; y: number; category: Category; time: number }
+  | { type: 'hit'; bug: 0 | 1; by: 0 | 1 | null; part: number; x: number; y: number; h: number; dmg: number; broke: boolean; shielded: boolean }
+  | { type: 'break'; bug: 0 | 1; x: number; y: number; h: number; category: Category; time: number }
+  /** A bug hit the floor after losing lift; `impact` is its fall speed. */
+  | { type: 'crash'; bug: 0 | 1; x: number; y: number; impact: number }
   | { type: 'ult-start'; bug: 0 | 1; move: MoveId }
   | { type: 'ult-release'; bug: 0 | 1; move: MoveId }
   | { type: 'move'; bug: 0 | 1; move: MoveId };
@@ -103,7 +114,12 @@ export type Sim = {
 export type Fighter = { build: Build; moves: MoveId[] };
 
 /** Desired movement direction in world space; magnitude (0..1) is throttle. */
-export type Input = { x: number; y: number };
+export type Input = {
+  x: number;
+  y: number;
+  /** Wanted altitude as a fraction (0..1) of the bug's flight ceiling. Ignored if it can't fly. */
+  alt?: number;
+};
 
 const STOMP_WARN = 1.2;
 
@@ -186,10 +202,20 @@ function makeBug(index: 0 | 1, fighter: Fighter, pos: Vec, heading: number): Bug
     shield: 0,
     invuln: 0,
     recentDamage: 0,
+    alt: 0,
+    vAlt: 0,
+    stamina: 0,
+    grounded: false,
     ai: newAi(index),
   };
   refresh(bug);
+  bug.stamina = maxStamina(bug);
   return bug;
+}
+
+/** Seconds a bug can stay airborne: more lift for its weight = longer flights. */
+export function maxStamina(bug: Bug) {
+  return bug.stats.maxAlt > 0 ? 2.2 + (bug.stats.maxAlt / 70) * 2.6 : 0;
 }
 
 function arenaHazards(arena: ArenaId): { hazards: Hazard[]; spikedWalls: boolean } {
@@ -262,10 +288,10 @@ function refresh(bug: Bug) {
 
 // ── Damage ──────────────────────────────────────────────────────────
 
-function nearestPart(bug: Bug, at: Vec): { p: SimPart; w: Vec; d: number } | null {
+function nearestPart(bug: Bug, at: Vec, exposedOnly = false): { p: SimPart; w: Vec; d: number } | null {
   let best: { p: SimPart; w: Vec; d: number } | null = null;
   for (const p of bug.parts) {
-    if (!p.alive) continue;
+    if (!p.alive || (exposedOnly && shielded(bug, p))) continue;
     const w = partWorld(bug, p);
     const d = Math.hypot(w.x - at.x, w.y - at.y);
     if (!best || d < best.d) best = { p, w, d };
@@ -273,15 +299,27 @@ function nearestPart(bug: Bug, at: Vec): { p: SimPart; w: Vec; d: number } | nul
   return best;
 }
 
-/** A strike lands on the nearest part, or a random neighbour of it. */
-function strikeTarget(sim: Sim, bug: Bug, at: Vec): SimPart | null {
-  const near = nearestPart(bug, at);
+/** Is this part hidden from weapons? Parts slung underneath are, while the part above them survives. */
+function shielded(bug: Bug, p: SimPart) {
+  return p.z === -1 && bug.parts.some((q) => q.alive && q.z === 0 && q.x === p.x && q.y === p.y);
+}
+
+/**
+ * A strike lands on the nearest exposed part, or a random neighbour of it.
+ * `fromAbove`: attacks from higher up favour parts stacked on top.
+ */
+function strikeTarget(sim: Sim, bug: Bug, at: Vec, fromAbove = false): SimPart | null {
+  const near = nearestPart(bug, at, true);
   if (!near) return null;
-  const options = bug.parts.filter((p) => {
-    if (!p.alive) return false;
+  let options = bug.parts.filter((p) => {
+    if (!p.alive || shielded(bug, p)) return false;
     const w = partWorld(bug, p);
     return Math.hypot(w.x - at.x, w.y - at.y) <= near.d + CELL * 1.1;
   });
+  if (fromAbove) {
+    const tops = options.filter((p) => p.z === 1);
+    if (tops.length && rand(sim) < 0.6) options = tops;
+  }
   return options[Math.floor(rand(sim) * options.length)] ?? near.p;
 }
 
@@ -310,7 +348,7 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
   if (attacker) gainProc(attacker, PROC.hitLanded);
 
   const w = partWorld(bug, p);
-  sim.effects.push({ x: w.x, y: w.y, ttl: 0.25, color: '#FFE08A', size: 6 + Math.min(dmg, 20) * 0.6 });
+  sim.effects.push({ x: w.x, y: w.y, h: bug.alt, ttl: 0.25, color: '#FFE08A', size: 6 + Math.min(dmg, 20) * 0.6 });
   sim.events.push({
     type: 'hit',
     bug: bug.index,
@@ -318,6 +356,7 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
     part: bug.parts.indexOf(p),
     x: w.x,
     y: w.y,
+    h: bug.alt,
     dmg,
     broke: p.hp <= 0,
     shielded: bug.shield > 0,
@@ -331,7 +370,7 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
   sim.hitstop = Math.max(sim.hitstop, 0.05);
   sim.shake = Math.max(sim.shake, 0.24);
   if (attacker) gainProc(attacker, PROC.partBroken);
-  sim.events.push({ type: 'break', bug: bug.index, x: w.x, y: w.y, category: p.part.category, time: sim.time });
+  sim.events.push({ type: 'break', bug: bug.index, x: w.x, y: w.y, h: bug.alt, category: p.part.category, time: sim.time });
   sim.log.push(`${bug.name} lost ${p.part.name}!`);
 
   // Anything no longer connected to the body falls off.
@@ -341,7 +380,7 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
     if (!keep.has(pkey(q))) {
       q.alive = false;
       const qw = partWorld(bug, q);
-      sim.events.push({ type: 'break', bug: bug.index, x: qw.x, y: qw.y, category: q.part.category, time: sim.time });
+      sim.events.push({ type: 'break', bug: bug.index, x: qw.x, y: qw.y, h: bug.alt, category: q.part.category, time: sim.time });
       sim.log.push(`${bug.name}'s ${q.part.name} broke off!`);
     }
   }
@@ -350,7 +389,7 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
 }
 
 function damageNear(sim: Sim, bug: Bug, at: Vec, dmg: number, attacker: Bug | null) {
-  const hit = nearestPart(bug, at);
+  const hit = nearestPart(bug, at, true);
   if (hit) damagePart(sim, bug, hit.p, dmg, attacker);
 }
 
@@ -374,12 +413,12 @@ function judge(sim: Sim, bug: Bug, id: MoveId): boolean {
     case 'mandible-crusher': {
       return bug.parts.some((p) => {
         if (!p.alive || p.part.category !== 'mandibles') return false;
-        const near = nearestPart(foe, partWorld(bug, p));
-        return !!near && near.d < 70 && facing < 0.9;
+        const near = nearestPart(foe, partWorld(bug, p), true);
+        return !!near && near.d < 70 && facing < 0.9 && Math.abs(foe.alt - bug.alt) < 30;
       });
     }
     case 'venom-barrage':
-      return dist < 280 && facing < 0.45;
+      return Math.hypot(dist, foe.alt - bug.alt) < 280 && facing < 0.45;
     case 'carapace-lock':
       return bug.shield <= 0 && (bug.recentDamage > 22 || (hpFraction(bug) < 0.4 && dist < 100));
     case 'skitter-dash': {
@@ -435,7 +474,9 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
       const from = sting ? partWorld(bug, sting) : bug.pos;
       for (let k = -3; k <= 3; k++) {
         const a = bug.heading + k * 0.09;
-        sim.projectiles.push({ x: from.x, y: from.y, vx: Math.cos(a) * 380, vy: Math.sin(a) * 380, damage: 14, owner: bug.index, ttl: 1, big: true });
+        const dz = foe.alt - bug.alt;
+        const tFly = Math.max(0.1, Math.hypot(foe.pos.x - from.x, foe.pos.y - from.y) / 380);
+        sim.projectiles.push({ x: from.x, y: from.y, z: bug.alt, vx: Math.cos(a) * 380, vy: Math.sin(a) * 380, vz: dz / tFly, damage: 14, owner: bug.index, ttl: 1, big: true });
       }
       break;
     }
@@ -475,6 +516,7 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
   if (bug.dead) {
     bug.vel.x *= 0.9;
     bug.vel.y *= 0.9;
+    stepFlight(sim, bug, { x: 0, y: 0 }, dt);
     return;
   }
   const s = bug.stats;
@@ -496,6 +538,8 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
   bug.vel.x += (f.x * speed - bug.vel.x) * k;
   bug.vel.y += (f.y * speed - bug.vel.y) * k;
 
+  stepFlight(sim, bug, input, dt);
+
   // Weapons fire automatically when an enemy part is inside their cone and reach.
   if (!enemy.dead) {
     for (const p of bug.parts) {
@@ -504,10 +548,12 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
       p.cooldown -= dt;
       if (p.cooldown > 0) continue;
       const wp = partWorld(bug, p);
-      const target = nearestPart(enemy, wp);
+      const target = nearestPart(enemy, wp, true);
       if (!target) continue;
       const reach = w.range * s.reach + CELL * 0.5;
-      if (target.d > reach) continue;
+      // Height difference counts: ground jaws can't reach a bug flying overhead.
+      const dz = enemy.alt - bug.alt;
+      if (Math.hypot(target.d, dz) > reach) continue;
       const toward = Math.atan2(target.w.y - wp.y, target.w.x - wp.x);
       if (target.d > CELL && Math.abs(angleDiff(bug.heading, toward)) > w.arc) continue;
       p.cooldown = w.cooldown;
@@ -515,11 +561,14 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
         const dx = target.w.x - wp.x;
         const dy = target.w.y - wp.y;
         const n = Math.hypot(dx, dy) || 1;
+        const flight = Math.max(0.05, Math.hypot(n, dz) / w.projectileSpeed);
         sim.projectiles.push({
           x: wp.x,
           y: wp.y,
+          z: bug.alt,
           vx: (dx / n) * w.projectileSpeed,
           vy: (dy / n) * w.projectileSpeed,
+          vz: dz / flight,
           damage: w.damage,
           owner: i,
           ttl: (reach * 1.3) / w.projectileSpeed,
@@ -531,7 +580,7 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
           const closing = (bug.vel.x - enemy.vel.x) * Math.cos(toward) + (bug.vel.y - enemy.vel.y) * Math.sin(toward);
           dmg += Math.max(0, closing) * w.ramBonus;
         }
-        damagePart(sim, enemy, strikeTarget(sim, enemy, wp) ?? target.p, dmg, bug);
+        damagePart(sim, enemy, strikeTarget(sim, enemy, wp, bug.alt > enemy.alt + 15) ?? target.p, dmg, bug);
       }
     }
     tryMoves(sim, bug);
@@ -565,13 +614,57 @@ function stepBug(sim: Sim, i: 0 | 1, input: Input, dt: number) {
   bug.hazardTimer -= dt;
   for (const h of sim.hazards) {
     const d = Math.hypot(bug.pos.x - h.x, bug.pos.y - h.y);
-    if (h.kind === 'acid' && d < h.r && bug.hazardTimer <= 0) {
+    if (h.kind === 'acid' && d < h.r && bug.alt < 6 && bug.hazardTimer <= 0) {
       bug.hazardTimer = 0.5;
-      const alive = bug.parts.filter((p) => p.alive);
+      // Acid eats the underside first: anything slung under the bug.
+      const belly = bug.parts.filter((p) => p.alive && p.z === -1);
+      const alive = belly.length ? belly : bug.parts.filter((p) => p.alive);
       const victim = alive[Math.floor(rand(sim) * alive.length)];
       if (victim) damagePart(sim, bug, victim, 5, null);
     }
   }
+}
+
+/**
+ * Altitude. Bugs with enough wing lift climb toward the altitude the AI asks
+ * for; a bug that loses its wings (or is disabled) falls, and hitting the floor
+ * hard damages its underside and legs.
+ */
+function stepFlight(sim: Sim, bug: Bug, input: Input, dt: number) {
+  const ceiling = bug.dead ? 0 : bug.stats.maxAlt;
+  // Wing stamina: drains in the air, refills on the ground. Run dry and you must land.
+  const max = maxStamina(bug);
+  if (bug.alt > 4) bug.stamina = Math.max(0, bug.stamina - dt);
+  else bug.stamina = Math.min(max, bug.stamina + dt * 0.9);
+  if (bug.stamina <= 0 && bug.alt > 4 && !bug.grounded) {
+    bug.grounded = true;
+    sim.log.push(`${bug.name}'s wings are spent!`);
+  }
+  if (bug.grounded && bug.stamina >= max * 0.6) bug.grounded = false;
+  if (bug.alt > ceiling + 1) {
+    // Falling.
+    bug.vAlt -= 420 * dt;
+  } else {
+    const want = bug.grounded ? 0 : Math.max(0, Math.min(1, input.alt ?? 0)) * ceiling;
+    const climb = Math.max(-120, Math.min(90, (want - bug.alt) * 5));
+    bug.vAlt += (climb - bug.vAlt) * Math.min(1, dt * 8);
+  }
+  bug.alt += bug.vAlt * dt;
+  if (bug.alt <= 0) {
+    const impact = -bug.vAlt;
+    bug.alt = 0;
+    bug.vAlt = 0;
+    if (impact > 120) {
+      sim.events.push({ type: 'crash', bug: bug.index, x: bug.pos.x, y: bug.pos.y, impact });
+      sim.shake = Math.max(sim.shake, 0.3);
+      const low = bug.parts
+        .filter((p) => p.alive)
+        .sort((a, b) => a.z - b.z || Number(b.part.category === 'legs') - Number(a.part.category === 'legs'))
+        .slice(0, 3);
+      for (const p of low) damagePart(sim, bug, p, (impact - 100) * 0.12, null);
+    }
+  }
+  bug.alt = Math.min(bug.alt, Math.max(ceiling, bug.alt)); // never pushed up past the ceiling by itself
 }
 
 function stepStompers(sim: Sim, dt: number) {
@@ -581,7 +674,7 @@ function stepStompers(sim: Sim, dt: number) {
     h.t = (h.t + dt) % h.period;
     if (h.t >= before) continue;
     // Slam! Damage the three nearest parts of any bug under it.
-    sim.effects.push({ x: h.x, y: h.y, ttl: 0.4, color: '#FF8A3D', size: h.r * 2 });
+    sim.effects.push({ x: h.x, y: h.y, h: 0, ttl: 0.4, color: '#FF8A3D', size: h.r * 2 });
     sim.shake = Math.max(sim.shake, 0.25);
     for (const bug of sim.bugs) {
       if (bug.dead) continue;
@@ -602,6 +695,7 @@ function stepStompers(sim: Sim, dt: number) {
 
 function collideBugs(sim: Sim) {
   const [a, b] = sim.bugs;
+  if (Math.abs(a.alt - b.alt) > 26) return; // one is flying over the other
   const dx = b.pos.x - a.pos.x;
   const dy = b.pos.y - a.pos.y;
   const d = Math.hypot(dx, dy) || 0.01;
@@ -671,12 +765,13 @@ export function step(sim: Sim, dt: number, inputs: [Input, Input]) {
   for (const pr of sim.projectiles) {
     pr.x += pr.vx * dt;
     pr.y += pr.vy * dt;
+    pr.z = Math.max(0, pr.z + pr.vz * dt);
     pr.ttl -= dt;
     const attacker = sim.bugs[pr.owner];
     const target = sim.bugs[other(pr.owner)];
-    const hit = nearestPart(target, pr);
-    if (hit && hit.d < CELL * 0.6) {
-      damagePart(sim, target, strikeTarget(sim, target, pr) ?? hit.p, pr.damage, attacker);
+    const hit = nearestPart(target, pr, true);
+    if (hit && hit.d < CELL * 0.6 && Math.abs(pr.z - target.alt) < 20) {
+      damagePart(sim, target, strikeTarget(sim, target, pr, pr.z > target.alt + 8) ?? hit.p, pr.damage, attacker);
       pr.ttl = 0;
     }
   }
@@ -740,9 +835,9 @@ const TARGET_VALUE: Record<Category, number> = {
   armor: 0.5,
 };
 
-function inHazard(sim: Sim, at: Vec, pad: number) {
+function inHazard(sim: Sim, at: Vec, pad: number, airborne = false) {
   return sim.hazards.some(
-    (h) => Math.hypot(at.x - h.x, at.y - h.y) < h.r + pad && (h.kind === 'acid' || h.t > h.period - 2),
+    (h) => Math.hypot(at.x - h.x, at.y - h.y) < h.r + pad && (h.kind === 'acid' ? !airborne : h.t > h.period - 2),
   );
 }
 
@@ -822,10 +917,16 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
   if (!target) return { x: 0, y: 0 };
   const targetW = partWorld(foe, target);
 
+  // Altitude: flyers cruise high (over hazards and enemy jaws) and drop to the
+  // enemy's height to strike. 1 = as high as the wings allow.
+  const flyer = bug.stats.maxAlt > 12 && !bug.grounded;
+  const matchFoe = flyer ? Math.min(1, foe.alt / bug.stats.maxAlt) : 0;
+  let alt = flyer ? 1 : 0;
+
   // Unarmed: survive. Circle away and dodge.
   if (melee.length === 0 && !ranged) {
     const away = rotate({ x: -toFoeN.x, y: -toFoeN.y }, 0.9 * ai.side);
-    return steer(sim, bug, away, 1);
+    return steer(sim, bug, away, 1, alt);
   }
 
   let dir: Vec = toFoeN;
@@ -847,6 +948,7 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
       dir = unit({ x: targetW.x - bug.pos.x, y: targetW.y - bug.pos.y });
       throttle = 0.25;
     }
+    alt = flyer ? 0.85 + Math.sin(sim.time * 1.3 + me) * 0.15 : 0;
     if (ai.t > 4) {
       ai.side = ai.side === 1 ? -1 : 1; // change orbit direction now and then
       ai.t = 0;
@@ -859,6 +961,7 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
       if (dist > contact + 120 || ai.t > 1.6) setMode('charge');
     } else {
       dir = unit({ x: targetW.x - bug.pos.x, y: targetW.y - bug.pos.y });
+      alt = matchFoe; // dive-bomb
       if (dist < contact * 0.85 || ai.t > 2) setMode('strike');
     }
   } else {
@@ -888,8 +991,11 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
       }
       if (goalDist < 30 || dist < contact * 0.95) setMode('strike');
       if (ai.t > 5) setMode('strike'); // stop dancing eventually
+      // Start the dive a little before arriving.
+      if (flyer && dist < contact + 60) alt = Math.max(matchFoe, 0.35);
     } else if (ai.mode === 'strike') {
       // Dive at the target part, leading it by how long it takes us to get there (cuts off kiters).
+      alt = matchFoe;
       const eta = Math.min(1.2, dist / Math.max(60, bug.stats.topSpeed));
       const lead = { x: targetW.x + foe.vel.x * eta - bug.pos.x, y: targetW.y + foe.vel.y * eta - bug.pos.y };
       dir = unit(lead);
@@ -916,18 +1022,19 @@ export function aiInput(sim: Sim, me: 0 | 1, aggression: number, dt: number = ST
     }
   }
 
-  return steer(sim, bug, dir, throttle);
+  return steer(sim, bug, dir, throttle, alt);
 }
 
-/** Final steering: dodge hazards and walls. */
-function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number): Input {
+/** Final steering: dodge hazards (acid only matters near the floor) and walls. */
+function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number, alt = 0): Input {
   let d = dir;
+  const airborne = bug.alt > 10 && alt * bug.stats.maxAlt > 10;
   const probe = { x: bug.pos.x + d.x * 70, y: bug.pos.y + d.y * 70 };
-  if (inHazard(sim, probe, bug.radius * 0.5)) {
+  if (inHazard(sim, probe, bug.radius * 0.5, airborne)) {
     const left = rotate(d, Math.PI / 2.2);
     const right = rotate(d, -Math.PI / 2.2);
     const pl = { x: bug.pos.x + left.x * 70, y: bug.pos.y + left.y * 70 };
-    d = inHazard(sim, pl, bug.radius * 0.5) ? right : left;
+    d = inHazard(sim, pl, bug.radius * 0.5, airborne) ? right : left;
   }
   const m = ARENA_SIZE / 2;
   const edge = Math.max(Math.abs(bug.pos.x - m), Math.abs(bug.pos.y - m));
@@ -936,12 +1043,12 @@ function steer(sim: Sim, bug: Bug, dir: Vec, throttle: number): Input {
     const k = Math.min(1, (edge - (m - 60)) / 40) * 0.6;
     d = unit({ x: d.x * (1 - k) + c.x * k, y: d.y * (1 - k) + c.y * k });
   }
-  return { x: d.x * throttle, y: d.y * throttle };
+  return { x: d.x * throttle, y: d.y * throttle, alt };
 }
 
 // ── HUD summary (cheap, for React) ──────────────────────────────────
 
-export type HudBug = { name: string; hp: number; proc: number; shield: boolean; moves: { id: MoveId; cd: number; ready: boolean }[] };
+export type HudBug = { name: string; hp: number; proc: number; shield: boolean; flying: boolean; wings: number; moves: { id: MoveId; cd: number; ready: boolean }[] };
 export type Hud = { bugs: [HudBug, HudBug]; time: number; log: string[]; over: boolean; winner: 0 | 1 | null; ult: Ult | null; flash: number };
 
 export function hud(sim: Sim): Hud {
@@ -950,6 +1057,8 @@ export function hud(sim: Sim): Hud {
     hp: hpFraction(bug),
     proc: bug.proc,
     shield: bug.shield > 0,
+    flying: bug.alt > 8,
+    wings: maxStamina(bug) > 0 ? bug.stamina / maxStamina(bug) : -1,
     moves: bug.moves.map((id) => ({ id, cd: bug.moveCd[id] ?? 0, ready: moveReady(sim, bug, id) })),
   });
   return {

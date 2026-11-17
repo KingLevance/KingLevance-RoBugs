@@ -16,8 +16,8 @@ import {
 import { PartCell } from '@/components/part-cell';
 import { Button, Meter, Panel } from '@/components/ui';
 import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
-import { canStack, computeStats, connectedKeys, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
-import { autoBuild, autoPlace, movePart, partAt, rankSlots, removeAt, sameSlot, type Slot } from '@/game/editor';
+import { computeStats, connectedKeys, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
+import { autoBuild, autoPlace, dropLayer, flipLayer, movePart, partAt, rankSlots, removeAt, sameSlot, type Slot } from '@/game/editor';
 import { GROUPS, GUIDE } from '@/game/guide';
 import { getMove, MOVE_SLOTS } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type Category, type PartDef } from '@/game/parts';
@@ -163,15 +163,20 @@ export default function Garage() {
     );
   }, [selected, selPart, placements]);
 
-  // While dragging, tell the renderer whether a drop on a cell would stack on top.
+  // While dragging, tell the renderer which layer a drop on a cell would land in.
   useEffect(() => {
     renderer.current?.setStackTest((cell) => {
       const t = touch.current;
-      if (!t?.cell) return false;
+      if (!t?.cell) return 0;
       const moving = partAt(placements, t.cell.x, t.cell.y, t.cell.z);
       const base = partAt(placements, cell.x, cell.y, 0);
-      if (!moving || !base || base === moving) return false;
-      return canStack(getPart(moving.partId).category, getPart(base.partId).category);
+      if (!moving || !base || base === moving) return 0;
+      return dropLayer(
+        placements.filter((p) => p !== moving),
+        moving.partId,
+        cell.x,
+        cell.y,
+      ) ?? 0;
     });
   }, [placements]);
 
@@ -276,7 +281,7 @@ export default function Garage() {
       }
       game.setPlacements(res.placements);
       setSelected(res.at);
-      if (res.at.z && !from.z && moving) setToast(`${getPart(moving.partId).name} stacked on top`);
+      if (res.at.z && moving) setToast(`${getPart(moving.partId).name} ${res.at.z === 1 ? 'stacked on top' : 'slung underneath'}`);
     } else {
       game.setPlacements(removeAt(placements, from));
       setSelected(null);
@@ -298,7 +303,24 @@ export default function Garage() {
     }
     game.setPlacements([...placements, spot]);
     setSelected({ x: spot.x, y: spot.y, z: spot.z ?? 0 });
-    setToast(spot.z ? `${part.name} stacked on top. Drag it to move it.` : `${part.name} attached. Drag it to move it.`);
+    setToast(
+      spot.z === 1
+        ? `${part.name} stacked on top. Drag it to move it.`
+        : spot.z === -1
+          ? `${part.name} slung underneath, safe from weapons. Drag it to move it.`
+          : `${part.name} attached. Drag it to move it.`,
+    );
+  }
+
+  function flipSelected() {
+    if (!selected) return;
+    const res = flipLayer(placements, selected);
+    if (!res) {
+      setToast('The other side is taken');
+      return;
+    }
+    game.setPlacements(res.placements);
+    setSelected(res.at);
   }
 
   function removeSelected() {
@@ -353,6 +375,16 @@ export default function Garage() {
         {selPart && (
           <Panel>
             <PartDetails part={getPart(selPart.partId)} onRemove={removeSelected} />
+            {selected && selected.z !== 0 && getPart(selPart.partId).category === 'core' && (
+              <View style={{ marginTop: Spacing.sm, gap: 4 }}>
+                <Text style={styles.dim}>
+                  {selected.z === -1
+                    ? 'Slung underneath: weapons can’t reach it while the part above survives, but acid and crash landings hit it first.'
+                    : 'On top: easy to see, and easy to hit (especially from above).'}
+                </Text>
+                <Button label={selected.z === -1 ? 'Move on top' : 'Move underneath'} variant="secondary" onPress={flipSelected} />
+              </View>
+            )}
           </Panel>
         )}
 
