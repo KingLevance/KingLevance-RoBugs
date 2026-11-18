@@ -10,7 +10,20 @@ import { Button, Label, Pill } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { validateBuild } from '@/game/build';
 import { getMove } from '@/game/moves';
-import { alliesFor, allySlots, ARENA_NAMES, fightSize, getOpponent, isUnlocked, OPPONENTS, type Opponent } from '@/game/opponents';
+import {
+  alliesFor,
+  allySlots,
+  ARENA_NAMES,
+  fightSize,
+  getOpponent,
+  isUnlocked,
+  OPPONENTS,
+  pathOpen,
+  starGate,
+  ZONES as GAME_ZONES,
+  type Opponent,
+  type ZoneId,
+} from '@/game/opponents';
 import { MAX_STARS, starGoals } from '@/game/stars';
 import { useGame } from '@/state/game-store';
 
@@ -19,10 +32,10 @@ const OPTIONAL = '#C77DFF';
 /** Map height as a multiple of its width (the map scrolls). */
 const MAP_ASPECT = 3.3;
 /** Campaign zones, as bands of the map (y from, y to). */
-const ZONES: { name: string; from: number; to: number; tint: string }[] = [
-  { name: 'THE DEEP HIVE', from: 0.09, to: 0.545, tint: '#F2C14E' },
-  { name: 'THE UNDERGROWTH', from: 0.545, to: 0.785, tint: '#7CE654' },
-  { name: 'THE SCRAPYARD', from: 0.785, to: 1, tint: '#FF8A3D' },
+const ZONES: { id: ZoneId; name: string; from: number; to: number; tint: string }[] = [
+  { id: 'hive', name: 'THE DEEP HIVE', from: 0.09, to: 0.545, tint: '#F2C14E' },
+  { id: 'undergrowth', name: 'THE UNDERGROWTH', from: 0.545, to: 0.785, tint: '#7CE654' },
+  { id: 'scrapyard', name: 'THE SCRAPYARD', from: 0.785, to: 1, tint: '#FF8A3D' },
 ];
 
 function Link({ a, b, w, h, lit }: { a: Opponent; b: Opponent; w: number; h: number; lit: boolean }) {
@@ -60,7 +73,9 @@ export default function Campaign() {
   const mapH = mapW * MAP_ASPECT;
   const sel = getOpponent(game.selected);
   const errors = validateBuild(game.build.placements);
-  const selUnlocked = isUnlocked(sel, game.cleared);
+  const selUnlocked = isUnlocked(sel, game.cleared, game.stars);
+  const selGate = starGate(sel, game.stars);
+  const gateBlocks = !selUnlocked && pathOpen(sel, game.cleared) && selGate && !selGate.met;
   const firstClear = !game.cleared.includes(sel.id);
   const size = fightSize(sel);
   const totalStars = OPPONENTS.reduce((a, o) => a + (game.stars[o.id] ?? 0), 0);
@@ -91,18 +106,31 @@ export default function Campaign() {
       </View>
       <ScrollView ref={scroll} contentContainerStyle={styles.content} contentOffset={{ x: 0, y: startY }}>
         <View style={[styles.map, { width: mapW, height: mapH }]}>
-          {ZONES.map((z) => (
-            <View key={z.name} style={[styles.zone, { top: z.from * mapH, height: (z.to - z.from) * mapH, borderTopColor: z.tint }]}>
-              <Text style={[styles.zoneName, { color: z.tint }]}>{z.name}</Text>
-            </View>
-          ))}
+          {ZONES.map((z) => {
+            const gz = GAME_ZONES.findIndex((g) => g.id === z.id);
+            const prev = GAME_ZONES[gz - 1];
+            const have = prev ? prev.stops.reduce((a, id) => a + (game.stars[id] ?? 0), 0) : 0;
+            const need = GAME_ZONES[gz].starsToEnter;
+            return (
+              <View key={z.name} style={[styles.zone, { top: z.from * mapH, height: (z.to - z.from) * mapH, borderTopColor: z.tint }]}>
+                <Text style={[styles.zoneName, { color: z.tint }]}>{z.name}</Text>
+                {prev && (
+                  <Text style={[styles.zoneGate, { color: have >= need ? Colors.good : '#FFD23F' }]}>
+                    {have >= need ? `✓ ★${need} TO ENTER` : `★${have}/${need} TO ENTER`}
+                  </Text>
+                )}
+              </View>
+            );
+          })}
           {OPPONENTS.flatMap((o) =>
             o.unlockedBy.map((from) => (
               <Link key={`${from}-${o.id}`} a={getOpponent(from)} b={o} w={mapW} h={mapH} lit={game.cleared.includes(from)} />
             )),
           )}
           {OPPONENTS.map((o) => {
-            const unlocked = isUnlocked(o, game.cleared);
+            const unlocked = isUnlocked(o, game.cleared, game.stars);
+            const gate = starGate(o, game.stars);
+            const starLocked = !unlocked && pathOpen(o, game.cleared) && gate && !gate.met;
             const cleared = game.cleared.includes(o.id);
             const selected = o.id === sel.id;
             const node = o.optional ? 68 : o.boss ? 82 : 66;
@@ -132,7 +160,12 @@ export default function Campaign() {
                     style={{ width: node * 1.15, height: node * 1.15, opacity: unlocked ? 1 : 0.9, tintColor: unlocked ? undefined : '#0B0D11' }}
                   />
                 </View>
-                {!unlocked && <Text style={styles.lock}>🔒</Text>}
+                {!unlocked && !starLocked && <Text style={styles.lock}>🔒</Text>}
+                {starLocked && (
+                  <Text style={styles.gateText}>
+                    🔒{'\n'}★{gate.have}/{gate.need}
+                  </Text>
+                )}
                 {cleared && (
                   <View style={styles.badge}>
                     <Text style={styles.badgeText}>✓</Text>
@@ -175,7 +208,11 @@ export default function Campaign() {
           </View>
         </View>
         <Text style={styles.dim} numberOfLines={3}>
-          {selUnlocked ? sel.blurb : `Beat ${sel.unlockedBy.map((id) => getOpponent(id).name).join(' or ')} to unlock.`}
+          {selUnlocked
+            ? sel.blurb
+            : gateBlocks
+              ? `Earn ★${selGate.need} in ${selGate.prev.name} to enter ${selGate.zone.name} (you have ★${selGate.have}). Replay fights there for more stars.`
+              : `Beat ${sel.unlockedBy.map((id) => getOpponent(id).name).join(' or ')} to unlock.`}
         </Text>
         {selUnlocked && slots > 0 && (
           <View style={{ gap: 6 }}>
@@ -245,7 +282,7 @@ export default function Campaign() {
           </>
         )}
         <Button
-          label={errors.length ? 'Fix your build first' : selUnlocked ? `Fight ${sel.name}!` : 'Locked'}
+          label={errors.length ? 'Fix your build first' : selUnlocked ? `Fight ${sel.name}!` : gateBlocks ? `Need ★${selGate.need} · have ${selGate.have}` : 'Locked'}
           size="lg"
           variant={sel.boss ? 'danger' : 'primary'}
           disabled={errors.length > 0 || !selUnlocked}
@@ -292,6 +329,8 @@ const styles = StyleSheet.create({
   nodeSelected: { shadowColor: Colors.accent, shadowOpacity: 0.7, shadowRadius: 14, shadowOffset: { width: 0, height: 0 } },
   nodeInner: { ...StyleSheet.absoluteFill, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   lock: { fontSize: 20 },
+  gateText: { fontFamily: Fonts.display, fontSize: 13, lineHeight: 17, color: '#FFD23F', textAlign: 'center' },
+  zoneGate: { fontSize: 10, fontWeight: '900', letterSpacing: 1, marginLeft: 10, marginTop: -6 },
   badge: {
     position: 'absolute',
     right: -4,

@@ -7,7 +7,7 @@
 import { computeStats, resolve, validateBuild, type Build } from '../src/game/build';
 import { autoBuild } from '../src/game/editor';
 import { getMove, meetsRequirement, MOVE_SLOTS, type MoveId } from '../src/game/moves';
-import { fightSize, lineup, OPPONENTS, STARTER_BUILD, STARTER_INVENTORY, STARTER_MOVES, type Opponent } from '../src/game/opponents';
+import { fightSize, lineup, OPPONENTS, ZONES, zoneStars, STARTER_BUILD, STARTER_INVENTORY, STARTER_MOVES, type Opponent } from '../src/game/opponents';
 import { getPart } from '../src/game/parts';
 import { rollMatchRewards } from '../src/game/rewards';
 import { rateWin } from '../src/game/stars';
@@ -87,6 +87,13 @@ const N = 30;
 const inventory: Record<string, number> = { ...STARTER_INVENTORY };
 const owned: MoveId[] = [...STARTER_MOVES];
 let selfWalls = 0;
+const best: Record<string, number> = {};
+/** Average stars per win (a typical single clear). */
+const typical: Record<string, number> = {};
+for (const o of OPPONENTS) {
+  const n = ZONES.filter((z) => z.stops.includes(o.id)).length;
+  if (n !== 1) throw new Error(`${o.id} is in ${n} campaign zones (expected 1)`);
+}
 console.log('\nCampaign run (auto-built player bug, gaining each stop\'s rewards):');
 for (const opp of OPPONENTS) {
   const build: Build = { name: 'Player', placements: autoBuild(inventory) };
@@ -103,7 +110,9 @@ for (const opp of OPPONENTS) {
     const r = run(opp, player, k * 7919 + 1);
     if (r.winner === 0) {
       w++;
-      stars[rateWin(opp, r.hpLeft, r.time).stars - 1]++;
+      const st = rateWin(opp, r.hpLeft, r.time).stars;
+      stars[st - 1]++;
+      best[opp.id] = Math.max(best[opp.id] ?? 0, st);
     }
     else if (r.winner === 1) l++;
     t += r.time;
@@ -112,6 +121,7 @@ for (const opp of OPPONENTS) {
     hits += r.hits;
     selfWalls += r.solo;
   }
+  typical[opp.id] = w ? (stars[0] + 2 * stars[1] + 3 * stars[2]) / w : 0;
   const s = computeStats(resolve(build.placements));
   console.log(
     `${(opp.optional ? '(opt) ' : '') + opp.name}`.padEnd(22),
@@ -132,5 +142,9 @@ for (const opp of OPPONENTS) {
       else if (!owned.includes(r.id as MoveId)) owned.push(r.id as MoveId);
     }
   }
+}
+for (let i = 1; i < ZONES.length; i++) {
+  const have = zoneStars(ZONES[i - 1], best);
+  console.log(`gate ${ZONES[i].name}: needs ★${ZONES[i].starsToEnter} from ${ZONES[i - 1].name}, auto-player best ★${have}, typical one clear each ★${zoneStars(ZONES[i - 1], typical).toFixed(1)} (of ${ZONES[i - 1].stops.length * 3})`);
 }
 console.log(`self-inflicted wall hits per match: ${(selfWalls / (N * OPPONENTS.length)).toFixed(2)}`);

@@ -453,8 +453,50 @@ export function fightSize(o: Opponent) {
   return `${n}v${n}`;
 }
 
-export function isUnlocked(o: Opponent, cleared: string[]) {
+/**
+ * Campaign zones, in play order. Entering a zone (its first stop) needs
+ * `starsToEnter` stars earned in the zone before it, so a player has to
+ * do well, not just scrape through, before moving on.
+ */
+export type ZoneId = 'scrapyard' | 'undergrowth' | 'hive';
+export type Zone = { id: ZoneId; name: string; stops: string[]; starsToEnter: number };
+export const ZONES: Zone[] = [
+  { id: 'scrapyard', name: 'The Scrapyard', stops: ['rustmite', 'needlewisp', 'snapclaw', 'scrapjaw', 'ironback'], starsToEnter: 0 },
+  { id: 'undergrowth', name: 'The Undergrowth', stops: ['silkjaw', 'lattice', 'gravelgrub', 'arcfly', 'bloodgnat', 'vexa'], starsToEnter: 9 },
+  { id: 'hive', name: 'The Deep Hive', stops: ['twins', 'glimmer', 'nullshade', 'lenswing', 'tunnelkings', 'hiveguard', 'kalyx'], starsToEnter: 12 },
+];
+
+export function zoneIndex(o: Opponent) {
+  return Math.max(0, ZONES.findIndex((z) => z.stops.includes(o.id)));
+}
+
+/** Stars earned across a zone's stops. */
+export function zoneStars(zone: Zone, stars: Record<string, number>) {
+  return zone.stops.reduce((a, id) => a + (stars[id] ?? 0), 0);
+}
+
+/**
+ * The star gate in front of a stop, if it's a zone's entry (reached from the
+ * zone before): how many stars the previous zone needs and how many you have.
+ */
+export function starGate(o: Opponent, stars: Record<string, number>) {
+  const i = zoneIndex(o);
+  if (i === 0) return null;
+  const zone = ZONES[i];
+  if (!o.unlockedBy.some((id) => !zone.stops.includes(id))) return null;
+  const prev = ZONES[i - 1];
+  return { zone, prev, need: zone.starsToEnter, have: zoneStars(prev, stars), met: zoneStars(prev, stars) >= zone.starsToEnter };
+}
+
+/** The path to a stop is open: it's a starting stop or a neighbour is cleared. */
+export function pathOpen(o: Opponent, cleared: string[]) {
   return o.unlockedBy.length === 0 || o.unlockedBy.some((id) => cleared.includes(id));
+}
+
+/** Playable: the path is open and any zone star gate is met. Stops you've already beaten always stay open. */
+export function isUnlocked(o: Opponent, cleared: string[], stars: Record<string, number>) {
+  if (cleared.includes(o.id)) return true;
+  return pathOpen(o, cleared) && (starGate(o, stars)?.met ?? true);
 }
 
 /** Moves every new player owns, and what's equipped at the start. */

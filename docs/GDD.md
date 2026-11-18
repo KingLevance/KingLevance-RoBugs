@@ -171,7 +171,7 @@ Measured with `scripts/simulate.ts` and an ad-hoc behaviour probe: about 5–7 c
 
 ## 8. Campaign and loot
 
-The campaign (`src/game/opponents.ts`) is a scrolling map of 18 stops in three zones. A stop unlocks when any of its `unlockedBy` stops is cleared.
+The campaign (`src/game/opponents.ts`) is a scrolling map of 18 stops in three zones. A stop unlocks when any of its `unlockedBy` stops is cleared (and, for a zone's first stop, the star gate is met; see Stars below).
 
 | Zone | Stops |
 |---|---|
@@ -201,6 +201,8 @@ The best rating per stop is saved (`SaveData.stars`) and shown under each node o
 - At 1 star the table is unchanged. Each star past the first makes rare and epic drops more likely and common drops less likely.
 - A 3-star win adds one extra roll.
 - The **first** 3-star win on a stop adds a one-off bonus roll that is always rare or better.
+
+**Zone star gates** (`ZONES` in `opponents.ts`): the first stop of each zone also needs enough stars earned in the zone before it: **9 of 15** from the Scrapyard to enter the Undergrowth, and **12 of 18** from the Undergrowth to enter the Deep Hive. Optional bosses count toward these totals. The map shows each zone's progress (★ have/need) on its header and on the gated node, and the fight sheet explains what's missing. A stop you've already beaten never locks again, so older saves keep their progress. For the auto-player, one clear of each main-path stop lands at about the gate (Scrapyard ≈ 9.6, Undergrowth ≈ 10.7), so a sloppy run means replaying for stars or beating the optional boss. *(Assumption: gate sizes are first-pass numbers.)*
 
 The first-clear reward stays fixed whatever the rating. Old saves count each cleared stop as 1 star. `npm test` reports the star spread per stop: the auto-player currently earns 3 stars on roughly half its wins. *(Assumption: challenge thresholds and loot scaling are first-pass numbers.)*
 
