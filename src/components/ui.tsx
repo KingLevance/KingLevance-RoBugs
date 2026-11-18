@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 
+import { sfx } from '@/audio/audio';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
 
 type Variant = 'primary' | 'secondary' | 'danger' | 'go';
@@ -33,7 +34,14 @@ export function Button({
   const f = FACE[variant];
   const lip = size === 'lg' ? 5 : 4;
   return (
-    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[{ opacity: disabled ? 0.45 : 1 }, style]}>
+    <Pressable
+      accessibilityRole="button"
+      disabled={disabled}
+      onPress={() => {
+        sfx('tap');
+        onPress();
+      }}
+      style={[{ opacity: disabled ? 0.45 : 1 }, style]}>
       {({ pressed }) => (
         <View style={[styles.lip, { backgroundColor: f.lip, paddingBottom: pressed ? 1 : lip, marginTop: pressed ? lip - 1 : 0 }]}>
           <View

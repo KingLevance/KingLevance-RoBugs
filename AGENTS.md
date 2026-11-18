@@ -32,6 +32,7 @@ npx tsc --noEmit            # typecheck
 npx tsx scripts/simulate.ts # headless balance check: validates builds, runs AI-vs-AI matches
 node scripts/render-part-icons.mjs  # re-render part icons (assets/parts) after changing models or the catalog
 node scripts/render-bug-portraits.mjs  # re-render opponent portraits (assets/bugs) after changing models or opponent builds
+node scripts/make-audio.mjs # re-synthesize all sound effects and music (assets/audio; needs ffmpeg)
 npx expo-doctor             # diagnose dependency/config issues
 ```
 
@@ -68,6 +69,8 @@ src/render/         three.js only — reads sim state, never writes it
   bug-model.ts      Whole bug as one display model (hub showcase, portrait renderer)
   showcase.ts       ShowcaseRenderer: the hub's turning bug on a pedestal
   gl.ts             three.js renderer on an expo-gl context
+src/audio/          expo-audio: sfx() voice pools, useMusic() per screen, fight event → sound, settings prefs
+  sounds.ts         Sound registry (files, durations, mix levels) + move → sound map
 src/state/          Save data (React context) + platform storage
 src/components/     Shared UI kit (ui.tsx: Button/Panel/Label/Pill/Meter), BugShowcase, UltBanner, reward chips…; part-icons.ts and bug-portraits.ts are GENERATED
 src/updates.ts      OTA update checks (expo-updates); no-op on web/dev

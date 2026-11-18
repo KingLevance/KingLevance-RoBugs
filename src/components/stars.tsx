@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 
+import { sfx } from '@/audio/audio';
 import { MAX_STARS } from '@/game/stars';
 
 const GOLD = '#FFD23F';
@@ -12,7 +13,7 @@ export function Stars({ n, size = 14, animate = false }: { n: number; size?: num
     <View style={styles.row}>
       {Array.from({ length: MAX_STARS }).map((_, i) =>
         animate && i < n ? (
-          <PopStar key={i} size={size} delay={350 + i * 380} />
+          <PopStar key={i} index={i} size={size} delay={350 + i * 380} />
         ) : (
           <Text key={i} style={[styles.star, { fontSize: size, color: i < n ? GOLD : EMPTY }]}>
             ★
@@ -23,11 +24,14 @@ export function Stars({ n, size = 14, animate = false }: { n: number; size?: num
   );
 }
 
-function PopStar({ size, delay }: { size: number; delay: number }) {
+function PopStar({ index, size, delay }: { index: number; size: number; delay: number }) {
   const [t] = useState(() => new Animated.Value(0));
   useEffect(() => {
     Animated.timing(t, { toValue: 1, duration: 420, delay, easing: Easing.out(Easing.back(2.5)), useNativeDriver: true }).start();
-  }, [t, delay]);
+    // Each star dings a little higher.
+    const ding = setTimeout(() => sfx('star', { gap: 0, rate: 1 + index * 0.12 }), delay + 140);
+    return () => clearTimeout(ding);
+  }, [t, delay, index]);
   return (
     <View>
       <Text style={[styles.star, { fontSize: size, color: EMPTY }]}>★</Text>

@@ -13,6 +13,7 @@ import {
   type HostInstance,
 } from 'react-native';
 
+import { sfx, useMusic } from '@/audio/audio';
 import { PartCell } from '@/components/part-cell';
 import { Button, Meter, Panel } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
@@ -122,6 +123,7 @@ type Touch = {
 
 export default function Garage() {
   const game = useGame();
+  useMusic('garage');
   const { width, height } = useWindowDimensions();
   const [selected, setSelected] = useState<Slot | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -134,6 +136,11 @@ export default function Garage() {
   const touch = useRef<Touch | null>(null);
 
   const placements = game.build.placements;
+  /** Apply an edit to the build with a click: snap on, pop off, or turn. */
+  const edit = (next: Placement[]) => {
+    sfx(next.length < placements.length ? 'unsnap' : 'snap', { rate: next.length === placements.length ? 1.25 : 1 });
+    game.setPlacements(next);
+  };
   const used = usage(placements);
   const stats = computeStats(resolve(placements));
   const errors = validateBuild(placements);
@@ -291,11 +298,11 @@ export default function Garage() {
         setToast("Can't drop that there");
         return;
       }
-      game.setPlacements(res.placements);
+      edit(res.placements);
       setSelected(res.at);
       if (res.at.z && moving) setToast(`${getPart(moving.partId).name} ${res.at.z === 1 ? 'stacked on top' : 'slung underneath'}`);
     } else {
-      game.setPlacements(removeAt(placements, from));
+      edit(removeAt(placements, from));
       setSelected(null);
       if (moving) setToast(`${getPart(moving.partId).name} back in the bin`);
     }
@@ -313,7 +320,7 @@ export default function Garage() {
       setToast('No free slot touching the bug');
       return;
     }
-    game.setPlacements([...placements, spot]);
+    edit([...placements, spot]);
     setSelected({ x: spot.x, y: spot.y, z: spot.z ?? 0 });
     setToast(
       spot.z === 1
@@ -331,7 +338,7 @@ export default function Garage() {
       setToast('The other side is taken');
       return;
     }
-    game.setPlacements(res.placements);
+    edit(res.placements);
     setSelected(res.at);
   }
 
@@ -339,12 +346,12 @@ export default function Garage() {
     if (!selected) return;
     const next = rotatePart(placements, selected);
     if (!next) return;
-    game.setPlacements(next); // (the selected chip shows the new facing)
+    edit(next); // (the selected chip shows the new facing)
   }
 
   function removeSelected() {
     if (!selected || !selPart) return;
-    game.setPlacements(removeAt(placements, selected));
+    edit(removeAt(placements, selected));
     setToast(`${getPart(selPart.partId).name} back in the bin`);
     setSelected(null);
   }
@@ -617,12 +624,12 @@ export default function Garage() {
         </View>
 
         <View style={styles.actions}>
-          <Button label="Clear" variant="secondary" onPress={() => game.setPlacements([])} style={{ flex: 0.8, paddingHorizontal: 4 }} />
+          <Button label="Clear" variant="secondary" onPress={() => edit([])} style={{ flex: 0.8, paddingHorizontal: 4 }} />
           <Button
             label="Auto-build"
             variant="secondary"
             onPress={() => {
-              game.setPlacements(autoBuild(game.inventory));
+              edit(autoBuild(game.inventory));
               setSelected(null);
               setToast('Built from your best parts. Drag things around to tweak it.');
             }}

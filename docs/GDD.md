@@ -210,6 +210,15 @@ A `Reward` is `{ kind: 'part' | 'move', id }`.
 
 Saves are stored on the device (SQLite key-value store on native, localStorage on web).
 
+## 8b. Sound and music
+
+All audio is original and synthesized in code by `scripts/make-audio.mjs` (oscillators, noise, filters and a tiny tracker), so there are no outside assets. It writes `assets/audio/sfx/*.wav` and `assets/audio/music/*.mp3`. Playback is in `src/audio/` (expo-audio).
+
+- **Music** (seamless loops, crossfaded per screen): *hub* (mellow A-minor groove: hub, campaign, settings), *garage* (workshop groove with anvil pings), *battle* (driving E minor, 140 BPM), *boss* (heavy C minor with choir, for boss fights). The results screen plays a win or lose jingle, then returns to the hub theme.
+- **Effects:** the countdown and "fight" horn; light, heavy, crit and shielded hits (slightly varied in pitch); part breaks, crashes and wall bonks; an ultimate charge and boom; one sound per signature move; heals, burrow eruptions, the KO, star dings (each higher), button taps, and garage snap/pop sounds.
+- Busy team fights are kept readable with a few voices per sound and a minimum gap between repeats.
+- Settings has Music and Sound-effects switches, stored on the device (not in the save). Audio follows the phone's silent switch and mixes with other apps. *(Assumption: respecting the silent switch, like most iOS games.)*
+
 ## 9. Determinism (for future PvP)
 
 - Fixed 60 Hz timestep and a seeded RNG (`mulberry32`) stored in sim state. The sim never calls `Math.random`.
@@ -219,7 +228,7 @@ Saves are stored on the device (SQLite key-value store on native, localStorage o
 ## 10. Roadmap
 
 1. **Milestone 1 (current):** garage, campaign map with a farmable boss, 3D arena with per-part damage, proc meter, auto-proc signature moves with cutscenes, rewards screen.
-2. Art pass: hand-made voxel models per part, arena dressing, audio.
+2. Art pass: hand-made voxel models per part, arena dressing. (First audio pass done; see §8b.)
 3. Async PvP: fight AI-piloted snapshots of other players' builds (needs a backend).
 4. Real-time PvP (netcode, server-side sim).
 

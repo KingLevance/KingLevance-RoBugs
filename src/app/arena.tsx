@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { sfx, useMusic } from '@/audio/audio';
+import { playFightEvent, preloadFight } from '@/audio/fight-sfx';
 import { DamageNumbers, type Floater } from '@/components/damage-numbers';
 import { UltBanner } from '@/components/ult-banner';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
@@ -117,6 +119,7 @@ export default function Arena() {
     const { enemies } = lineup(opponent);
     return createTeamSim([{ build: game.build, moves: game.equipped }, ...allies], enemies, opponent.arena, (Math.random() * 2 ** 31) | 0);
   });
+  useMusic(opponent.boss ? 'boss' : 'battle', true);
   const [view, setView] = useState(() => hud(sim));
   const [fast, setFast] = useState(false);
   /** −2 = waiting for the arena's first frame; 3, 2, 1; then 0 = "FIGHT!"; then −1 = gone. */
@@ -137,13 +140,14 @@ export default function Arena() {
   });
 
   useEffect(() => {
+    preloadFight(sim);
     const l = loop.current;
     return () => {
       cancelAnimationFrame(l.raf);
       if (l.timer) clearTimeout(l.timer);
       l.renderer?.dispose();
     };
-  }, []);
+  }, [sim]);
 
   function onContextCreate(gl: ExpoWebGLRenderingContext) {
     const renderer = new ArenaRenderer(gl, sim);
@@ -167,6 +171,7 @@ export default function Arena() {
       const items: Floater[] = [];
       for (; cursor < sim.events.length; cursor++) {
         const e = sim.events[cursor];
+        playFightEvent(e, sim);
         if (e.type === 'heal') {
           if (e.amount < 2) continue;
           const hp = renderer.project(e.x, e.y, e.h / CELL + 2.2);
@@ -224,6 +229,7 @@ export default function Arena() {
         if (n !== shown) {
           shown = n;
           setCount(n);
+          sfx(n > 0 ? 'count' : 'fight', { gap: 0 });
         }
       } else {
         renderer.intro = 0;
@@ -252,6 +258,7 @@ export default function Arena() {
       if (frame % 3 === 0 || sim.over) setView(hud(sim));
       if (sim.over && !finished) {
         finished = true;
+        if (!sim.forfeited) sfx('ko', { gap: 0 });
         recordRef.current(opponent.id, sim.winner, sim.forfeited, { hp: teamHp(sim, 0), time: sim.time });
         loop.current.timer = setTimeout(() => router.replace('/rewards'), sim.forfeited ? 500 : 1600);
       }

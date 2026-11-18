@@ -1,0 +1,52 @@
+/** Fight sounds: one sim event → its sound effect. */
+import type { Sim, SimEvent } from '@/game/sim';
+
+import { preloadSfx, sfx, type SfxId } from './audio';
+import { MOVE_SFX } from './sounds';
+
+/** Slight random pitch so repeated hits don't sound identical (cosmetic, not sim state). */
+const vary = (spread = 0.12) => 1 - spread / 2 + Math.random() * spread;
+
+export function playFightEvent(e: SimEvent, sim: Sim) {
+  switch (e.type) {
+    case 'hit':
+      if (e.shielded) sfx('hit_shield', { gap: 70, rate: vary() });
+      else if (e.crit) sfx('hit_crit', { gap: 90 });
+      else if (e.dmg >= 14) sfx('hit_heavy', { gap: 60, rate: vary() });
+      else sfx('hit_light', { gap: 45, rate: vary(0.25), volume: e.by === null ? 0.6 : 1 });
+      break;
+    case 'break':
+      sfx('break', { gap: 120 });
+      break;
+    case 'crash':
+      sfx('crash', { gap: 150 });
+      break;
+    case 'wall':
+      sfx(e.spiked ? 'wall_spike' : 'wall', { gap: 150, rate: vary() });
+      break;
+    case 'ult-start':
+      sfx('ult_charge', { gap: 300 });
+      break;
+    case 'ult-release':
+      sfx(MOVE_SFX[e.move], { gap: 0 });
+      sfx('ult_boom', { gap: 300 });
+      break;
+    case 'move':
+      sfx(MOVE_SFX[e.move], { gap: 120, volume: sim.bugs[e.bug]?.team === 0 ? 1 : 0.8 });
+      break;
+    case 'erupt':
+      sfx('erupt', { gap: 200 });
+      break;
+    case 'heal':
+      if (e.amount >= 2) sfx('heal', { gap: 300, volume: 0.7 });
+      break;
+  }
+}
+
+const FIGHT_SFX: SfxId[] = ['count', 'fight', 'hit_light', 'hit_heavy', 'hit_crit', 'hit_shield', 'break', 'crash', 'wall', 'ult_charge', 'ult_boom', 'ko'];
+
+/** Warm up the common fight sounds plus the moves in play. */
+export function preloadFight(sim: Sim) {
+  const moves = sim.bugs.flatMap((b) => b.moves.map((m) => MOVE_SFX[m]));
+  preloadSfx([...FIGHT_SFX, ...moves]);
+}

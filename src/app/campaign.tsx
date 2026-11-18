@@ -3,6 +3,7 @@ import { useEffect, useRef, type ComponentRef } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { sfx, useMusic } from '@/audio/audio';
 import { BUG_PORTRAITS } from '@/components/bug-portraits';
 import { Stars } from '@/components/stars';
 import { RewardChip } from '@/components/reward-chip';
@@ -68,6 +69,7 @@ function Link({ a, b, w, h, lit }: { a: Opponent; b: Opponent; w: number; h: num
 
 export default function Campaign() {
   const game = useGame();
+  useMusic('hub');
   const { width, height } = useWindowDimensions();
   const mapW = Math.min(width, MaxContentWidth) - Spacing.lg * 2;
   const mapH = mapW * MAP_ASPECT;
@@ -139,7 +141,10 @@ export default function Campaign() {
             return (
               <Pressable
                 key={o.id}
-                onPress={() => game.selectOpponent(o.id)}
+                onPress={() => {
+                  sfx('tap');
+                  game.selectOpponent(o.id);
+                }}
                 style={[
                   styles.node,
                   {

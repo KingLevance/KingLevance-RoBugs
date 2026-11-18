@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Animated, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { setMusic, sfx } from '@/audio/audio';
 import { BUG_PORTRAITS } from '@/components/bug-portraits';
 import { RewardChip } from '@/components/reward-chip';
 import { Stars } from '@/components/stars';
@@ -18,6 +19,19 @@ export default function Rewards() {
   useEffect(() => {
     Animated.spring(pop, { toValue: 1, friction: 5, tension: 120, useNativeDriver: true }).start();
   }, [pop]);
+  useEffect(() => {
+    // A jingle instead of music on arrival, then back to the hub theme.
+    setMusic(null);
+    if (r && !r.forfeited) sfx(r.winner === 0 ? 'win' : 'lose', { gap: 0 });
+    const t = setTimeout(() => setMusic('hub'), 2600);
+    const bonus = (r?.rewards.bonus?.length ?? 0) > 0 ? setTimeout(() => sfx('reward', { gap: 0 }), 1700) : null;
+    return () => {
+      clearTimeout(t);
+      if (bonus) clearTimeout(bonus);
+    };
+    // Only on arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   if (!r) {
     return (
       <View style={styles.empty}>

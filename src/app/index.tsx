@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useMusic } from '@/audio/audio';
 import { BUG_PORTRAITS } from '@/components/bug-portraits';
 import { BugShowcase } from '@/components/bug-showcase';
 import { PART_ICONS } from '@/components/part-icons';
@@ -19,6 +20,7 @@ const STEPS: [string, string, string][] = [
 
 export default function Hub() {
   const game = useGame();
+  useMusic('hub');
   const errors = validateBuild(game.build.placements);
   const next = getOpponent(game.selected);
   const totalParts = Object.values(game.inventory).reduce((a, n) => a + n, 0);
