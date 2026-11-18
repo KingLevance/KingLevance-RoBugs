@@ -28,7 +28,7 @@ import {
 import { MAX_STARS, starGoals } from '@/game/stars';
 import { useGame } from '@/state/game-store';
 
-const ARENA_TINT = { pit: '#7CE654', foundry: '#FF8A3D', hive: '#F2C14E' } as const;
+const ARENA_TINT = { pit: '#7CE654', foundry: '#FF8A3D', hive: '#F2C14E', meadow: '#A6E35B', pond: '#6FB7FF' } as const;
 const OPTIONAL = '#C77DFF';
 const ZONE_TINT: Record<ZoneId, string> = { scrapyard: '#FF8A3D', undergrowth: '#7CE654', hive: '#F2C14E' };
 /**

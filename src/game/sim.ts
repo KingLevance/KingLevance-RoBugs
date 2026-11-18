@@ -88,6 +88,8 @@ export type Bug = {
 
 export type Hazard =
   | { kind: 'acid'; x: number; y: number; r: number }
+  /** Mud: no damage, but bugs on the ground wade through it at half speed. */
+  | { kind: 'mud'; x: number; y: number; r: number }
   | { kind: 'stomper'; x: number; y: number; r: number; period: number; t: number };
 
 /** `z`/`vz`: altitude and climb rate, so darts can be shot up at flyers (or down from them). */
@@ -318,6 +320,26 @@ function arenaHazards(arena: ArenaId): { hazards: Hazard[]; spikedWalls: boolean
           { kind: 'stomper', x: at(170), y: m, r: 60, period: 5, t: 0 },
           { kind: 'stomper', x: at(430), y: m, r: 60, period: 5, t: 2.5 },
           { kind: 'acid', x: m, y: m, r: 40 },
+        ],
+      };
+    case 'meadow':
+      // An open field: soft edges, and mud patches that bog down walkers.
+      return {
+        spikedWalls: false,
+        hazards: [
+          { kind: 'mud', x: at(165), y: at(200), r: 62 },
+          { kind: 'mud', x: at(435), y: at(400), r: 62 },
+          { kind: 'mud', x: at(420), y: at(130), r: 38 },
+        ],
+      };
+    case 'pond':
+      // A stone bank at night: a pool of water that shorts out robot parts, and muddy banks.
+      return {
+        spikedWalls: false,
+        hazards: [
+          { kind: 'acid', x: m, y: m, r: 58 },
+          { kind: 'mud', x: at(115), y: at(485), r: 48 },
+          { kind: 'mud', x: at(485), y: at(115), r: 48 },
         ],
       };
   }
@@ -840,7 +862,8 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
   const throttle = bug.stun > 0 ? 0 : Math.min(1, Math.hypot(input.x, input.y));
   // Silk slows (spider legs mostly ignore it); Overclock speeds up.
   const spider = bug.webbed > 0 && bug.parts.some((p) => p.alive && p.part.tag === 'spider');
-  const pace = (bug.webbed > 0 ? (spider ? 0.8 : 0.35) : 1) * (bug.haste > 0 ? 1.35 : 1);
+  const mud = bug.alt < 6 && sim.hazards.some((h) => h.kind === 'mud' && Math.hypot(bug.pos.x - h.x, bug.pos.y - h.y) < h.r);
+  const pace = (bug.webbed > 0 ? (spider ? 0.8 : 0.35) : 1) * (bug.haste > 0 ? 1.35 : 1) * (mud ? 0.5 : 1);
   const want = Math.atan2(input.y, input.x);
   const crab = input.face !== undefined && throttle > 0.05;
   let align = 0;
@@ -1332,7 +1355,8 @@ function attackPoint(foe: Bug, part: SimPart, me: Bug): Vec {
 }
 
 function hazardNear(sim: Sim, at: Vec, within: number) {
-  return sim.hazards.find((h) => Math.hypot(at.x - h.x, at.y - h.y) < h.r + within);
+  // Only hazards that hurt are worth shoving someone into.
+  return sim.hazards.find((h) => h.kind !== 'mud' && Math.hypot(at.x - h.x, at.y - h.y) < h.r + within);
 }
 
 /** Autonomous driver for bug `me`. Mutates only `bug.ai`; deterministic. */
@@ -1619,11 +1643,12 @@ function danger(sim: Sim, bug: Bug, d: Vec, look: number, airborne: boolean) {
       worst = Math.max(worst, Math.min(1, w) * (sim.spikedWalls ? 1 : 0.75));
     }
     for (const h of sim.hazards) {
-      const live = h.kind === 'acid' ? !airborne : h.t > h.period - 2.2;
+      const live = h.kind === 'stomper' ? h.t > h.period - 2.2 : !airborne;
       if (!live) continue;
       const edge = Math.hypot(p.x - h.x, p.y - h.y) - h.r - bug.radius * 0.5;
       const now = Math.hypot(bug.pos.x - h.x, bug.pos.y - h.y) - h.r - bug.radius * 0.5;
-      if (edge < 24 && edge <= now) worst = Math.max(worst, Math.min(1, (24 - edge) / 30) * 0.9);
+      // Mud only slows you down: worth skirting, not worth fleeing.
+      if (edge < 24 && edge <= now) worst = Math.max(worst, Math.min(1, (24 - edge) / 30) * (h.kind === 'mud' ? 0.45 : 0.9));
     }
   }
   return worst;

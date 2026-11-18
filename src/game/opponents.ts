@@ -16,9 +16,15 @@ export function fromLayout(rows: string[], legend: Record<string, string>): Plac
   return out;
 }
 
-export type ArenaId = 'pit' | 'foundry' | 'hive';
+export type ArenaId = 'pit' | 'foundry' | 'hive' | 'meadow' | 'pond';
 
-export const ARENA_NAMES: Record<ArenaId, string> = { pit: 'The Acid Pit', foundry: 'Stomper Foundry', hive: 'The Hive Ring' };
+export const ARENA_NAMES: Record<ArenaId, string> = {
+  pit: 'The Acid Pit',
+  foundry: 'Stomper Foundry',
+  hive: 'The Hive Ring',
+  meadow: 'The Meadow',
+  pond: 'Moonlit Pond',
+};
 
 export type Reward = { kind: 'part' | 'move'; id: string };
 export type LootEntry = { reward: Reward; weight: number };
@@ -129,7 +135,7 @@ export const OPPONENTS: Opponent[] = [
     id: 'needlewisp',
     name: 'Needlewisp',
     blurb: 'A flitting dart-spitter that keeps its distance.',
-    arena: 'pit',
+    arena: 'meadow',
     aggression: 0.35,
     build: bug('Needlewisp', ['..d..', '.eHe.', '.wTw.', '.lAl.', '.oAo.']),
     moves: ['venom-barrage', 'skitter-dash'],
@@ -194,7 +200,7 @@ export const OPPONENTS: Opponent[] = [
     id: 'silkjaw',
     name: 'Silkjaw',
     blurb: 'An eight-eyed weaver. Its webs pin you down while its jaws go to work.',
-    arena: 'hive',
+    arena: 'meadow',
     aggression: 0.75,
     build: bug('Silkjaw', ['.mMm.', '.vCv.', '.oBo.', '.vSv.']),
     moves: ['web-snare', 'mandible-crusher'],
@@ -208,9 +214,9 @@ export const OPPONENTS: Opponent[] = [
     id: 'lattice',
     name: 'Mother Lattice',
     blurb: 'Optional. The great weaver at the heart of the web. Six legs of pure spite.',
-    arena: 'hive',
-    aggression: 0.85,
-    build: bug('Mother Lattice', ['.MCM.', 'vBOBv', 'vKSKv', 'v.o.v']),
+    arena: 'meadow',
+    aggression: 0.95,
+    build: bug('Mother Lattice', ['.MCM.', 'vBOBv', 'vKSKv', 'vcocv']),
     moves: ['web-snare', 'mandible-crusher', 'skitter-dash'],
     boss: true,
     optional: true,
@@ -223,7 +229,7 @@ export const OPPONENTS: Opponent[] = [
     id: 'gravelgrub',
     name: 'Gravelgrub',
     blurb: 'It vanishes under the floor, then the floor comes up to meet you.',
-    arena: 'foundry',
+    arena: 'meadow',
     aggression: 0.8,
     build: bug('Gravelgrub', ['.qHq.', 'rBOBr', 'sKKKs', '.s.s.']),
     moves: ['burrow-strike', 'carapace-lock'],
@@ -237,7 +243,7 @@ export const OPPONENTS: Opponent[] = [
     id: 'arcfly',
     name: 'Arcfly',
     blurb: 'A crackling flyer. Gets close, stuns you, and blows you into the acid.',
-    arena: 'pit',
+    arena: 'pond',
     aggression: 0.85,
     build: bug('Arcfly', ['.MtM.', '.eHe.', 'wBOBw', 'sAoAs']),
     moves: ['static-burst', 'gale-flap', 'skitter-dash'],
@@ -251,7 +257,7 @@ export const OPPONENTS: Opponent[] = [
     id: 'bloodgnat',
     name: 'Bloodgnat',
     blurb: 'A whining mosquito-bot. Every bite it lands patches it up, so finish it fast.',
-    arena: 'pit',
+    arena: 'pond',
     aggression: 0.9,
     build: bug('Bloodgnat', ['.MyM.', 'ceHec', 'GBOBG', 'sKoKs', '.s.s.']),
     moves: ['blood-siphon', 'overclock'],
@@ -304,7 +310,7 @@ export const OPPONENTS: Opponent[] = [
     id: 'glimmer',
     name: 'Glimmer',
     blurb: 'Now you see it. Then you really don’t, until its jaws are already shut.',
-    arena: 'hive',
+    arena: 'pond',
     aggression: 0.8,
     build: bug('Glimmer', ['.MVM.', 'iBOBi', 'gKoKg', '.g.g.']),
     moves: ['ghost-shell', 'mandible-crusher'],

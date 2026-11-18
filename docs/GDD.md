@@ -93,6 +93,10 @@ On top of the hard cap, weight is a soft trade-off: heavier bugs are slower and 
 | **The Acid Pit** | Two acid pools (damage over time to random parts); padded walls |
 | **Stomper Foundry** | Central stomper (glows before it slams, then hits the 3 nearest parts hard); acid in the corners; **spiked walls** (hitting a wall fast damages the part that hits it) |
 | **The Hive Ring** | Two stompers out of sync, central acid, spiked walls |
+| **The Meadow** (outdoors, day) | Three **mud** patches: no damage, but grounded bugs wade through at half speed (flyers skim over). Soft stone edging, no spikes. Giant grass, flowers, butterflies, clouds. |
+| **Moonlit Pond** (outdoors, night) | A central pool of water that shorts out robot parts (works like acid), two muddy banks, soft edges. Mossy flagstones, reeds, lily pads, fireflies, moon and stars. |
+
+Outdoor arenas swap the stadium (walls, crowd, floodlights) for open ground. The AI skirts mud lightly but doesn't flee it, and only shoves enemies into hazards that hurt. The Undergrowth is mostly outdoors: Needlewisp, Silkjaw, Mother Lattice and Gravelgrub fight in the Meadow; Arcfly, Bloodgnat and Glimmer at the Pond.
 
 ## 6. Signature moves
 

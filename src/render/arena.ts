@@ -6,6 +6,8 @@
  *   pit      The Acid Pit:   rusty riveted scrapyard plates, sunken bubbling acid vats
  *   foundry  Stomper Foundry: dark tread-plate steel with glowing molten seams, hydraulic presses
  *   hive     The Hive Ring:  honeycomb floor in amber and gold, wax walls
+ *   meadow   The Meadow:     outdoors on a sunny lawn; pebble edging, giant grass and flowers, mud patches
+ *   pond     Moonlit Pond:   a mossy flagstone bank at night; reeds, lily pads, fireflies, a pool of water
  *
  * Reads sim state; never writes it.
  */
@@ -33,6 +35,14 @@ type Theme = {
   spike: number;
   accent: { color: number; intensity: number } | null;
   floor: () => { map: THREE.DataTexture; emissive?: THREE.DataTexture };
+  /** Outdoor arenas swap the stadium (walls, stands, crowd, floodlights) for open ground. */
+  outdoor?: 'meadow' | 'pond';
+  /** Extra sky/ground light (daylight, moonlight). */
+  ambient?: { sky: number; ground: number; intensity: number };
+  /** Colours of the "acid" pools (water at the pond). */
+  pool?: { surface: number; emissive: number; bubble: number; steam: number; rim: number };
+  /** Drifting particles: dust, pollen, fireflies. */
+  motes?: { color: number; size: number; glow: boolean };
 };
 
 // ── Procedural textures ─────────────────────────────────────────────
@@ -153,6 +163,55 @@ function honeycomb(): (x: number, y: number, c: THREE.Color) => void {
   };
 }
 
+/** Sunny lawn: mown stripes, clover patches and the odd daisy or buttercup. */
+function lawn(): (x: number, y: number, c: THREE.Color) => void {
+  return (x, y, c) => {
+    const n = noise(x / 48, y / 48) * 0.55 + noise(x / 11, y / 11) * 0.3 + noise(x / 2.5, y / 9) * 0.25;
+    mix(c, 0x3c8a2a, 0x86cf4e, n - 0.05);
+    if (Math.floor(x / (TEX / 8)) % 2) c.offsetHSL(0, 0, 0.035); // mown stripes
+    if (noise(x / 26 + 40, y / 26) > 0.78) c.offsetHSL(0.015, 0.04, -0.025); // clover
+    const cell = 18;
+    const fx = Math.floor(x / cell);
+    const fy = Math.floor(y / cell);
+    if (hash(fx, fy) > 0.94) {
+      const cx = fx * cell + 4 + hash(fx, fy + 7) * (cell - 8);
+      const cy = fy * cell + 4 + hash(fx + 3, fy) * (cell - 8);
+      const d = Math.hypot(x - cx, y - cy);
+      const yellow = hash(fx + 9, fy + 9) > 0.55;
+      if (d < 1.4) c.set(yellow ? 0xff9a1a : 0xffd84a);
+      else if (d < 3.4) c.set(yellow ? 0xffe14a : 0xfffaf0);
+    }
+  };
+}
+
+/** Mossy flagstones: irregular stones (cellular noise) with moss in the joints. */
+function flagstones(): (x: number, y: number, c: THREE.Color) => void {
+  const G = 64;
+  const site = (i: number, j: number) => ({ x: (i + 0.15 + hash(i, j) * 0.7) * G, y: (j + 0.15 + hash(j + 31, i) * 0.7) * G });
+  return (x, y, c) => {
+    const gi = Math.floor(x / G);
+    const gj = Math.floor(y / G);
+    let d1 = Infinity;
+    let d2 = Infinity;
+    let id = 0;
+    for (let i = gi - 1; i <= gi + 1; i++)
+      for (let j = gj - 1; j <= gj + 1; j++) {
+        const p = site(i, j);
+        const d = Math.hypot(x - p.x, y - p.y);
+        if (d < d1) {
+          d2 = d1;
+          d1 = d;
+          id = i * 57 + j * 131;
+        } else if (d < d2) d2 = d;
+      }
+    const edge = d2 - d1;
+    mix(c, 0x55605a, 0x8a9488, hash(id, 5) * 0.8 + noise(x / 7, y / 7) * 0.3);
+    c.offsetHSL(0, 0, (noise(x / 3, y / 3) - 0.5) * 0.06);
+    if (noise(x / 30 + id, y / 30) > 0.68) mix(c, 0x55605a, 0x4f7a3a, 0.7); // moss on the stone
+    if (edge < 4) mix(c, 0x2a3a22, 0x3f6a2c, noise(x / 4, y / 4)); // mossy joints
+  };
+}
+
 /** Diagonal hazard stripes. */
 function stripes(a: number, b: number, size = 128) {
   return paint((x, y, c) => c.set(((x + y) % 64) < 32 ? a : b).offsetHSL(0, 0, (noise(x / 8, y / 8) - 0.5) * 0.06), size);
@@ -217,11 +276,50 @@ const THEMES: Record<ArenaId, Theme> = {
     accent: { color: 0xffb347, intensity: 5 },
     floor: () => ({ map: paint(honeycomb()) }),
   },
+  meadow: {
+    sky: [0x3f93e6, 0xd8eeff],
+    fog: 0xc7e3f7,
+    wallA: 0xf2c14e,
+    wallB: 0x23201c,
+    rail: 0x8c98a6,
+    trim: 0x86cf4e,
+    plinth: 0x4f8f31,
+    stands: [0x4f8f31, 0x4f8f31],
+    pylonLight: 0xffffff,
+    spike: 0xd9d4c7,
+    accent: null,
+    floor: () => ({ map: paint(lawn()) }),
+    outdoor: 'meadow',
+    ambient: { sky: 0xcbe8ff, ground: 0x5f9a3a, intensity: 0.7 },
+    motes: { color: 0xfff3b0, size: 0.11, glow: false },
+  },
+  pond: {
+    sky: [0x050913, 0x1d2c4a],
+    fog: 0x111c30,
+    wallA: 0x6fb7ff,
+    wallB: 0x1d2c4a,
+    rail: 0x6b7280,
+    trim: 0x6fb7ff,
+    plinth: 0x22301f,
+    stands: [0x22301f, 0x22301f],
+    pylonLight: 0xb8e0ff,
+    spike: 0xd9d4c7,
+    accent: { color: 0x8fc8ff, intensity: 4 },
+    floor: () => ({ map: paint(flagstones()) }),
+    outdoor: 'pond',
+    ambient: { sky: 0x6f8fd8, ground: 0x0e1a12, intensity: 0.45 },
+    pool: { surface: 0x4aa3ff, emissive: 0x1f6fc0, bubble: 0xe0f4ff, steam: 0xcfe6ff, rim: 0x6b7a62 },
+    motes: { color: 0xd8ff6a, size: 0.16, glow: true },
+  },
 };
 
 // ── Dressing ────────────────────────────────────────────────────────
 
 type Vat = { surface: THREE.Mesh; bubbles: THREE.InstancedMesh; steam: THREE.Mesh[]; x: number; z: number; r: number; seed: number };
+type Mud = { blobs: THREE.InstancedMesh; x: number; z: number; r: number; seed: number };
+/** A swaying instanced set (grass blades, reeds): base matrices plus per-instance phase. */
+type Sway = { mesh: THREE.InstancedMesh; base: THREE.Matrix4[]; phase: number[]; amount: number };
+type Flyer = { obj: THREE.Group; wings: THREE.Mesh[]; seed: number; r: number; h: number };
 type Press = {
   head: THREE.Group;
   shadow: THREE.Mesh;
@@ -243,12 +341,17 @@ const PRESS_HIGH = 26;
 export class ArenaDressing {
   private theme: Theme;
   private vats: Vat[] = [];
+  private muds: Mud[] = [];
+  private sways: Sway[] = [];
+  private flyers: Flyer[] = [];
+  private clouds: THREE.Group[] = [];
+  private lilies: THREE.Mesh[] = [];
   private presses: Press[] = [];
   private seamMat: THREE.MeshToonMaterial | null = null;
   private pylonLights: THREE.MeshBasicMaterial[] = [];
   private beams: { mesh: THREE.Mesh; from: THREE.Vector3; phase: number }[] = [];
   private motes: THREE.Points;
-  private crowd!: THREE.InstancedMesh;
+  private crowd: THREE.InstancedMesh | null = null;
   private crowdBase: THREE.Matrix4[] = [];
   private crowdPhase: number[] = [];
   private hypeLevel = 0.15;
@@ -265,12 +368,18 @@ export class ArenaDressing {
 
     this.buildSky();
     this.buildFloor();
-    this.buildWalls(sim.spikedWalls);
-    this.buildStadium();
+    if (T.outdoor) this.buildOutdoors(T.outdoor);
+    else {
+      this.buildWalls(sim.spikedWalls);
+      this.buildStadium();
+    }
     this.buildLights();
-    sim.hazards.forEach((h, idx) => (h.kind === 'acid' ? this.buildVat(h.x, h.y, h.r) : this.buildPress(h.x, h.y, h.r, idx)));
+    sim.hazards.forEach((h, idx) =>
+      h.kind === 'acid' ? this.buildVat(h.x, h.y, h.r) : h.kind === 'mud' ? this.buildMud(h.x, h.y, h.r) : this.buildPress(h.x, h.y, h.r, idx),
+    );
 
-    // Dust motes drifting in the floodlights.
+    // Drifting motes: dust in the floodlights, pollen in the sun, fireflies at night.
+    const mote = T.motes ?? { color: 0xfff1c8, size: 0.09, glow: false };
     const pts = new Float32Array(220 * 3);
     for (let i = 0; i < 220; i++) {
       pts[i * 3] = (hash(i, 1) - 0.5) * SIZE * 1.4;
@@ -281,7 +390,14 @@ export class ArenaDressing {
     g.setAttribute('position', new THREE.BufferAttribute(pts, 3));
     this.motes = new THREE.Points(
       g,
-      new THREE.PointsMaterial({ color: 0xfff1c8, size: 0.09, transparent: true, opacity: 0.5, depthWrite: false }),
+      new THREE.PointsMaterial({
+        color: mote.color,
+        size: mote.size,
+        transparent: true,
+        opacity: mote.glow ? 0.9 : 0.5,
+        depthWrite: false,
+        blending: mote.glow ? THREE.AdditiveBlending : THREE.NormalBlending,
+      }),
     );
     scene.add(this.motes);
   }
@@ -322,6 +438,7 @@ export class ArenaDressing {
     floor.position.y = -0.2;
     this.scene.add(floor);
 
+    if (this.theme.outdoor) return;
     // Hazard-striped border just inside the walls.
     const stripeTex = stripes(this.theme.wallA, this.theme.wallB);
     for (let i = 0; i < 4; i++) {
@@ -472,6 +589,8 @@ export class ArenaDressing {
   }
 
   private buildLights() {
+    const amb = this.theme.ambient;
+    if (amb) this.scene.add(new THREE.HemisphereLight(amb.sky, amb.ground, amb.intensity));
     const a = this.theme.accent;
     if (!a) return;
     const l = new THREE.PointLight(a.color, a.intensity, 30, 1.5);
@@ -483,7 +602,8 @@ export class ArenaDressing {
     const r = rr / CELL;
     const p = toWorld(sx, sy);
     // Steel rim and a dark sunken wall.
-    const rim = toonMesh(new THREE.TorusGeometry(r + 0.12, 0.2, 8, 36), toonMaterial(0x6b7280), 0.03);
+    const pool = this.theme.pool ?? { surface: 0x7ce654, emissive: 0x3fae22, bubble: 0xb8ff8a, steam: 0xd8ffd0, rim: 0x6b7280 };
+    const rim = toonMesh(new THREE.TorusGeometry(r + 0.12, 0.2, 8, 36), toonMaterial(pool.rim), 0.03);
     rim.rotation.x = Math.PI / 2;
     rim.position.copy(p).setY(0.08);
     const pit = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.92, 0.3, 36, 1, true), toonMaterial(0x101410));
@@ -492,26 +612,26 @@ export class ArenaDressing {
     // Glowing acid surface, slightly below floor level.
     const surface = new THREE.Mesh(
       new THREE.CircleGeometry(r, 36),
-      toonMaterial(0x7ce654, { emissive: 0x3fae22 }),
+      toonMaterial(pool.surface, { emissive: pool.emissive }),
     );
     surface.rotation.x = -Math.PI / 2;
-    surface.position.copy(p).setY(-0.06);
+    surface.position.copy(p).setY(0.01); // just above the floor slab, or it hides the pool
     const glow = new THREE.Mesh(
       new THREE.CircleGeometry(r * 1.6, 36),
-      new THREE.MeshBasicMaterial({ color: 0x7ce654, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ color: pool.surface, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending, depthWrite: false }),
     );
     glow.rotation.x = -Math.PI / 2;
     glow.position.copy(p).setY(0.02);
     this.scene.add(rim, pit, surface, glow);
 
-    const bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(0.12, 8, 6), toonMaterial(0xb8ff8a, { emissive: 0x4fbf2a }), 14);
+    const bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(0.12, 8, 6), toonMaterial(pool.bubble, { emissive: pool.emissive }), 14);
     bubbles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.scene.add(bubbles);
     const steam: THREE.Mesh[] = [];
     for (let i = 0; i < 6; i++) {
       const s = new THREE.Mesh(
         new THREE.SphereGeometry(0.5, 8, 6),
-        new THREE.MeshBasicMaterial({ color: 0xd8ffd0, transparent: true, opacity: 0.1, depthWrite: false }),
+        new THREE.MeshBasicMaterial({ color: pool.steam, transparent: true, opacity: 0.1, depthWrite: false }),
       );
       this.scene.add(s);
       steam.push(s);
@@ -583,6 +703,283 @@ export class ArenaDressing {
       else mats.add(m);
     });
     this.presses.push({ head, shadow, lights, ring, idx, x: p.x, z: p.z, r, mats: [...mats], outlines, fade: 1 });
+  }
+
+  /**
+   * Open ground instead of a stadium: the arena edge is a ring of stones, with
+   * giant grass (or reeds), flowers, trees, clouds and sky life beyond it.
+   */
+  private buildOutdoors(kind: 'meadow' | 'pond') {
+    const meadow = kind === 'meadow';
+    const ground = new THREE.Mesh(new THREE.CircleGeometry(150, 64), toonMaterial(meadow ? 0x4f8f31 : 0x1a2618));
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.06;
+    this.scene.add(ground);
+    if (!meadow) {
+      // Dark water all around the stone bank.
+      const water = new THREE.Mesh(new THREE.RingGeometry(HALF * 1.75, 150, 72), toonMaterial(0x0f2a44, { emissive: 0x061628 }));
+      water.rotation.x = -Math.PI / 2;
+      water.position.y = -0.03;
+      this.scene.add(water);
+    }
+
+    // The edge: rounded stones along all four sides (the sim's walls).
+    const perSide = 18;
+    const stones = new THREE.InstancedMesh(new THREE.SphereGeometry(0.62, 10, 8), toonMaterial(0xffffff), perSide * 4 + 4);
+    const stoneCols = meadow ? [0xc9c1b0, 0x9d978b, 0xb3a58c] : [0x5d6a57, 0x48553f, 0x6b7563];
+    const c = new THREE.Color();
+    let k = 0;
+    const place = (x: number, z: number, i: number) => {
+      const s = new THREE.Vector3(1 + hash(i, 1) * 0.45, 0.6 + hash(i, 2) * 0.35, 0.85 + hash(i, 3) * 0.3);
+      this.m.compose(new THREE.Vector3(x, s.y * 0.3, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, hash(i, 4) * 6, 0)), s);
+      stones.setMatrixAt(k, this.m);
+      stones.setColorAt(k, c.set(stoneCols[i % stoneCols.length]));
+      k++;
+    };
+    const off = HALF + 0.55;
+    for (let i = 0; i < perSide; i++) {
+      const a = -HALF + (i + 0.5) * (SIZE / perSide);
+      place(a, -off, i);
+      place(a, off, i + 50);
+      place(-off, a, i + 100);
+      place(off, a, i + 150);
+    }
+    for (const [sx, sz] of [
+      [-1, -1],
+      [1, -1],
+      [-1, 1],
+      [1, 1],
+    ])
+      place(sx * off, sz * off, 200 + k);
+    stones.count = k;
+    stones.instanceMatrix.needsUpdate = true;
+    if (stones.instanceColor) stones.instanceColor.needsUpdate = true;
+    this.scene.add(stones);
+
+    // Giant grass blades (meadow) or reeds (pond) beyond the edge; they sway.
+    const n = meadow ? 520 : 300;
+    const blade = new THREE.ConeGeometry(meadow ? 0.16 : 0.09, 1, 4);
+    blade.translate(0, 0.5, 0);
+    const grass = new THREE.InstancedMesh(blade, toonMaterial(0xffffff), n);
+    const greens = meadow ? [0x4f9e33, 0x6cbf45, 0x3f8a2a, 0x88d457] : [0x3f5f2a, 0x52703a, 0x2f4a22];
+    const base: THREE.Matrix4[] = [];
+    const phase: number[] = [];
+    for (let i = 0; i < n; i++) {
+      // Somewhere in a band just outside the arena.
+      const ang = hash(i, 11) * Math.PI * 2;
+      const reach = HALF + 1.4 + Math.pow(hash(i, 12), 1.6) * 16;
+      const sq = Math.max(Math.abs(Math.cos(ang)), Math.abs(Math.sin(ang)));
+      const x = (Math.cos(ang) / sq) * reach;
+      const z = (Math.sin(ang) / sq) * reach;
+      const h = (meadow ? 1.6 : 2.6) + hash(i, 13) * (meadow ? 4.5 : 3.5);
+      const m = new THREE.Matrix4().compose(
+        new THREE.Vector3(x, 0, z),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler((hash(i, 14) - 0.5) * 0.3, hash(i, 15) * 6, (hash(i, 16) - 0.5) * 0.3)),
+        new THREE.Vector3(1, h, 1),
+      );
+      grass.setMatrixAt(i, m);
+      grass.setColorAt(i, c.set(greens[i % greens.length]));
+      base.push(m);
+      phase.push(hash(i, 17) * Math.PI * 2);
+    }
+    grass.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    if (grass.instanceColor) grass.instanceColor.needsUpdate = true;
+    this.scene.add(grass);
+    this.sways.push({ mesh: grass, base, phase, amount: meadow ? 0.07 : 0.05 });
+
+    if (meadow) {
+      // Big flowers on stalks, peeking over the stones.
+      const count = 34;
+      const stems = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.07, 0.09, 1, 5).translate(0, 0.5, 0), toonMaterial(0x4f9e33), count);
+      const heads = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.7, 0.5, 0.18, 12), toonMaterial(0xffffff), count);
+      const middles = new THREE.InstancedMesh(new THREE.SphereGeometry(0.28, 8, 6), toonMaterial(0xffb21a), count);
+      const petals = [0xfffaf0, 0xffe14a, 0xff7eb6, 0xc9a4ff, 0xff8a3d];
+      for (let i = 0; i < count; i++) {
+        const ang = hash(i, 21) * Math.PI * 2;
+        const reach = HALF + 2 + hash(i, 22) * 7;
+        const sq = Math.max(Math.abs(Math.cos(ang)), Math.abs(Math.sin(ang)));
+        const x = (Math.cos(ang) / sq) * reach;
+        const z = (Math.sin(ang) / sq) * reach;
+        const h = 2.2 + hash(i, 23) * 3.5;
+        stems.setMatrixAt(i, this.m.compose(new THREE.Vector3(x, 0, z), new THREE.Quaternion(), new THREE.Vector3(1, h, 1)));
+        const tilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.5 - hash(i, 24) * 0.4, Math.atan2(-x, -z), 0, 'YXZ'));
+        heads.setMatrixAt(i, this.m.compose(new THREE.Vector3(x, h, z), tilt, new THREE.Vector3(1, 1, 1)));
+        heads.setColorAt(i, c.set(petals[i % petals.length]));
+        middles.setMatrixAt(i, this.m.compose(new THREE.Vector3(x, h + 0.08, z), tilt, new THREE.Vector3(1, 0.5, 1)));
+      }
+      if (heads.instanceColor) heads.instanceColor.needsUpdate = true;
+      this.scene.add(stems, heads, middles);
+
+      // Puffy clouds drifting round the sky, and a warm sun.
+      for (let i = 0; i < 9; i++) {
+        const g = new THREE.Group();
+        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false });
+        for (let j = 0; j < 5; j++) {
+          const puff = new THREE.Mesh(new THREE.SphereGeometry(3 + hash(i, j) * 3, 10, 8), mat);
+          puff.position.set((j - 2) * 3.2, hash(j, i) * 1.5, hash(i + j, 3) * 2);
+          puff.scale.y = 0.6;
+          g.add(puff);
+        }
+        const a = (i / 9) * Math.PI * 2;
+        g.position.set(Math.cos(a) * (80 + hash(i, 5) * 40), 38 + hash(i, 6) * 18, Math.sin(a) * (80 + hash(i, 5) * 40));
+        g.lookAt(0, g.position.y, 0);
+        this.scene.add(g);
+        this.clouds.push(g);
+      }
+      const sun = new THREE.Mesh(new THREE.CircleGeometry(9, 32), new THREE.MeshBasicMaterial({ color: 0xfff6c8, fog: false }));
+      sun.position.set(-70, 95, -90);
+      sun.lookAt(0, 0, 0);
+      this.scene.add(sun);
+
+      // Butterflies flitting over the field.
+      const wingCols = [0xff9a1a, 0xffe14a, 0xffffff, 0x6fb7ff, 0xff7eb6, 0xb58cff, 0xff9a1a];
+      for (let i = 0; i < wingCols.length; i++) {
+        const obj = new THREE.Group();
+        const mat = new THREE.MeshBasicMaterial({ color: wingCols[i], side: THREE.DoubleSide });
+        const wings = [-1, 1].map((sd) => {
+          const w = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.32).translate(0.21 * sd, 0, 0), mat);
+          w.rotation.x = -Math.PI / 2;
+          const pivot = new THREE.Mesh();
+          pivot.add(w);
+          obj.add(pivot);
+          return pivot;
+        });
+        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.22, 3, 6), new THREE.MeshBasicMaterial({ color: 0x2a2a2a }));
+        body.rotation.x = Math.PI / 2;
+        obj.add(body);
+        this.scene.add(obj);
+        this.flyers.push({ obj, wings, seed: i * 1.7, r: 6 + hash(i, 31) * 10, h: 1.6 + hash(i, 32) * 3 });
+      }
+    } else {
+      // Lily pads (some in flower) floating on the water around the bank.
+      for (let i = 0; i < 26; i++) {
+        const r = 0.9 + hash(i, 41) * 1.1;
+        const pad = new THREE.Mesh(new THREE.CircleGeometry(r, 20, 0.35, Math.PI * 2 - 0.35), toonMaterial(i % 3 ? 0x3f7a2c : 0x528f36));
+        pad.rotation.set(-Math.PI / 2, 0, hash(i, 42) * 6);
+        const ang = hash(i, 43) * Math.PI * 2;
+        const reach = HALF * 1.85 + hash(i, 44) * 16;
+        pad.position.set(Math.cos(ang) * reach, 0, Math.sin(ang) * reach);
+        this.scene.add(pad);
+        this.lilies.push(pad);
+        if (hash(i, 45) > 0.7) {
+          const bloom = toonMesh(new THREE.ConeGeometry(0.35, 0.4, 7), toonMaterial(0xffb3d1, { emissive: 0x40182a }), 0.03);
+          bloom.position.copy(pad.position).setY(0.2);
+          this.scene.add(bloom);
+        }
+      }
+      // Moon and stars.
+      const moon = new THREE.Mesh(new THREE.CircleGeometry(7, 32), new THREE.MeshBasicMaterial({ color: 0xf2f4ff, fog: false }));
+      moon.position.set(60, 85, -100);
+      moon.lookAt(0, 0, 0);
+      this.scene.add(moon);
+      const stars = new Float32Array(400 * 3);
+      for (let i = 0; i < 400; i++) {
+        const a = hash(i, 51) * Math.PI * 2;
+        const e = 0.15 + hash(i, 52) * 1.3;
+        stars[i * 3] = Math.cos(a) * Math.cos(e) * 160;
+        stars[i * 3 + 1] = Math.sin(e) * 160;
+        stars[i * 3 + 2] = Math.sin(a) * Math.cos(e) * 160;
+      }
+      const sg = new THREE.BufferGeometry();
+      sg.setAttribute('position', new THREE.BufferAttribute(stars, 3));
+      this.scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ color: 0xffffff, size: 0.9, fog: false, transparent: true, opacity: 0.8 })));
+    }
+
+    // Trees on the horizon.
+    const trunkMat = toonMaterial(meadow ? 0x7a5230 : 0x2a2018);
+    const leafMat = toonMaterial(meadow ? 0x3f8a2a : 0x15261a);
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2 + hash(i, 61) * 0.3;
+      const r = 62 + hash(i, 62) * 30;
+      const h = 8 + hash(i, 63) * 8;
+      const trunk = toonMesh(new THREE.CylinderGeometry(0.9, 1.3, h, 7), trunkMat, 0.03);
+      trunk.position.set(Math.cos(a) * r, h / 2, Math.sin(a) * r);
+      this.scene.add(trunk);
+      for (let j = 0; j < 3; j++) {
+        const leaf = toonMesh(new THREE.SphereGeometry(4 + hash(i, j) * 2.5, 10, 8), leafMat, 0.03);
+        leaf.position.set(trunk.position.x + (j - 1) * 2.6, h + 1 + hash(j, i) * 2.5, trunk.position.z + (hash(i + j, 9) - 0.5) * 3);
+        this.scene.add(leaf);
+      }
+    }
+  }
+
+  /** A mud puddle: an uneven brown patch with a wet sheen and slow bubbles. */
+  private buildMud(sx: number, sy: number, rr: number) {
+    const r = rr / CELL;
+    const p = toWorld(sx, sy);
+    const seed = this.muds.length * 5.3 + 1;
+    const geo = new THREE.CircleGeometry(r, 40);
+    const pos = geo.getAttribute('position');
+    for (let i = 1; i < pos.count; i++) {
+      const a = Math.atan2(pos.getY(i), pos.getX(i));
+      const k = 1 + (hash(i, seed) - 0.5) * 0.12 + Math.sin(a * 3 + seed) * 0.07;
+      pos.setXY(i, pos.getX(i) * k, pos.getY(i) * k);
+    }
+    const outer = new THREE.Mesh(geo, toonMaterial(0x6b4a2c));
+    outer.rotation.x = -Math.PI / 2;
+    outer.position.copy(p).setY(0.012);
+    const inner = new THREE.Mesh(geo.clone().scale(0.72, 0.72, 1), toonMaterial(0x4a321d));
+    inner.rotation.x = -Math.PI / 2;
+    inner.position.copy(p).setY(0.018);
+    const sheen = new THREE.Mesh(
+      new THREE.CircleGeometry(r * 0.35, 20),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.1, depthWrite: false }),
+    );
+    sheen.rotation.x = -Math.PI / 2;
+    sheen.scale.set(1.6, 0.6, 1);
+    sheen.position.copy(p).add(new THREE.Vector3(-r * 0.2, 0.024, -r * 0.25));
+    this.scene.add(outer, inner, sheen);
+    // Clods of dirt splashed round the edge.
+    const clodMat = toonMaterial(0x5a3d24);
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2 + hash(i, seed) * 0.5;
+      const clod = new THREE.Mesh(new THREE.SphereGeometry(0.16 + hash(seed, i) * 0.14, 7, 5), clodMat);
+      clod.scale.y = 0.5;
+      clod.position.copy(p).add(new THREE.Vector3(Math.cos(a) * r * 1.05, 0.04, Math.sin(a) * r * 1.05));
+      this.scene.add(clod);
+    }
+    const blobs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.16, 8, 6), toonMaterial(0x6b4630), 6);
+    blobs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.scene.add(blobs);
+    this.muds.push({ blobs, x: p.x, z: p.z, r, seed });
+  }
+
+  /** Outdoor life: swaying grass, butterflies, drifting clouds, mud bubbles, firefly glow. */
+  private updateOutdoors(t: number) {
+    for (const m of this.muds) {
+      for (let i = 0; i < m.blobs.count; i++) {
+        const life = (t * 0.3 + hash(i, m.seed)) % 1;
+        const a = hash(i, m.seed + 1) * Math.PI * 2;
+        const d = Math.sqrt(hash(i, m.seed + 2)) * m.r * 0.7;
+        const s = life < 0.8 ? life / 0.8 : (1 - life) * 4;
+        this.m.makeScale(s, s * 0.7, s).setPosition(m.x + Math.cos(a) * d, 0.03, m.z + Math.sin(a) * d);
+        m.blobs.setMatrixAt(i, this.m);
+      }
+      m.blobs.instanceMatrix.needsUpdate = true;
+    }
+    if (this.frame % 2 === 0) {
+      const rot = new THREE.Matrix4();
+      for (const s of this.sways) {
+        for (let i = 0; i < s.base.length; i++) {
+          const sway = Math.sin(t * 1.4 + s.phase[i] + s.base[i].elements[12] * 0.15) * s.amount;
+          rot.makeRotationZ(sway);
+          this.m.multiplyMatrices(s.base[i], rot);
+          s.mesh.setMatrixAt(i, this.m);
+        }
+        s.mesh.instanceMatrix.needsUpdate = true;
+      }
+    }
+    for (const f of this.flyers) {
+      const a = t * 0.35 + f.seed;
+      f.obj.position.set(Math.cos(a) * f.r + Math.sin(a * 2.3) * 2, f.h + Math.sin(t * 2.1 + f.seed) * 0.6, Math.sin(a) * f.r);
+      f.obj.rotation.y = -a;
+      const flap = 0.2 + Math.abs(Math.sin(t * 16 + f.seed)) * 1.1;
+      f.wings[0].rotation.z = flap;
+      f.wings[1].rotation.z = -flap;
+    }
+    for (const [i, g] of this.clouds.entries()) g.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.0006 * (1 + (i % 3) * 0.3));
+    for (const [i, pad] of this.lilies.entries()) pad.position.y = 0.01 + Math.sin(t * 0.8 + i) * 0.03;
+    if (this.theme.motes?.glow) (this.motes.material as THREE.PointsMaterial).opacity = 0.55 + Math.sin(t * 2.7) * 0.35;
   }
 
   update(sim: Sim, t: number, dt: number) {
@@ -670,7 +1067,7 @@ export class ArenaDressing {
     this.motes.position.y = Math.sin(t * 0.4) * 0.3;
 
     // Crowd bounces with excitement (every other frame is plenty).
-    if (this.frame % 2 === 0) {
+    if (this.crowd && this.frame % 2 === 0) {
       const amp = 0.08 + this.hypeLevel * 0.55;
       const pos = new THREE.Vector3();
       for (let i = 0; i < this.crowdBase.length; i++) {
@@ -682,5 +1079,6 @@ export class ArenaDressing {
       }
       this.crowd.instanceMatrix.needsUpdate = true;
     }
+    this.updateOutdoors(t);
   }
 }
