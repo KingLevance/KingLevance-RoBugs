@@ -214,7 +214,12 @@ Saves are stored on the device (SQLite key-value store on native, localStorage o
 
 All audio is original and synthesized in code by `scripts/make-audio.mjs` (oscillators, noise, filters and a tiny tracker), so there are no outside assets. It writes `assets/audio/sfx/*.wav` and `assets/audio/music/*.mp3`. Playback is in `src/audio/` (expo-audio).
 
-- **Music** (seamless loops, crossfaded per screen): *hub* (mellow A-minor groove: hub, campaign, settings), *garage* (workshop groove with anvil pings), *battle* (driving E minor, 140 BPM), *boss* (heavy C minor with choir, for boss fights). The results screen plays a win or lose jingle, then returns to the hub theme.
+- **Music** has its own "bug-tech" identity (deliberately not the usual four-on-the-floor / saw-lead template): wing-buzz voices that glide like servos, kalimba plucks, cricket chirps, clicky insect-leg percussion, a woody "clack" snare and a bit-crushed gear bass, in shuffles and odd meters. Seamless loops, crossfaded per screen:
+  - *Burrow Lounge* (hub, campaign, settings): lazy 12/8 shuffle in F lydian.
+  - *Workbench Seven* (garage): 7/8 workshop groove in D mixolydian with ratchets and anvil pings.
+  - *Swarm Clash* (fights): half-time breakbeat at 168 BPM in E phrygian dominant.
+  - *Hive Mother* (bosses): heavy 12/8 ritual in C locrian with a swarm drone and war toms.
+  - The results screen plays a win or lose jingle, then returns to the hub theme.
 - **Effects:** the countdown and "fight" horn; light, heavy, crit and shielded hits (slightly varied in pitch); part breaks, crashes and wall bonks; an ultimate charge and boom; one sound per signature move; heals, burrow eruptions, the KO, star dings (each higher), button taps, and garage snap/pop sounds.
 - Busy team fights are kept readable with a few voices per sound and a minimum gap between repeats.
 - Settings has Music and Sound-effects switches, stored on the device (not in the save). Audio follows the phone's silent switch and mixes with other apps. *(Assumption: respecting the silent switch, like most iOS games.)*

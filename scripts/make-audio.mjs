@@ -485,21 +485,30 @@ sfx('m_siphon', 0.75, -4, (r) => {
 
 // ---------------------------------------------------------------- music
 
-/**
- * A tiny tracker. A song is `bars` bars of 16 steps. Instruments write into
- * named stems; the mix adds reverb/echo sends, then the tail past the loop
- * end is wrapped onto the start so the track loops seamlessly.
+/*
+ * RoBugs' own musical identity, "bug-tech": wing-buzz leads that glide like
+ * servos, kalimba plucks, cricket chirps, clicky insect-leg percussion and a
+ * bit-crushed gear bass, in shuffles and odd meters with unusual scales.
+ * (Deliberately not the usual four-on-the-floor / saw-lead / arpeggio template.)
  */
-function makeSong({ bpm, bars, swing = 0 }) {
+
+/**
+ * A tiny tracker. A song is `bars` bars of `steps` steps; a step is
+ * 1/`sub` of a beat (sub 4 = sixteenths, sub 3 = triplet eighths).
+ * Instruments write into named stems; the mix adds reverb/echo sends, then
+ * the tail past the loop end is wrapped onto the start so the track loops
+ * seamlessly.
+ */
+function makeSong({ bpm, bars, steps = 16, sub = 4, swing = 0 }) {
   const r = MUSIC_RATE;
-  const step = 60 / bpm / 4;
-  const len = Math.round(bars * 16 * step * r);
+  const step = 60 / bpm / sub;
+  const len = Math.round(bars * steps * step * r);
   const tail = 3 * r;
   const stems = {};
   const sends = { rev: new Float32Array(len + tail), dly: new Float32Array(len + tail) };
   const stem = (name) => (stems[name] ??= new Float32Array(len + tail));
-  /** Start time (s) of a step, with swing on the off 16ths. */
-  const at = (bar, s) => (bar * 16 + s + (s % 2 === 1 ? swing : 0)) * step;
+  /** Start time (s) of a step, with optional swing on odd steps. */
+  const at = (bar, s) => (bar * steps + s + (s % 2 === 1 ? swing : 0)) * step;
   /** Render `fn(t)` for `dur` seconds into a stem (+ sends) from time `t0`. */
   function put(name, t0, dur, fn, { gain = 1, rev = 0, dly = 0 } = {}) {
     const out = stem(name);
@@ -514,114 +523,142 @@ function makeSong({ bpm, bars, swing = 0 }) {
       if (dly) sends.dly[j] += v * dly;
     }
   }
-  return { r, step, len, tail, stems, sends, at, put, bars };
+  return { r, step, steps, len, tail, stems, sends, at, put, bars };
 }
 
 // Instruments: each returns (t) => sample for one note.
 const I = {
   kick: (r, vel = 1) => {
     const o = osc(r);
-    return (t) => Math.tanh(1.6 * (o.sin(44 + 115 * Math.exp(-t / 0.028)) * Math.exp(-t / 0.13) + noise() * Math.exp(-t / 0.003) * 0.25)) * vel;
+    return (t) => Math.tanh(1.5 * (o.sin(48 + 90 * Math.exp(-t / 0.035)) * Math.exp(-t / 0.16) + noise() * Math.exp(-t / 0.002) * 0.2)) * vel;
   },
-  snare: (r, vel = 1) => {
-    const o = osc(r);
-    const h = svf(r);
-    return (t) => (o.sin(190 * (1 + 0.3 * Math.exp(-t / 0.01))) * Math.exp(-t / 0.045) * 0.55 + h.run(noise(), 1500).hp * Math.exp(-t / 0.085)) * vel;
-  },
-  clap: (r, vel = 1) => {
+  /** The RoBugs snare: a dry woody "clack", like a beetle shell snapping shut. */
+  clack: (r, vel = 1) => {
+    const a = osc(r);
+    const b = osc(r);
+    const c = osc(r);
     const f = svf(r);
+    return (t) =>
+      (a.sin(830) * Math.exp(-t / 0.028) * 0.5 +
+        b.sin(1340) * Math.exp(-t / 0.018) * 0.35 +
+        c.sin(205) * Math.exp(-t / 0.04) * 0.5 +
+        f.run(noise(), 2600, 1.4).bp * Math.exp(-t / 0.035) * 1.2) *
+      vel;
+  },
+  /** Insect-leg tick: a tiny FM click. */
+  chitter: (r, vel = 1, hz = 4200) => {
+    let pm = 0;
+    let pc = 0;
     return (t) => {
-      const e = Math.max(...[0, 0.009, 0.018].map((d) => (t >= d ? Math.exp(-(t - d) / (d === 0.018 ? 0.07 : 0.006)) : 0)));
-      return f.run(noise(), 1300, 1.2).bp * e * 1.6 * vel;
+      pm = (pm + (hz * 1.41) / r) % 1;
+      pc = (pc + hz / r) % 1;
+      return Math.sin(TAU * pc + 4 * Math.exp(-t / 0.004) * Math.sin(TAU * pm)) * Math.exp(-t / 0.011) * vel;
     };
   },
-  hat: (r, vel = 1, open = false) => {
-    const a = svf(r);
-    const b = svf(r);
-    return (t) => b.run(a.run(noise(), 7000).hp, 8000).hp * Math.exp(-t / (open ? 0.14 : 0.022)) * vel;
+  /** A cricket chirp: three quick trilled pulses. */
+  cricket: (r, vel = 1, hz = 4700) => {
+    const o = osc(r);
+    return (t) => {
+      const k = Math.floor(t / 0.028);
+      const u = t - k * 0.028;
+      const gate = k < 3 && u < 0.017 ? Math.sin((Math.PI * u) / 0.017) : 0;
+      return o.sin(hz * (1 + 0.01 * Math.sin(TAU * 90 * t))) * gate * vel;
+    };
+  },
+  shaker: (r, vel = 1) => {
+    const f = svf(r);
+    return (t) => f.run(noise(), 6000, 1).bp * env(t, 0.006, 0.03) * vel;
   },
   tom: (r, hz, vel = 1) => {
     const o = osc(r);
-    return (t) => o.sin(hz * (1 + 0.6 * Math.exp(-t / 0.02))) * Math.exp(-t / 0.16) * vel;
+    const f = lp1(r);
+    return (t) => Math.tanh(1.3 * (o.sin(hz * (1 + 0.5 * Math.exp(-t / 0.025))) * Math.exp(-t / 0.28) + f(noise(), 600) * Math.exp(-t / 0.02) * 0.6)) * vel;
   },
   anvil: (r, hz, vel = 1) => metal(r, hz, [1, 2.76, 5.4, 8.93], [0.14, 0.08, 0.05, 0.03], [0.6 * vel, 0.3 * vel, 0.18 * vel, 0.1 * vel]),
-  shaker: (r, vel = 1) => {
-    const f = svf(r);
-    return (t) => f.run(noise(), 5500, 1).bp * env(t, 0.008, 0.035) * vel;
-  },
-  /** Saw/pulse bass through an enveloped resonant lowpass. */
-  bass: (r, hz, dur, { wave = 'saw', cut = 300, envAmt = 1400, decay = 0.12, q = 1.6, drive = 1.4 } = {}) => {
-    const o = osc(r);
-    const o2 = osc(r);
-    const f = svf(r);
-    return (t) => {
-      const raw = wave === 'saw' ? o.saw(hz) * 0.7 + o2.saw(hz * 0.5) * 0.4 : o.pulse(hz, 0.5) * 0.7 + o2.sin(hz * 0.5) * 0.5;
-      const amp = Math.min(1, t / 0.004) * (t > dur ? Math.exp(-(t - dur) / 0.03) : 1);
-      return Math.tanh(drive * f.run(raw, cut + envAmt * Math.exp(-t / decay), q).lp) * amp;
-    };
-  },
-  /** Plucked bass/guitar (Karplus–Strong). */
-  pluck: (r, hz, dur, bright = 0.5) => {
-    const len = Math.max(2, Math.round(r / hz));
-    const f = lp1(r);
-    const buf = Float32Array.from({ length: len }, () => f(noise(), 600 + 6000 * bright));
-    let k = 0;
-    return (t) => {
-      const a = buf[k % len];
-      const b = buf[(k + 1) % len];
-      buf[k % len] = 0.5 * (a + b) * (t > dur ? 0.97 : 0.9985);
-      k++;
-      return a;
-    };
-  },
-  lead: (r, hz, dur, { wave = 'pulse', pw = 0.4, cut = 3200, vib = 0.005, attack = 0.01, release = 0.09, drive = 1 } = {}) => {
-    const o = osc(r);
-    const o2 = osc(r);
-    const f = svf(r);
-    return (t) => {
-      const v = 1 + (t > 0.14 ? vib * Math.sin(TAU * 5.6 * t) : 0);
-      const raw = wave === 'pulse' ? o.pulse(hz * v, pw) : o.saw(hz * v) * 0.7 + o2.saw(hz * v * 1.005) * 0.5;
-      const amp = Math.min(1, t / attack) * (0.75 + 0.25 * Math.exp(-t / 0.08)) * (t > dur ? Math.exp(-(t - dur) / release) : 1);
-      return Math.tanh(drive * f.run(raw, cut, 0.9).lp) * amp;
-    };
-  },
-  /** FM electric piano. */
-  keys: (r, hz, dur) => {
-    let pc = rand();
-    let pm = rand();
-    const tine = osc(r);
-    return (t) => {
-      pm = (pm + hz / r) % 1;
-      const idx = 1.4 * Math.exp(-t / 0.25) + 0.25;
-      pc = (pc + hz / r) % 1;
-      const amp = Math.min(1, t / 0.003) * Math.exp(-t / 1.4) * (t > dur ? Math.exp(-(t - dur) / 0.12) : 1);
-      return (Math.sin(TAU * pc + idx * Math.sin(TAU * pm)) + tine.sin(hz * 14) * 0.08 * Math.exp(-t / 0.02)) * amp;
-    };
-  },
-  marimba: (r, hz, dur) => {
+  /** Thumb piano: a round tone with a quick inharmonic "tine". */
+  kalimba: (r, hz, dur, decay = 0.9) => {
     const a = osc(r);
     const b = osc(r);
-    return (t) => (a.sin(hz) + b.sin(hz * 3.93) * 0.25 * Math.exp(-t / 0.025)) * env(t, 0.002, 0.28) * (t > dur + 0.2 ? Math.exp(-(t - dur - 0.2) / 0.05) : 1);
+    return (t) =>
+      (a.sin(hz * (1 + 0.012 * Math.exp(-t / 0.01))) + b.sin(hz * 5.95) * 0.35 * Math.exp(-t / 0.045) + noise() * Math.exp(-t / 0.0015) * 0.15) *
+      Math.exp(-t / decay) *
+      (t > dur + 0.25 ? Math.exp(-(t - dur - 0.25) / 0.08) : 1);
   },
-  /** Detuned saw pad; `vowel` adds formant filtering (choir-ish). */
-  pad: (r, hz, dur, { cut = 1400, attack = 0.35, release = 0.6, vowel = false } = {}) => {
-    const os = [0.994, 1, 1.006].map((d) => ({ o: osc(r), d }));
-    const f = svf(r);
+  /**
+   * Wing-buzz voice: a reedy tone through two formant filters, chopped by a
+   * fast "wingbeat" tremolo, gliding from the previous note like a servo.
+   */
+  buzz: (r, hz, dur, { from = null, glideT = 0.06, wing = 28, depth = 0.4, cut = 1700, q = 3, vib = 0.006, attack = 0.015, release = 0.08, drive = 1.3 } = {}) => {
+    const o = osc(r);
+    const o2 = osc(r);
     const f1 = svf(r);
     const f2 = svf(r);
     return (t) => {
-      const raw = os.reduce((a, v) => a + v.o.saw(hz * v.d), 0) / 3;
+      const base = from ? glide(from, hz, glideT, t) : hz;
+      const f = base * (1 + (t > 0.12 ? vib * Math.sin(TAU * 5.2 * t) : 0));
+      const raw = o.pulse(f, 0.3) * 0.6 + o2.saw(f * 1.004) * 0.5;
+      const sweep = cut * (1 + 0.2 * Math.sin(TAU * 2.6 * t));
+      const voiced = f1.run(raw, sweep, q).bp * 1.4 + f2.run(raw, sweep * 1.85, q * 1.2).bp * 0.8 + raw * 0.12;
+      const wingbeat = 1 - depth + depth * (0.5 + 0.5 * Math.sin(TAU * wing * t));
       const amp = Math.min(1, t / attack) * (t > dur ? Math.exp(-(t - dur) / release) : 1);
-      const s = vowel ? f1.run(raw, 720, 4).bp * 1.6 + f2.run(raw, 1150, 5).bp * 1.1 : f.run(raw, cut, 0.8).lp;
-      return s * amp;
+      return Math.tanh(drive * voiced * wingbeat) * amp;
     };
   },
-  arp: (r, hz, dur, cut = 2600) => {
+  /** Bit-crushed "gear" bass: sample-and-hold decimation and a few bits of depth. */
+  gear: (r, hz, dur, { crush = 7, bits = 5, cut = 500, envAmt = 1500, decay = 0.08 } = {}) => {
+    const o = osc(r);
+    const o2 = osc(r);
+    const f = svf(r);
+    const levels = Math.pow(2, bits - 1);
+    let held = 0;
+    let k = 0;
+    return (t) => {
+      const raw = o.pulse(hz, 0.35) * 0.7 + o2.sin(hz) * 0.6;
+      const v = f.run(raw, cut + envAmt * Math.exp(-t / decay), 1.3).lp;
+      if (k++ % crush === 0) held = Math.round(clamp(v, -1, 1) * levels) / levels;
+      return held * Math.min(1, t / 0.003) * (t > dur ? Math.exp(-(t - dur) / 0.03) : 1);
+    };
+  },
+  /** Soft round bass (triangle + sine sub). */
+  round: (r, hz, dur) => {
+    const a = osc(r);
+    const b = osc(r);
+    return (t) => (a.tri(hz) * 0.6 + b.sin(hz * 0.5) * 0.6) * Math.min(1, t / 0.01) * Math.exp(-t / 1.2) * (t > dur ? Math.exp(-(t - dur) / 0.06) : 1);
+  },
+  /** The hive: a cluster of detuned buzzing voices, each with its own wingbeat. */
+  swarm: (r, hz, dur) => {
+    const vs = Array.from({ length: 6 }, (_, k) => ({ o: osc(r), d: 1 + (k - 2.5) * 0.006, w: 21 + rand() * 18, ph: rand() }));
+    const f = svf(r);
+    return (t) => {
+      let v = 0;
+      for (const s of vs) v += s.o.saw(hz * s.d) * (0.55 + 0.45 * Math.sin(TAU * (s.w * t + s.ph)));
+      const amp = Math.min(1, t / 0.7) * (t > dur ? Math.exp(-(t - dur) / 0.6) : 1);
+      return f.run(v / vs.length, 700 + 250 * Math.sin(TAU * 0.4 * t), 1.6).lp * amp;
+    };
+  },
+  /** A servo whir between two pitches. */
+  servo: (r, f0, f1, dur) => {
     const o = osc(r);
     const f = lp1(r);
-    return (t) => f(o.pulse(hz, 0.25), cut) * env(t, 0.002, 0.07) * (t > dur ? Math.exp(-(t - dur) / 0.02) : 1);
+    return (t) => f(o.pulse(glide(f0, f1, dur * 0.8, t), 0.2), 2500) * Math.sin(Math.PI * Math.min(1, t / dur)) * 0.6;
   },
 };
+
+/** Melody line: [bar, step, steps, note] items. Consecutive notes glide (for voices that take `from`). */
+function line(song, stem, make, items, opts) {
+  let prev = null;
+  for (const [bar, s, steps, note] of items) {
+    const hz = midi(typeof note === 'number' ? note : n(note));
+    const t0 = song.at(bar, s);
+    const dur = steps * song.step;
+    const from = prev && Math.abs(prev.end - t0) < 0.02 ? prev.hz : null;
+    song.put(stem, t0, dur + 0.7, make(song.r, hz, dur, from), opts);
+    prev = { hz, end: t0 + dur };
+  }
+}
+const shift = (items, bars, semis = 0) => items.map(([b, s, l, m]) => [b + bars, s, l, (typeof m === 'number' ? m : n(m)) + semis]);
+/** Notes by name → MIDI. */
+const N = (...names) => names.map(n);
 
 /** Reverb (Freeverb-style mono) and a filtered echo, then wrap and master. */
 function mixSong(song, gains, { revWet = 0.22, delaySteps = 3, fb = 0.35 } = {}) {
@@ -676,201 +713,226 @@ function mixSong(song, gains, { revWet = 0.22, delaySteps = 3, fb = 0.35 } = {})
   return { out, report };
 }
 
-/** Chord tones → MIDI arrays. */
-const CH = {
-  m: [0, 3, 7],
-  M: [0, 4, 7],
-  m7: [0, 3, 7, 10],
-  M7: [0, 4, 7, 11],
-  '7': [0, 4, 7, 10],
-  m9: [0, 3, 7, 10, 14],
-  '6': [0, 4, 7, 9],
-};
-const chord = (root, kind) => CH[kind].map((s) => n(root) + s);
-/** Melody line helper: [bar, step, steps, note] items. */
-function melody(song, inst, items, opts) {
-  for (const [bar, s, steps, note] of items) {
-    const hz = midi(typeof note === 'number' ? note : n(note));
-    const dur = steps * song.step;
-    song.put(inst.stem, song.at(bar, s), dur + 0.6, inst.make(song.r, hz, dur), opts);
-  }
-}
-const at8 = (fn) => [0, 2, 4, 6, 8, 10, 12, 14].forEach(fn);
-const shift = (items, bars, semis = 0) => items.map(([b, s, l, m]) => [b + bars, s, l, typeof m === 'number' ? m + semis : n(m) + semis]);
 
-// ---- Track: hub (menu). Mellow funky A minor, 96 BPM.
+// ---- Track: hub, "Burrow Lounge". A lazy 12/8 shuffle in F lydian: kalimba, round bass, a soft wing-buzz tune.
 function songHub() {
-  const s = makeSong({ bpm: 96, bars: 16, swing: 0.18 });
-  const prog = [chord('A3', 'm9'), chord('F3', 'M7'), chord('C4', 'M7'), chord('G3', '6')];
-  for (let bar = 0; bar < 16; bar++) {
-    const c = prog[bar % 4];
-    const root = c[0] - 12;
-    // Keys: syncopated comping.
-    for (const [st, l] of [
-      [0, 3],
-      [6, 2],
-      [11, 4],
-    ])
-      for (const m of c.slice(0, 4)) s.put('keys', s.at(bar, st), l * s.step + 1, I.keys(s.r, midi(m), l * s.step), { gain: 0.16, rev: 0.4 });
-    // Drums (from bar 2).
-    if (bar >= 2) {
-      for (const st of [0, 7, 10]) s.put('drums', s.at(bar, st), 0.35, I.kick(s.r, st === 7 ? 0.7 : 1));
-      for (const st of [4, 12]) s.put('drums', s.at(bar, st), 0.3, I.snare(s.r, 0.7), { rev: 0.25 });
-      at8((st) => s.put('drums', s.at(bar, st), 0.1, I.hat(s.r, st % 4 === 2 ? 0.55 : 0.35)));
-      if (bar % 4 === 3) s.put('drums', s.at(bar, 14), 0.25, I.hat(s.r, 0.4, true));
-    }
-    // Bass (from bar 4).
-    if (bar >= 4)
-      for (const [st, l, iv] of [
-        [0, 3, 0],
-        [3, 1, 12],
-        [6, 2, 0],
-        [10, 2, 7],
-        [14, 2, 10],
-      ])
-        s.put('bass', s.at(bar, st), l * s.step + 0.1, I.bass(s.r, midi(root + iv), l * s.step * 0.9, { wave: 'pulse', cut: 220, envAmt: 700, q: 1.2 }));
-    // Arp sparkle on the intro and last phrase.
-    if (bar < 4 || bar >= 12) for (let st = 0; st < 16; st += 2) s.put('arp', s.at(bar, st), 0.3, I.arp(s.r, midi(c[(st / 2) % c.length] + 12), s.step, 2200), { rev: 0.3, dly: 0.3 });
-  }
-  const A = [
-    [0, 0, 3, 'E5'], [0, 3, 3, 'G5'], [0, 6, 4, 'A5'], [0, 10, 2, 'G5'], [0, 12, 4, 'E5'],
-    [1, 0, 6, 'C5'], [1, 6, 2, 'D5'], [1, 8, 8, 'E5'],
-    [2, 0, 3, 'G5'], [2, 3, 3, 'E5'], [2, 6, 2, 'D5'], [2, 8, 4, 'C5'], [2, 12, 4, 'D5'],
-    [3, 0, 8, 'B4'], [3, 10, 2, 'D5'], [3, 12, 4, 'E5'],
+  const s = makeSong({ bpm: 92, bars: 16, steps: 12, sub: 3 });
+  const prog = [
+    { bass: 'F2', tones: N('F4', 'A4', 'C5', 'E5') },
+    { bass: 'F2', tones: N('G4', 'B4', 'D5', 'E5') },
+    { bass: 'E2', tones: N('E4', 'G4', 'B4', 'D5') },
+    { bass: 'A2', tones: N('A4', 'C5', 'E5', 'G5') },
+    { bass: 'F2', tones: N('F4', 'A4', 'C5', 'E5') },
+    { bass: 'G2', tones: N('G4', 'B4', 'D5', 'E5') },
+    { bass: 'D2', tones: N('D4', 'F4', 'A4', 'E5') },
+    { bass: 'C2', tones: N('C4', 'E4', 'G4', 'B4') },
   ];
-  const B = [
-    [0, 0, 4, 'A5'], [0, 4, 2, 'C6'], [0, 6, 2, 'B5'], [0, 8, 4, 'A5'], [0, 12, 4, 'G5'],
-    [1, 0, 6, 'A5'], [1, 6, 2, 'E5'], [1, 8, 8, 'F5'],
-    [2, 0, 3, 'E5'], [2, 3, 3, 'G5'], [2, 6, 6, 'C6'], [2, 12, 2, 'B5'], [2, 14, 2, 'A5'],
-    [3, 0, 4, 'G5'], [3, 4, 4, 'D5'], [3, 8, 8, 'B4'],
-  ];
-  const lead = { stem: 'lead', make: (r, hz, d) => I.lead(r, hz, d, { pw: 0.5, cut: 2400, vib: 0.006, attack: 0.02 }) };
-  melody(s, lead, [...shift(A, 4), ...shift(B, 8), ...shift(A, 12)], { rev: 0.35, dly: 0.25 });
-  return mixSong(s, { keys: 1, drums: 0.97, bass: 0.37, arp: 0.26, lead: 0.45 });
-}
-
-// ---- Track: garage. Workshop groove in D dorian, 112 BPM, clanky percussion.
-function songGarage() {
-  const s = makeSong({ bpm: 112, bars: 16, swing: 0.12 });
-  const prog = [chord('D3', 'm7'), chord('G3', '7'), chord('D3', 'm7'), chord('A3', 'm7'), chord('Bb3', 'M7'), chord('C4', 'M'), chord('D3', 'm7'), chord('D3', 'm7')];
+  const ost = [0, 2, 1, 3, 2, 1, 0, 2, 1, 3, 2, 3];
   for (let bar = 0; bar < 16; bar++) {
     const c = prog[bar % 8];
-    const root = c[0] - 12;
-    for (const st of [0, 6, 8, 11]) s.put('drums', s.at(bar, st), 0.35, I.kick(s.r, st === 0 || st === 8 ? 1 : 0.6));
-    for (const st of [4, 12]) s.put('drums', s.at(bar, st), 0.3, I.clap(s.r, 0.8), { rev: 0.2 });
-    for (let st = 0; st < 16; st++) s.put('perc', s.at(bar, st), 0.08, I.shaker(s.r, st % 2 ? 0.5 : 0.3));
-    // Anvil pings on the offbeats: the "workshop" sound.
-    for (const st of [2, 7, 10, 15]) s.put('perc', s.at(bar, st), 0.3, I.anvil(s.r, st === 7 ? 1180 : 1560, st === 15 ? 0.5 : 0.8), { rev: 0.3 });
-    if (bar % 4 === 3) for (const [st, hz] of [[12, 180], [13, 150], [14, 120], [15, 100]]) s.put('drums', s.at(bar, st), 0.3, I.tom(s.r, hz, 0.7));
-    // Plucked bass groove.
-    for (const [st, l, iv] of [[0, 2, 0], [2, 1, 0], [3, 2, 12], [6, 2, 7], [8, 2, 0], [11, 2, 10], [13, 1, 12], [14, 2, 7]])
-      s.put('bass', s.at(bar, st), l * s.step + 0.4, I.pluck(s.r, midi(root + iv), l * s.step, 0.35));
-    // Keys stabs.
-    for (const st of [2, 10]) for (const m of c) s.put('keys', s.at(bar, st), 0.8, I.keys(s.r, midi(m + 12), s.step * 1.5), { gain: 0.12, rev: 0.3 });
+    for (let st = 0; st < 12; st++) {
+      const m = c.tones[ost[st]] + 12;
+      const accent = st % 3 === 0 ? 1 : 0.6;
+      s.put('kal', s.at(bar, st), 1.4, I.kalimba(s.r, midi(m), s.step, 0.7), { gain: accent, rev: 0.35, dly: st === 11 ? 0.4 : 0 });
+    }
+    for (const [st, l, iv] of [
+      [0, 5, 0],
+      [8, 3, 7],
+      [11, 1, 12],
+    ])
+      s.put('bass', s.at(bar, st), l * s.step + 0.3, I.round(s.r, midi(n(c.bass) + iv), l * s.step));
+    if (bar >= 2) {
+      s.put('drums', s.at(bar, 0), 0.5, I.kick(s.r, 0.9));
+      s.put('drums', s.at(bar, 8), 0.5, I.kick(s.r, 0.6));
+      s.put('drums', s.at(bar, 6), 0.2, I.clack(s.r, 0.5), { rev: 0.3 });
+      for (let st = 0; st < 12; st++) s.put('perc', s.at(bar, st), 0.06, I.shaker(s.r, st % 3 === 0 ? 0.7 : st % 3 === 2 ? 0.5 : 0.25));
+    }
+    if (bar % 2 === 1) s.put('perc', s.at(bar, 10), 0.12, I.cricket(s.r, 0.5), { rev: 0.5 });
+    if (bar % 4 === 3) for (const st of [9, 10, 11]) s.put('perc', s.at(bar, st), 0.05, I.chitter(s.r, 0.6, 3600 + st * 150));
+  }
+  const A = [
+    [0, 0, 2, 'A5'], [0, 2, 1, 'G5'], [0, 3, 3, 'E5'], [0, 6, 6, 'C5'],
+    [1, 0, 3, 'B4'], [1, 3, 3, 'D5'], [1, 6, 4, 'E5'], [1, 10, 2, 'D5'],
+    [2, 0, 6, 'B4'], [2, 6, 3, 'G4'], [2, 9, 3, 'A4'],
+    [3, 0, 9, 'C5'], [3, 9, 3, 'E5'],
+  ];
+  const B = [
+    [0, 0, 3, 'F5'], [0, 3, 3, 'E5'], [0, 6, 3, 'C5'], [0, 9, 3, 'A4'],
+    [1, 0, 4, 'B4'], [1, 4, 2, 'C5'], [1, 6, 6, 'D5'],
+    [2, 0, 3, 'E5'], [2, 3, 3, 'F5'], [2, 6, 6, 'A5'],
+    [3, 0, 6, 'G5'], [3, 6, 6, 'B4'],
+  ];
+  const voice = (r, hz, d, from) => I.buzz(r, hz, d, { from, wing: 22, depth: 0.22, cut: 1300, q: 2.2, drive: 1.1, attack: 0.03 });
+  line(s, 'lead', voice, [...shift(A, 4), ...shift(B, 8), ...shift(A, 12)], { rev: 0.35, dly: 0.25 });
+  return mixSong(s, { kal: 0.3, bass: 0.5, drums: 1.29, perc: 1.25, lead: 0.41 }, { delaySteps: 3, fb: 0.3 });
+}
+
+// ---- Track: garage, "Workbench Seven". 7/8 workshop groove in D mixolydian: gear bass, ratchets, kalimba, servo whistle.
+function songGarage() {
+  const s = makeSong({ bpm: 126, bars: 16, steps: 14, sub: 4 });
+  const roots = ['D2', 'D2', 'C2', 'C2', 'G2', 'G2', 'A2', 'A2'];
+  const riff = [
+    [0, 2, 0],
+    [2, 1, 12],
+    [4, 2, 10],
+    [6, 2, 7],
+    [8, 3, 0],
+    [11, 1, 5],
+    [12, 2, 7],
+  ];
+  for (let bar = 0; bar < 16; bar++) {
+    const root = n(roots[bar % 8]);
+    for (const st of [0, 8]) s.put('drums', s.at(bar, st), 0.5, I.kick(s.r));
+    s.put('drums', s.at(bar, 11), 0.5, I.kick(s.r, 0.5));
+    for (const st of [4, 12]) s.put('drums', s.at(bar, st), 0.25, I.clack(s.r, 0.8), { rev: 0.2 });
+    for (let st = 1; st < 14; st += 2) s.put('perc', s.at(bar, st), 0.05, I.chitter(s.r, 0.35, 5200));
+    for (const [st, hz] of [
+      [6, 1560],
+      [13, 1180],
+    ])
+      s.put('perc', s.at(bar, st), 0.3, I.anvil(s.r, hz, 0.6), { rev: 0.3 });
+    // A ratchet (rapid clicks) to close every 4 bars.
+    if (bar % 4 === 3) for (let k = 0; k < 8; k++) s.put('perc', s.at(bar, 10) + k * s.step * 0.5, 0.04, I.chitter(s.r, 0.6, 3000 + k * 120));
+    if (bar % 8 === 7) s.put('fx', s.at(bar, 6), s.step * 8, I.servo(s.r, 260, 980, s.step * 8), { rev: 0.3 });
+    for (const [st, l, iv] of riff) s.put('bass', s.at(bar, st), l * s.step + 0.05, I.gear(s.r, midi(root + iv), l * s.step * 0.85));
   }
   const M = [
-    [0, 0, 2, 'D5'], [0, 2, 2, 'F5'], [0, 4, 2, 'A5'], [0, 6, 2, 'G5'], [0, 8, 4, 'F5'], [0, 12, 2, 'E5'], [0, 14, 2, 'D5'],
-    [1, 0, 3, 'B4'], [1, 3, 3, 'D5'], [1, 6, 2, 'F5'], [1, 8, 6, 'E5'],
-    [2, 0, 2, 'D5'], [2, 2, 2, 'F5'], [2, 4, 2, 'A5'], [2, 6, 2, 'C6'], [2, 8, 4, 'B5'], [2, 12, 4, 'A5'],
-    [3, 0, 6, 'G5'], [3, 6, 2, 'E5'], [3, 8, 8, 'C5'],
-    [4, 0, 3, 'D5'], [4, 3, 3, 'F5'], [4, 6, 4, 'A5'], [4, 10, 2, 'G5'], [4, 12, 4, 'F5'],
-    [5, 0, 4, 'E5'], [5, 4, 4, 'G5'], [5, 8, 4, 'C6'], [5, 12, 4, 'B5'],
-    [6, 0, 6, 'A5'], [6, 8, 2, 'G5'], [6, 10, 2, 'F5'], [6, 12, 4, 'E5'],
-    [7, 0, 12, 'D5'],
+    [0, 0, 2, 'F#5'], [0, 2, 2, 'A5'], [0, 4, 2, 'D6'], [0, 6, 2, 'C6'], [0, 8, 3, 'A5'], [0, 11, 3, 'G5'],
+    [1, 0, 4, 'F#5'], [1, 4, 2, 'E5'], [1, 6, 2, 'D5'], [1, 8, 6, 'E5'],
+    [2, 0, 2, 'E5'], [2, 2, 2, 'G5'], [2, 4, 2, 'C6'], [2, 6, 2, 'B5'], [2, 8, 3, 'G5'], [2, 11, 3, 'E5'],
+    [3, 0, 4, 'G5'], [3, 4, 4, 'E5'], [3, 8, 6, 'C5'],
+    [4, 0, 2, 'D5'], [4, 2, 2, 'G5'], [4, 4, 2, 'B5'], [4, 6, 2, 'D6'], [4, 8, 3, 'C6'], [4, 11, 3, 'B5'],
+    [5, 0, 6, 'A5'], [5, 8, 6, 'G5'],
+    [6, 0, 2, 'C#6'], [6, 2, 2, 'E6'], [6, 4, 4, 'C6'], [6, 8, 6, 'A5'],
+    [7, 0, 4, 'G5'], [7, 4, 2, 'F#5'], [7, 6, 8, 'E5'],
   ];
-  const mar = { stem: 'lead', make: (r, hz, d) => I.marimba(r, hz, d) };
-  melody(s, mar, [...shift(M, 0), ...shift(M, 8)], { rev: 0.3, dly: 0.2 });
-  // Second time round, an octave-up echo on the off-beat.
-  melody(s, mar, shift(M, 8, 12).map(([b, st, l, m]) => [b, st + 1 > 15 ? st : st + 1, l, m]), { gain: 0.3, rev: 0.4 });
-  return mixSong(s, { drums: 0.8, perc: 0.6, bass: 0.9, keys: 1.5, lead: 0.55 }, { delaySteps: 3, fb: 0.3 });
+  line(s, 'kal', (r, hz, d) => I.kalimba(r, hz, d, 0.6), [...shift(M, 0), ...shift(M, 8, -12)], { rev: 0.3, dly: 0.25 });
+  const whistle = (r, hz, d, from) => I.buzz(r, hz, d, { from, glideT: 0.08, wing: 0, depth: 0, cut: 2200, q: 1.4, vib: 0.008, drive: 0.9, attack: 0.02 });
+  line(s, 'lead', whistle, shift(M, 8), { rev: 0.3, dly: 0.2 });
+  return mixSong(s, { drums: 0.75, perc: 0.75, fx: 0.6, bass: 0.32, kal: 0.3, lead: 0.63 }, { delaySteps: 3, fb: 0.3 });
 }
 
-// ---- Track: battle. Driving E minor, 140 BPM.
+// ---- Track: battle, "Swarm Clash". Half-time breakbeat at 168 BPM in E phrygian dominant; wing-buzz bass and lead.
 function songBattle() {
-  const s = makeSong({ bpm: 140, bars: 16 });
-  const A = [chord('E3', 'm'), chord('C3', 'M'), chord('D3', 'M'), chord('B2', 'M')];
-  const B = [chord('C3', 'M'), chord('D3', 'M'), chord('E3', 'm'), chord('E3', 'm'), chord('C3', 'M'), chord('D3', 'M'), chord('B2', 'M'), chord('B2', 'M')];
-  const prog = [...A, ...A, ...B];
+  const s = makeSong({ bpm: 168, bars: 16, steps: 16, sub: 4 });
+  const prog = [
+    { root: 'E2', tones: N('E4', 'G#4', 'B4') },
+    { root: 'F2', tones: N('F4', 'A4', 'C5') },
+    { root: 'E2', tones: N('E4', 'G#4', 'B4') },
+    { root: 'G#2', tones: N('G#4', 'B4', 'D5') },
+    { root: 'A2', tones: N('A4', 'C5', 'E5') },
+    { root: 'F2', tones: N('F4', 'A4', 'C5') },
+    { root: 'E2', tones: N('E4', 'G#4', 'B4') },
+    { root: 'E2', tones: N('E4', 'G#4', 'B4') },
+  ];
+  const wobble = 1 / (s.step * 2); // the bass "wingbeat" locks to eighth notes
   for (let bar = 0; bar < 16; bar++) {
-    const c = prog[bar];
-    const root = c[0] - 12;
-    const fill = bar === 15;
-    for (const st of [0, 4, 8, 12]) if (!(fill && st >= 8)) s.put('drums', s.at(bar, st), 0.35, I.kick(s.r));
-    for (const st of [4, 12]) if (!(fill && st === 12)) s.put('drums', s.at(bar, st), 0.3, I.snare(s.r), { rev: 0.2 });
-    for (let st = 0; st < 16; st++) if (!(fill && st >= 8)) s.put('hats', s.at(bar, st), 0.1, I.hat(s.r, st % 4 === 2 ? 0.7 : st % 2 ? 0.3 : 0.45));
-    if (fill) for (let st = 8; st < 16; st++) s.put('drums', s.at(bar, st), 0.25, st < 12 ? I.snare(s.r, 0.4 + st * 0.03) : I.tom(s.r, [200, 170, 140, 110][st - 12], 0.9));
-    if (bar % 8 === 0) s.put('drums', s.at(bar, 0), 0.5, I.hat(s.r, 0.8, true), { rev: 0.4 });
-    // Pumping octave bass.
-    for (let st = 0; st < 16; st += 2) s.put('bass', s.at(bar, st), s.step * 2 + 0.05, I.bass(s.r, midi(root + (st % 4 === 2 ? 12 : 0)), s.step * 1.6, { cut: 260, envAmt: 1800, decay: 0.09, drive: 1.8 }));
-    // 16th arps of the chord.
+    const c = prog[bar % 8];
+    const root = n(c.root);
+    const fill = bar % 8 === 7;
+    for (const [st, v] of [
+      [0, 1],
+      [3, 0.55],
+      [10, 0.9],
+    ])
+      if (!(fill && st === 10)) s.put('drums', s.at(bar, st), 0.5, I.kick(s.r, v));
+    s.put('drums', s.at(bar, 8), 0.25, I.clack(s.r, 1), { rev: 0.25 });
+    s.put('drums', s.at(bar, 14), 0.25, I.clack(s.r, 0.3));
+    if (fill) for (const [st, hz] of [[11, 190], [12, 160], [13, 135], [14, 115], [15, 95]]) s.put('drums', s.at(bar, st), 0.4, I.tom(s.r, hz, 0.8));
+    // Leg-click hats: sixteenths with accents, plus quick rolls here and there.
     for (let st = 0; st < 16; st++) {
-      const tones = [c[0], c[1], c[2], c[0] + 12];
-      s.put('arp', s.at(bar, st), 0.2, I.arp(s.r, midi(tones[st % 4] + 24), s.step * 0.7, 3200), { dly: 0.15 });
+      if (fill && st > 10) continue;
+      s.put('hats', s.at(bar, st), 0.05, I.chitter(s.r, st % 4 === 2 ? 0.8 : st % 2 ? 0.35 : 0.5, 5600));
+      if (rand() < 0.12) s.put('hats', s.at(bar, st) + s.step / 2, 0.05, I.chitter(s.r, 0.3, 6200));
     }
-    // Power-chord pad under section B.
-    if (bar >= 8) for (const m of [c[0] + 12, c[2] + 12, c[0] + 24]) s.put('pad', s.at(bar, 0), 16 * s.step + 0.6, I.pad(s.r, midi(m), 16 * s.step, { cut: 1600, attack: 0.05, release: 0.2 }), { rev: 0.3 });
+    if (bar % 4 === 0) s.put('hats', s.at(bar, 4), 0.12, I.cricket(s.r, 0.6, 4300), { rev: 0.4 });
+    // Wing-buzz bass, offbeat-driven, with the phrygian half-step.
+    for (const [st, l, iv] of [
+      [0, 3, 0],
+      [3, 1, 0],
+      [6, 2, 12],
+      [8, 2, 0],
+      [11, 2, 1],
+      [14, 2, 0],
+    ])
+      s.put(
+        'bass',
+        s.at(bar, st),
+        l * s.step + 0.1,
+        I.buzz(s.r, midi(root + iv), l * s.step * 0.9, { wing: wobble, depth: 0.5, cut: 420, q: 1.6, drive: 2.2, vib: 0, attack: 0.004, release: 0.03 }),
+      );
+    // Fast kalimba sparkle in the second half.
+    if (bar >= 8) for (let st = 0; st < 16; st += 2) s.put('kal', s.at(bar, st), 0.6, I.kalimba(s.r, midi(c.tones[(st / 2) % 3] + 12), s.step, 0.25), { dly: 0.3 });
   }
-  const LA = [
-    [0, 0, 2, 'E5'], [0, 2, 2, 'G5'], [0, 4, 4, 'B5'], [0, 8, 2, 'A5'], [0, 10, 2, 'G5'], [0, 12, 4, 'F#5'],
-    [1, 0, 4, 'G5'], [1, 4, 4, 'E5'], [1, 8, 4, 'C5'], [1, 12, 4, 'E5'],
-    [2, 0, 2, 'F#5'], [2, 2, 2, 'A5'], [2, 4, 6, 'D6'], [2, 10, 2, 'C6'], [2, 12, 2, 'B5'], [2, 14, 2, 'A5'],
-    [3, 0, 8, 'B5'], [3, 8, 4, 'D#5'], [3, 12, 4, 'F#5'],
+  const L = [
+    [0, 0, 3, 'B4'], [0, 3, 3, 'C5'], [0, 6, 2, 'B4'], [0, 8, 4, 'G#4'], [0, 12, 4, 'E5'],
+    [1, 0, 6, 'F5'], [1, 6, 2, 'E5'], [1, 8, 4, 'C5'], [1, 12, 4, 'A4'],
+    [2, 0, 2, 'G#4'], [2, 2, 2, 'B4'], [2, 4, 4, 'E5'], [2, 8, 2, 'F5'], [2, 10, 2, 'E5'], [2, 12, 4, 'D5'],
+    [3, 0, 8, 'B4'], [3, 8, 4, 'D5'], [3, 12, 4, 'F5'],
+    [4, 0, 4, 'E5'], [4, 4, 4, 'C5'], [4, 8, 4, 'A4'], [4, 12, 4, 'B4'],
+    [5, 0, 4, 'C5'], [5, 4, 2, 'A4'], [5, 6, 2, 'C5'], [5, 8, 8, 'F5'],
+    [6, 0, 3, 'E5'], [6, 3, 3, 'F5'], [6, 6, 2, 'G#5'], [6, 8, 8, 'B5'],
+    [7, 0, 8, 'E5'],
   ];
-  const LA2 = [...LA.slice(0, 16), [3, 0, 4, 'B5'], [3, 4, 2, 'A5'], [3, 6, 2, 'G5'], [3, 8, 8, 'F#5']];
-  const LB = [
-    [0, 0, 6, 'E6'], [0, 6, 2, 'D6'], [0, 8, 4, 'C6'], [0, 12, 4, 'B5'],
-    [1, 0, 6, 'A5'], [1, 6, 2, 'B5'], [1, 8, 4, 'C6'], [1, 12, 4, 'D6'],
-    [2, 0, 12, 'B5'], [2, 12, 2, 'G5'], [2, 14, 2, 'A5'],
-    [3, 0, 4, 'B5'], [3, 4, 4, 'E6'], [3, 8, 4, 'D6'], [3, 12, 4, 'B5'],
-    [4, 0, 4, 'C6'], [4, 4, 4, 'B5'], [4, 8, 4, 'G5'], [4, 12, 4, 'E5'],
-    [5, 0, 4, 'F#5'], [5, 4, 4, 'G5'], [5, 8, 4, 'A5'], [5, 12, 4, 'D6'],
-    [6, 0, 14, 'D#6'],
-  ];
-  const lead = { stem: 'lead', make: (r, hz, d) => I.lead(r, hz, d, { wave: 'saw', cut: 3800, vib: 0.006, drive: 1.3 }) };
-  melody(s, lead, [...shift(LA, 0), ...shift(LA2, 4), ...shift(LB, 8)], { rev: 0.25, dly: 0.25 });
-  // Harmony a sixth below on the B section.
-  melody(s, { stem: 'lead2', make: (r, hz, d) => I.lead(r, hz, d, { pw: 0.3, cut: 2600 }) }, shift(LB, 8, -8), { rev: 0.3 });
-  return mixSong(s, { drums: 0.74, hats: 1.1, bass: 0.36, arp: 0.125, pad: 0.23, lead: 0.6, lead2: 0.24 }, { delaySteps: 3, fb: 0.3, revWet: 0.18 });
+  const lead = (r, hz, d, from) => I.buzz(r, hz, d, { from, wing: 32, depth: 0.35, cut: 2100, q: 3, drive: 1.6 });
+  line(s, 'lead', lead, [...shift(L, 0), ...shift(L, 8, 12)], { rev: 0.25, dly: 0.2 });
+  line(s, 'lead2', (r, hz, d, from) => I.buzz(r, hz, d, { from, wing: 27, depth: 0.3, cut: 1500, q: 2.5 }), shift(L, 8, 8), { rev: 0.3 });
+  return mixSong(s, { drums: 0.76, hats: 0.7, bass: 0.53, kal: 0.18, lead: 0.35, lead2: 0.2 }, { delaySteps: 3, fb: 0.28, revWet: 0.16 });
 }
 
-// ---- Track: boss. Heavy C minor with a phrygian edge, 150 BPM.
+// ---- Track: boss, "Hive Mother". A heavy 12/8 ritual in C locrian: the swarm drone, war toms, crickets and a snarling buzz.
 function songBoss() {
-  const s = makeSong({ bpm: 150, bars: 16 });
-  const A = [chord('C3', 'm'), chord('Db3', 'M'), chord('C3', 'm'), chord('Bb2', 'M')];
-  const B = [chord('Ab2', 'M'), chord('Bb2', 'M'), chord('C3', 'm'), chord('G2', 'M')];
-  const prog = [...A, ...A, ...B, ...B];
-  for (let bar = 0; bar < 16; bar++) {
+  const s = makeSong({ bpm: 96, bars: 12, steps: 12, sub: 3 });
+  const prog = [
+    { root: 'C2', tones: N('C3', 'Eb3', 'Gb3') },
+    { root: 'Db2', tones: N('Db3', 'F3', 'Ab3') },
+    { root: 'Bb1', tones: N('Bb2', 'Db3', 'F3') },
+    { root: 'Gb1', tones: N('Gb2', 'Bb2', 'Db3') },
+    { root: 'C2', tones: N('C3', 'Eb3', 'Gb3') },
+    { root: 'Db2', tones: N('Db3', 'F3', 'Ab3') },
+    { root: 'Bb1', tones: N('Bb2', 'Db3', 'F3') },
+    { root: 'Gb1', tones: N('Gb2', 'Bb2', 'Db3') },
+    { root: 'Ab1', tones: N('Ab2', 'C3', 'Eb3') },
+    { root: 'Gb1', tones: N('Gb2', 'Bb2', 'Db3') },
+    { root: 'Db2', tones: N('Db3', 'F3', 'Ab3') },
+    { root: 'C2', tones: N('C3', 'Eb3', 'Gb3') },
+  ];
+  for (let bar = 0; bar < 12; bar++) {
     const c = prog[bar];
-    const root = c[0] - 12;
-    // Gallop: x.xx x.xx …
-    const gallop = [0, 2, 3, 4, 6, 7, 8, 10, 11, 12, 14, 15];
-    for (const st of [0, 3, 8, 11]) s.put('drums', s.at(bar, st), 0.35, I.kick(s.r));
-    for (const st of [4, 12]) s.put('drums', s.at(bar, st), 0.3, I.snare(s.r), { rev: 0.3 });
-    at8((st) => s.put('hats', s.at(bar, st), 0.1, I.hat(s.r, 0.5)));
-    if (bar % 4 === 3) for (const [st, hz] of [[12, 160], [13, 130], [14, 105], [15, 85]]) s.put('drums', s.at(bar, st), 0.3, I.tom(s.r, hz));
-    for (const st of gallop)
-      s.put('bass', s.at(bar, st), s.step + 0.05, I.bass(s.r, midi(root), s.step * 0.8, { cut: 180, envAmt: 2200, decay: 0.06, q: 2, drive: 3 }));
-    // Choir.
-    for (const m of [c[0] + 12, c[1] + 12, c[2] + 12]) s.put('choir', s.at(bar, 0), 16 * s.step + 0.8, I.pad(s.r, midi(m), 16 * s.step, { vowel: true, attack: 0.25, release: 0.5 }), { rev: 0.5 });
-    // Bell toll on the downbeat of each phrase.
-    if (bar % 4 === 0) s.put('bell', s.at(bar, 0), 2, I.anvil(s.r, midi(n('C6')), 1), { rev: 0.6 });
+    const root = n(c.root);
+    for (const st of [0, 6]) s.put('drums', s.at(bar, st), 0.5, I.kick(s.r));
+    for (const [st, hz, v] of [
+      [0, 70, 1],
+      [2, 70, 0.5],
+      [3, 95, 0.8],
+      [6, 70, 1],
+      [8, 70, 0.5],
+      [9, 95, 0.8],
+      [11, 130, 0.7],
+    ])
+      s.put('toms', s.at(bar, st), 0.6, I.tom(s.r, hz, v), { rev: 0.3 });
+    s.put('drums', s.at(bar, 9), 0.25, I.clack(s.r, 0.7), { rev: 0.3 });
+    for (let k = 0; k < 2; k++) s.put('perc', s.at(bar, Math.floor(rand() * 12)), 0.12, I.cricket(s.r, 0.45, 3900 + rand() * 1500), { rev: 0.5 });
+    if (bar % 4 === 0) s.put('bell', s.at(bar, 0), 2.2, I.anvil(s.r, midi(n('C6')), 1), { rev: 0.6 });
+    for (const m of c.tones) s.put('swarm', s.at(bar, 0), 12 * s.step + 0.8, I.swarm(s.r, midi(m), 12 * s.step), { rev: 0.4 });
+    for (const st of [0, 3, 6, 9]) s.put('bass', s.at(bar, st), 3 * s.step, I.gear(s.r, midi(root), 2.5 * s.step, { crush: 9, bits: 4, cut: 300, envAmt: 1200 }));
   }
   const P1 = [
-    [0, 0, 6, 'C5'], [0, 6, 2, 'Db5'], [0, 8, 4, 'C5'], [0, 12, 4, 'G4'],
-    [1, 0, 6, 'Ab4'], [1, 6, 2, 'Bb4'], [1, 8, 8, 'C5'],
-    [2, 0, 4, 'Eb5'], [2, 4, 2, 'D5'], [2, 6, 2, 'C5'], [2, 8, 4, 'B4'], [2, 12, 4, 'C5'],
-    [3, 0, 8, 'D5'], [3, 8, 4, 'F5'], [3, 12, 4, 'D5'],
+    [0, 0, 6, 'C5'], [0, 6, 3, 'Db5'], [0, 9, 3, 'Eb5'],
+    [1, 0, 6, 'F5'], [1, 6, 6, 'Db5'],
+    [2, 0, 3, 'Bb4'], [2, 3, 3, 'Db5'], [2, 6, 3, 'F5'], [2, 9, 3, 'Gb5'],
+    [3, 0, 9, 'F5'], [3, 9, 3, 'Db5'],
   ];
   const P2 = [
-    [0, 0, 6, 'Eb5'], [0, 6, 2, 'C5'], [0, 8, 8, 'Ab4'],
-    [1, 0, 6, 'F5'], [1, 6, 2, 'D5'], [1, 8, 8, 'Bb4'],
-    [2, 0, 4, 'G5'], [2, 4, 4, 'Eb5'], [2, 8, 4, 'C5'], [2, 12, 4, 'Eb5'],
-    [3, 0, 4, 'D5'], [3, 4, 4, 'F5'], [3, 8, 8, 'B4'],
+    [0, 0, 6, 'Eb5'], [0, 6, 6, 'C5'],
+    [1, 0, 3, 'Db5'], [1, 3, 3, 'Bb4'], [1, 6, 6, 'Gb4'],
+    [2, 0, 3, 'Ab4'], [2, 3, 3, 'Db5'], [2, 6, 6, 'F5'],
+    [3, 0, 6, 'Gb5'], [3, 6, 6, 'C5'],
   ];
-  const lead = { stem: 'lead', make: (r, hz, d) => I.lead(r, hz, d, { pw: 0.35, cut: 3000, vib: 0.008, drive: 2 }) };
-  melody(s, lead, [...shift(P1, 4), ...shift(P2, 8), ...shift(P2, 12, 12)], { rev: 0.3, dly: 0.2 });
-  melody(s, { stem: 'lead2', make: (r, hz, d) => I.lead(r, hz, d, { wave: 'saw', cut: 2000 }) }, shift(P2, 12), { rev: 0.3 });
-  return mixSong(s, { drums: 0.67, hats: 1.1, bass: 0.34, choir: 0.068, bell: 1.05, lead: 0.35, lead2: 0.6 }, { delaySteps: 3, fb: 0.25, revWet: 0.2 });
+  const snarl = (r, hz, d, from) => I.buzz(r, hz, d, { from, glideT: 0.09, wing: 40, depth: 0.5, cut: 1500, q: 3.5, drive: 2.4, vib: 0.01 });
+  line(s, 'lead', snarl, [...shift(P1, 4), ...shift(P2, 8)], { rev: 0.3, dly: 0.2 });
+  line(s, 'kal', (r, hz, d) => I.kalimba(r, hz, d, 1.2), shift(P2, 8, 12), { rev: 0.5 });
+  return mixSong(s, { drums: 0.9, toms: 0.56, perc: 1.1, bell: 1.27, swarm: 0.47, bass: 0.33, lead: 0.38, kal: 0.27 }, { delaySteps: 3, fb: 0.25, revWet: 0.2 });
 }
 
 // ---------------------------------------------------------------- write
