@@ -20,11 +20,11 @@ import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { computeStats, connectedKeys, FACING_NAMES, facingsFor, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
 import { autoBuild, autoPlace, dropLayer, flipLayer, movePart, partAt, rankSlots, removeAt, rotatePart, sameSlot, type Slot } from '@/game/editor';
 import { GROUPS, GUIDE } from '@/game/guide';
-import { getMove, meetsRequirement, MOVE_SLOTS } from '@/game/moves';
+import { getMove, meetsRequirement, MOVE_SLOTS, type MoveId } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type Category, type PartDef } from '@/game/parts';
 import { CRIT } from '@/game/sim';
 import { GarageRenderer, type Cell, type ViewName } from '@/render/garage-scene';
-import { MAX_BUGS, useGame } from '@/state/game-store';
+import { MAX_BUGS, MAX_SAVED, useGame } from '@/state/game-store';
 
 const CATALOG_ORDER = new Map(PARTS.map((p, i) => [p.id, i]));
 const DRAG_SLOP = 8;
@@ -121,6 +121,14 @@ type Touch = {
   last: { cell: Cell | null; inside: boolean };
 };
 
+const UNDO_STEPS = 40;
+type Snapshot = { placements: Placement[]; equipped: MoveId[] };
+/** Same parts (in any order) and the same moves. */
+function sameLoadout(b: Snapshot, placements: Placement[], equipped: MoveId[]) {
+  const key = (ps: Placement[]) => ps.map((p) => `${p.partId}@${p.x},${p.y},${p.z ?? 0},${p.r ?? 0}`).sort().join('|');
+  return key(b.placements) === key(placements) && [...b.equipped].sort().join() === [...equipped].sort().join();
+}
+
 export default function Garage() {
   const game = useGame();
   useMusic('garage');
@@ -128,6 +136,10 @@ export default function Garage() {
   const [selected, setSelected] = useState<Slot | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  /** Saved build waiting for a second tap to delete it. */
+  const [confirmSaved, setConfirmSaved] = useState<number | null>(null);
+  /** Undo history for the bug being edited (cleared when you switch, add or scrap bugs). */
+  const [history, setHistory] = useState<{ bug: number; stack: Snapshot[] }>({ bug: -1, stack: [] });
   const [dragHint, setDragHint] = useState<'move' | 'remove' | null>(null);
   const renderer = useRef<GarageRenderer | null>(null);
   const raf = useRef(0);
@@ -136,10 +148,56 @@ export default function Garage() {
   const touch = useRef<Touch | null>(null);
 
   const placements = game.build.placements;
+  const undoStack = history.bug === game.active ? history.stack : [];
+  /** Remember the current parts + moves so the next change can be undone. */
+  const remember = () =>
+    setHistory({ bug: game.active, stack: [...undoStack, { placements, equipped: game.equipped }].slice(-UNDO_STEPS) });
+  const forgetHistory = () => setHistory({ bug: -1, stack: [] });
   /** Apply an edit to the build with a click: snap on, pop off, or turn. */
   const edit = (next: Placement[]) => {
+    if (JSON.stringify(next) === JSON.stringify(placements)) return;
+    remember();
     sfx(next.length < placements.length ? 'unsnap' : 'snap', { rate: next.length === placements.length ? 1.25 : 1 });
     game.setPlacements(next);
+  };
+  const toggleMove = (id: MoveId) => {
+    remember();
+    game.toggleEquip(id);
+  };
+  const undo = () => {
+    const last = undoStack[undoStack.length - 1];
+    if (!last) return;
+    setHistory({ bug: game.active, stack: undoStack.slice(0, -1) });
+    sfx('unsnap', { rate: 0.85 });
+    game.setLoadout(last.placements, last.equipped);
+    setSelected(null);
+    setToast(undoStack.length > 1 ? `Undone · ${undoStack.length - 1} more step${undoStack.length > 2 ? 's' : ''} back` : 'Undone');
+  };
+  const saveCurrent = () => {
+    if (!placements.length) {
+      setToast('Nothing to save yet: add some parts first');
+      return;
+    }
+    const base = game.build.name || 'Build';
+    const taken = new Set(game.saved.map((b) => b.name));
+    let name = base;
+    for (let k = 2; taken.has(name); k++) name = `${base} ${k}`;
+    if (!game.saved.some((b) => sameLoadout(b, placements, game.equipped)) && !game.saveBuild(name)) {
+      setToast(`Saved builds are full (${MAX_SAVED}). Remove one below first.`);
+      return;
+    }
+    sfx('star', { gap: 0 });
+    setToast(`Saved "${name}" · load it from Saved builds below`);
+  };
+  const loadSaved = (i: number) => {
+    const b = game.saved[i];
+    if (!b) return;
+    remember();
+    sfx('snap', { gap: 0 });
+    game.setLoadout([...b.placements], b.equipped.filter((m) => game.moves.includes(m)));
+    setSelected(null);
+    setConfirmSaved(null);
+    setToast(`Loaded "${b.name}" · ↶ to go back`);
   };
   const used = usage(placements);
   const stats = computeStats(resolve(placements));
@@ -373,6 +431,7 @@ export default function Garage() {
                   game.selectBug(i);
                   setSelected(null);
                   setConfirmDelete(false);
+                  forgetHistory();
                 }}
                 style={[styles.bugTab, on && styles.bugTabOn]}>
                 <View style={[styles.bugDot, { backgroundColor: ready ? Colors.good : Colors.bad }]} />
@@ -387,6 +446,7 @@ export default function Garage() {
             <Pressable
               onPress={() => {
                 game.addBug();
+                forgetHistory();
                 setSelected(null);
                 setToast('New bug: tap parts in the bin or Auto-build');
               }}
@@ -408,6 +468,7 @@ export default function Garage() {
               accessibilityLabel="Copy this bug"
               onPress={() => {
                 game.addBug(game.active);
+                forgetHistory();
                 setSelected(null);
                 setToast('Copied. Tweak away!');
               }}
@@ -425,6 +486,7 @@ export default function Garage() {
                 }
                 game.deleteBug(game.active);
                 setConfirmDelete(false);
+                forgetHistory();
                 setSelected(null);
               }}
               style={[styles.iconBtn, confirmDelete && { borderColor: Colors.bad, backgroundColor: '#3A1A1D', paddingHorizontal: 10 }]}>
@@ -446,6 +508,20 @@ export default function Garage() {
             onResponderRelease={onRelease}
             onResponderTerminate={onRelease}
           />
+          <View pointerEvents="box-none" style={styles.editorTools}>
+            <Pressable
+              accessibilityLabel="Undo"
+              disabled={!undoStack.length}
+              onPress={undo}
+              style={[styles.toolBtn, !undoStack.length && { opacity: 0.35 }]}>
+              <Text style={styles.toolBtnText}>↶</Text>
+              {undoStack.length > 0 && <Text style={styles.toolBtnLabel}>UNDO</Text>}
+            </Pressable>
+            <Pressable accessibilityLabel="Save this build" onPress={saveCurrent} style={styles.toolBtn}>
+              <Text style={styles.toolBtnText}>💾</Text>
+              <Text style={styles.toolBtnLabel}>SAVE</Text>
+            </Pressable>
+          </View>
           <View pointerEvents="box-none" style={styles.editorOverlay}>
             <View style={styles.views} pointerEvents="box-none">
               {VIEW_BUTTONS.map(([name, label]) => (
@@ -605,7 +681,7 @@ export default function Garage() {
             return (
               <Pressable
                 key={id}
-                onPress={() => game.toggleEquip(id)}
+                onPress={() => toggleMove(id)}
                 style={[styles.moveRow, on && { borderColor: m.color, backgroundColor: Colors.panelHi }]}>
                 <View style={[styles.moveDot, { backgroundColor: on ? m.color : Colors.bg, borderColor: m.color }]} />
                 <View style={{ flex: 1, gap: 2 }}>
@@ -621,6 +697,53 @@ export default function Garage() {
               </Pressable>
             );
           })}
+        </View>
+
+        <View style={{ gap: Spacing.sm }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <Text style={styles.section}>SAVED BUILDS</Text>
+            <Text style={styles.dim}>
+              {game.saved.length}/{MAX_SAVED}
+            </Text>
+          </View>
+          {game.saved.length === 0 ? (
+            <Text style={styles.dim}>{"Tap 💾 on the editor to save this bug's parts and moves. Load a saved build onto any bug later."}</Text>
+          ) : (
+            game.saved.map((b, i) => {
+              const ok = validateBuild(b.placements).length === 0;
+              const current = sameLoadout(b, placements, game.equipped);
+              return (
+                <View key={`${b.name}-${i}`} style={[styles.savedRow, current && { borderColor: Colors.accent }]}>
+                  <Pressable onPress={() => loadSaved(i)} style={{ flex: 1, gap: 2 }}>
+                    <Text style={styles.savedName} numberOfLines={1}>
+                      {b.name}
+                      {current ? <Text style={{ color: Colors.accent }}> · on this bug</Text> : null}
+                    </Text>
+                    <Text style={styles.dim} numberOfLines={1}>
+                      {b.placements.length} parts · {b.equipped.map((m) => getMove(m).name).join(', ') || 'no moves'}
+                      {ok ? '' : ' · unfinished'}
+                    </Text>
+                  </Pressable>
+                  {!current && <Button label="Load" size="sm" variant="secondary" onPress={() => loadSaved(i)} />}
+                  <Pressable
+                    accessibilityLabel="Remove saved build"
+                    onPress={() => {
+                      if (confirmSaved !== i) {
+                        setConfirmSaved(i);
+                        return;
+                      }
+                      game.deleteSaved(i);
+                      setConfirmSaved(null);
+                    }}
+                    style={[styles.iconBtn, confirmSaved === i && { borderColor: Colors.bad, backgroundColor: '#3A1A1D', paddingHorizontal: 10 }]}>
+                    <Text style={[styles.iconBtnText, confirmSaved === i && { color: Colors.bad, fontSize: 13, fontWeight: '800' }]}>
+                      {confirmSaved === i ? 'Remove?' : '✕'}
+                    </Text>
+                  </Pressable>
+                </View>
+              );
+            })
+          )}
         </View>
 
         <View style={styles.actions}>
@@ -723,6 +846,29 @@ const styles = StyleSheet.create({
   statusItems: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, flexShrink: 1 },
   statusItem: { fontSize: 12, fontWeight: '800', borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, overflow: 'hidden' },
   statusTip: { color: Colors.textDim, fontSize: 11, marginTop: 1 },
+  editorTools: { position: 'absolute', left: Spacing.sm, top: 48, gap: 8, zIndex: 3 },
+  toolBtn: {
+    width: 48,
+    paddingVertical: 5,
+    borderRadius: 12,
+    alignItems: 'center',
+    backgroundColor: 'rgba(15,18,24,0.85)',
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+  },
+  toolBtnText: { color: Colors.text, fontSize: 20, lineHeight: 24 },
+  toolBtnLabel: { color: Colors.textDim, fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+  savedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    backgroundColor: Colors.panel,
+  },
+  savedName: { color: Colors.text, fontSize: 15, fontWeight: '800' },
   editorOverlay: { ...StyleSheet.absoluteFill, justifyContent: 'space-between', alignItems: 'center', paddingVertical: Spacing.sm },
   views: { flexDirection: 'row', gap: 6 },
   viewBtn: {

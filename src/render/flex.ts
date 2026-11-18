@@ -61,6 +61,12 @@ const tmpA = new THREE.Vector3();
 const tmpQ = new THREE.Quaternion();
 
 export class FlexRig {
+  /**
+   * Lowest a part may sag below its rest height (world units). The renderer
+   * raises this near the ground so landings bounce parts up but never sink
+   * them into the floor.
+   */
+  floor = -Infinity;
   private nodes: Node[] = [];
   /** Parents before children. */
   private order: number[] = [];
@@ -160,6 +166,13 @@ export class FlexRig {
       const p = n.parent >= 0 ? this.nodes[n.parent] : null;
       if (p?.active) n.disp.addScaledVector(p.disp, CARRY);
       if (n.disp.length() > MAX_DISP) n.disp.setLength(MAX_DISP);
+      if (n.disp.y < this.floor) {
+        n.disp.y = this.floor;
+        if (n.off.y < this.floor) {
+          n.off.y = this.floor;
+          if (n.vel.y < 0) n.vel.y = 0;
+        }
+      }
 
       n.root.position.copy(n.rest).add(n.disp);
       // Lean the part into its sway.

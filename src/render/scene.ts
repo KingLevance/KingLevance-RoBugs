@@ -550,11 +550,15 @@ export class ArenaRenderer {
         const ry = v.pose.rotation.y;
         v.pose.rotation.y = (((ry + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
         v.pose.rotation.y *= 0.7;
-        // Nose down when diving, up when climbing.
-        const tilt = bug.alt > 2 ? THREE.MathUtils.clamp(bug.vAlt / 260, -0.35, 0.3) : 0;
-        v.pose.rotation.x += (tilt - v.pose.rotation.x) * 0.2;
+        // Nose down when diving, up when climbing, levelling out on the way down to land.
+        const high = THREE.MathUtils.clamp((bug.alt - 2) / 26, 0, 1);
+        const tilt = THREE.MathUtils.clamp(bug.vAlt / 260, -0.35, 0.3) * high;
+        v.pose.rotation.x += (tilt - v.pose.rotation.x) * (high < 1 ? 0.35 : 0.2);
+        // While pitched, lift the body so the dipping end (the pivot is mid-body) can't sink into the floor.
+        const clear = Math.abs(Math.sin(v.pose.rotation.x)) * (bug.radius / CELL) * 0.9;
         const bob = bug.dead ? 0 : Math.abs(Math.sin(v.walk)) * 0.05 * speed + Math.sin(t * 2.2 + bi) * 0.012;
-        v.pose.position.y += (bob - v.pose.position.y) * 0.3;
+        v.pose.position.y += (bob + clear - v.pose.position.y) * 0.3;
+        v.pose.position.y = Math.max(v.pose.position.y, clear);
       }
       // Bend the spine (turning lag, walking sway and ripple), then the spring joints on top,
       // then re-seat the struts between the swaying parts.
@@ -566,6 +570,8 @@ export class ArenaRenderer {
         this.tmpV.set(b.x, pv.rest.y + b.lift, b.z);
         v.rig.setPose(pv.flex, this.tmpV, b.yaw, b.pitch);
       }
+      // Near the floor, parts can bounce up but not sag into it (e.g. on landing).
+      v.rig.floor = bug.alt < 10 ? -0.03 : -Infinity;
       v.rig.update(dt);
       for (const l of v.links) {
         l.c.obj.visible = l.a.attached && l.b.attached && v.ghost > 0.9;

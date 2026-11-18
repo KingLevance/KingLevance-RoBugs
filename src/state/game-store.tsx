@@ -28,6 +28,8 @@ export type SavedBug = Build & { equipped: MoveId[] };
 
 /** Most bugs you can keep in the garage. */
 export const MAX_BUGS = 6;
+/** Most saved build configurations. */
+export const MAX_SAVED = 12;
 
 export type SaveData = {
   inventory: Record<string, number>;
@@ -45,6 +47,8 @@ export type SaveData = {
   cleared: string[];
   /** Best stars earned on each opponent (1–3). */
   stars: Record<string, number>;
+  /** Saved build configurations (parts + equipped moves) to load onto any bug. */
+  saved: SavedBug[];
   /** Opponent selected on the campaign map. */
   selected: string;
   lastResult: LastResult | null;
@@ -60,6 +64,7 @@ const FRESH: SaveData = {
   losses: 0,
   cleared: [],
   stars: {},
+  saved: [],
   selected: OPPONENTS[0].id,
   lastResult: null,
 };
@@ -94,6 +99,11 @@ type GameStore = SaveData & {
   setPlacements: (placements: Placement[]) => void;
   setBugName: (name: string) => void;
   toggleEquip: (id: MoveId) => void;
+  /** Replace the active bug's parts and moves at once (undo, loading a saved build). */
+  setLoadout: (placements: Placement[], equipped: MoveId[]) => void;
+  /** Save the active bug's configuration under a name. Returns false if the list is full. */
+  saveBuild: (name: string) => boolean;
+  deleteSaved: (index: number) => void;
   /** Switch which bug you're editing / leading. */
   selectBug: (index: number) => void;
   /** Add a bug: an empty frame, or a copy of an existing one. Returns false if the garage is full. */
@@ -162,6 +172,16 @@ export function GameProvider({ children }: { children: ReactNode }) {
       equipped: bug.equipped,
       setPlacements: (placements) => edit((b) => ({ ...b, placements })),
       setBugName: (name) => edit((b) => ({ ...b, name })),
+      setLoadout: (placements, equipped) => edit((b) => ({ ...b, placements, equipped })),
+      saveBuild: (name) => {
+        if ((data.saved ?? []).length >= MAX_SAVED) return false;
+        update((d) => {
+          const b = d.bugs[d.active];
+          return { ...d, saved: [...(d.saved ?? []), { name, placements: [...b.placements], equipped: [...b.equipped] }] };
+        });
+        return true;
+      },
+      deleteSaved: (index) => update((d) => ({ ...d, saved: (d.saved ?? []).filter((_, i) => i !== index) })),
       toggleEquip: (id) =>
         edit((b) => {
           if (b.equipped.includes(id)) return { ...b, equipped: b.equipped.filter((m) => m !== id) };

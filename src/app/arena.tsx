@@ -152,7 +152,7 @@ export default function Arena() {
   function onContextCreate(gl: ExpoWebGLRenderingContext) {
     const renderer = new ArenaRenderer(gl, sim);
     // Dev-only hook so browser tests can inspect the sim.
-    if (__DEV__ && Platform.OS === 'web') (globalThis as { __robugsSim?: unknown }).__robugsSim = sim;
+    if (__DEV__ && Platform.OS === 'web') Object.assign(globalThis, { __robugsSim: sim, __robugsRenderer: renderer });
     loop.current.renderer = renderer;
     let last = performance.now();
     let acc = 0;
