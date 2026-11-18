@@ -64,6 +64,7 @@ function mapLayout(w: number) {
   });
   const h = line;
   return {
+    w,
     h,
     pos: (o: Opponent) => ({ x: o.map.x * w, y: h - (up.get(o.id) ?? 0) }),
     /** Bands from the top of the map: `top`..`line` (its boundary line at the bottom). */
@@ -71,29 +72,66 @@ function mapLayout(w: number) {
   };
 }
 
-function Link({ a, b, lit }: { a: { x: number; y: number }; b: { x: number; y: number }; lit: boolean }) {
-  const { x: x1, y: y1 } = a;
-  const { x: x2, y: y2 } = b;
-  const len = Math.hypot(x2 - x1, y2 - y1);
-  const angle = Math.atan2(y2 - y1, x2 - x1);
-  const dots = Math.max(2, Math.floor(len / 14));
+/** Node size on the map. */
+const nodeSize = (o: Opponent) => (o.optional ? 68 : o.boss ? 82 : 66);
+
+/** A screen-space box that path dots must stay out of. */
+type Box = { x0: number; y0: number; x1: number; y1: number };
+
+/**
+ * Everything a path must not cross: each fight's circle, its crown/skull and
+ * badges, and (when shown) its name + stars label. Sizes are generous estimates.
+ */
+function keepOut(layout: ReturnType<typeof mapLayout>, labelled: (o: Opponent) => { name: boolean; stars: boolean }): Box[] {
+  const boxes: Box[] = [];
+  for (const o of OPPONENTS) {
+    const { x, y } = layout.pos(o);
+    const r = nodeSize(o) / 2 + 4;
+    boxes.push({ x0: x - r, y0: y - r - (o.boss ? 20 : 0), x1: x + r, y1: y + r });
+    const l = labelled(o);
+    if (l.name) {
+      const w = Math.min(130, o.name.length * 7.6 + 18) / 2;
+      boxes.push({ x0: x - w, y0: y + r - 2, x1: x + w, y1: y + r + (l.stars ? 36 : 22) });
+    }
+  }
+  // Zone name chips, centred on their boundary lines.
+  for (const z of layout.zones) {
+    const w = (z.name.length * 9 + 80) / 2;
+    boxes.push({ x0: layout.w / 2 - w, y0: z.line - 13, x1: layout.w / 2 + w, y1: z.line + 13 });
+  }
+  return boxes;
+}
+
+/** A dotted path between two fights, skipping any dot that would land on a box. */
+function Link({ a, b, lit, avoid }: { a: { x: number; y: number }; b: { x: number; y: number }; lit: boolean; avoid: Box[] }) {
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  const n = Math.max(2, Math.floor(len / 14));
+  const size = lit ? 7 : 5;
+  const dots: { x: number; y: number }[] = [];
+  for (let i = 1; i < n; i++) {
+    const x = a.x + ((b.x - a.x) * i) / n;
+    const y = a.y + ((b.y - a.y) * i) / n;
+    if (avoid.some((k) => x > k.x0 - 3 && x < k.x1 + 3 && y > k.y0 - 3 && y < k.y1 + 3)) continue;
+    dots.push({ x, y });
+  }
   return (
-    <View
-      style={{
-        position: 'absolute',
-        left: (x1 + x2) / 2 - len / 2,
-        top: (y1 + y2) / 2 - 4,
-        width: len,
-        height: 8,
-        flexDirection: 'row',
-        justifyContent: 'space-evenly',
-        alignItems: 'center',
-        transform: [{ rotate: `${angle}rad` }],
-      }}>
-      {Array.from({ length: dots }).map((_, i) => (
-        <View key={i} style={{ width: lit ? 7 : 5, height: lit ? 7 : 5, borderRadius: 4, backgroundColor: lit ? Colors.accent : Colors.border }} />
+    <>
+      {dots.map((d, i) => (
+        <View
+          key={i}
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            left: d.x - size / 2,
+            top: d.y - size / 2,
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            backgroundColor: lit ? Colors.accent : Colors.border,
+          }}
+        />
       ))}
-    </View>
+    </>
   );
 }
 
@@ -104,6 +142,7 @@ export default function Campaign() {
   const mapW = Math.min(width, MaxContentWidth) - Spacing.lg * 2;
   const layout = mapLayout(mapW);
   const mapH = layout.h;
+  const avoid = keepOut(layout, (o) => ({ name: isUnlocked(o, game.cleared, game.stars), stars: game.cleared.includes(o.id) }));
   const sel = getOpponent(game.selected);
   const errors = validateBuild(game.build.placements);
   const selUnlocked = isUnlocked(sel, game.cleared, game.stars);
@@ -164,7 +203,7 @@ export default function Campaign() {
           })}
           {OPPONENTS.flatMap((o) =>
             o.unlockedBy.map((from) => (
-              <Link key={`${from}-${o.id}`} a={layout.pos(getOpponent(from))} b={layout.pos(o)} lit={game.cleared.includes(from)} />
+              <Link key={`${from}-${o.id}`} a={layout.pos(getOpponent(from))} b={layout.pos(o)} lit={game.cleared.includes(from)} avoid={avoid} />
             )),
           )}
           {OPPONENTS.map((o) => {
@@ -173,7 +212,7 @@ export default function Campaign() {
             const starLocked = !unlocked && pathOpen(o, game.cleared) && gate && !gate.met;
             const cleared = game.cleared.includes(o.id);
             const selected = o.id === sel.id;
-            const node = o.optional ? 68 : o.boss ? 82 : 66;
+            const node = nodeSize(o);
             const ring = selected ? Colors.accent : cleared ? Colors.good : o.optional ? OPTIONAL : o.boss ? Colors.bad : Colors.border;
             const team = fightSize(o);
             return (
