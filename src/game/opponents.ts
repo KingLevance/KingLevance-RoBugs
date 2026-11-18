@@ -45,8 +45,8 @@ export type Opponent = {
   allies?: string[];
   /** An optional side boss off the main path. */
   optional?: boolean;
-  /** Map position, 0..1 in both axes (y = 0 is the top of the map). */
-  map: { x: number; y: number };
+  /** Map position: x across (0..1) and the row within its zone (0 = the zone's entry, counting up). */
+  map: { x: number; row: number };
 };
 
 /** Another bug in a team fight. */
@@ -123,7 +123,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('carapace-lock'), part('armor-ceramic')],
     lootTable: tierTable('uncommon'),
     unlockedBy: [],
-    map: { x: 0.5, y: 0.94 },
+    map: { x: 0.5, row: 0 },
   },
   {
     id: 'needlewisp',
@@ -137,7 +137,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [part('sting-dart'), move('venom-barrage')],
     lootTable: [...tierTable('uncommon'), { reward: part('wings-foil'), weight: 40 }],
     unlockedBy: ['rustmite'],
-    map: { x: 0.25, y: 0.895 },
+    map: { x: 0.25, row: 1 },
   },
   {
     id: 'snapclaw',
@@ -151,7 +151,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('skitter-dash'), part('legs-strider'), part('legs-strider')],
     lootTable: tierTable('rare'),
     unlockedBy: ['rustmite'],
-    map: { x: 0.75, y: 0.895 },
+    map: { x: 0.75, row: 1 },
   },
   {
     id: 'scrapjaw',
@@ -166,7 +166,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('overclock'), part('head-octo'), part('core-cell')],
     lootTable: [...tierTable('rare'), { reward: part('head-octo'), weight: 20 }, { reward: part('core-cell'), weight: 20 }],
     unlockedBy: ['snapclaw'],
-    map: { x: 0.86, y: 0.83 },
+    map: { x: 0.8, row: 2 },
   },
   {
     id: 'ironback',
@@ -186,7 +186,7 @@ export const OPPONENTS: Opponent[] = [
       { reward: part('pinc-vise'), weight: 8 },
     ],
     unlockedBy: ['needlewisp', 'snapclaw'],
-    map: { x: 0.5, y: 0.825 },
+    map: { x: 0.42, row: 2 },
   },
 
   // ── The Undergrowth ────────────────────────────────────────────
@@ -202,7 +202,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('web-snare'), part('abdomen-spinner'), part('legs-weaver'), part('legs-weaver')],
     lootTable: [...tierTable('rare'), { reward: part('legs-weaver'), weight: 25 }, { reward: part('abdomen-spinner'), weight: 15 }],
     unlockedBy: ['ironback'],
-    map: { x: 0.5, y: 0.745 },
+    map: { x: 0.5, row: 0 },
   },
   {
     id: 'lattice',
@@ -217,7 +217,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [part('legs-weaver'), part('legs-weaver'), part('armor-aegis'), part('mand-shear')],
     lootTable: [...tierTable('epic'), { reward: part('legs-weaver'), weight: 30 }, { reward: part('head-octo'), weight: 20 }, { reward: part('abdomen-spinner'), weight: 15 }],
     unlockedBy: ['silkjaw'],
-    map: { x: 0.14, y: 0.7 },
+    map: { x: 0.17, row: 0 },
   },
   {
     id: 'gravelgrub',
@@ -231,7 +231,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('burrow-strike'), part('pinc-digger'), part('pinc-digger')],
     lootTable: [...tierTable('rare'), { reward: part('pinc-digger'), weight: 25 }],
     unlockedBy: ['silkjaw'],
-    map: { x: 0.28, y: 0.665 },
+    map: { x: 0.2, row: 1 },
   },
   {
     id: 'arcfly',
@@ -245,7 +245,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('static-burst'), move('gale-flap'), part('horn-shock'), part('wings-foil'), part('wings-foil')],
     lootTable: [...tierTable('rare'), { reward: part('horn-shock'), weight: 20 }, { reward: part('wings-foil'), weight: 30 }],
     unlockedBy: ['silkjaw'],
-    map: { x: 0.72, y: 0.665 },
+    map: { x: 0.8, row: 1 },
   },
   {
     id: 'bloodgnat',
@@ -259,7 +259,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('blood-siphon'), part('mand-proboscis')],
     lootTable: [...tierTable('rare'), { reward: part('mand-proboscis'), weight: 20 }, { reward: part('wings-glass'), weight: 6 }],
     unlockedBy: ['silkjaw'],
-    map: { x: 0.5, y: 0.665 },
+    map: { x: 0.5, row: 1 },
   },
   {
     id: 'vexa',
@@ -280,7 +280,7 @@ export const OPPONENTS: Opponent[] = [
       { reward: move('mandible-crusher'), weight: 4 },
     ],
     unlockedBy: ['gravelgrub', 'arcfly', 'bloodgnat'],
-    map: { x: 0.5, y: 0.585 },
+    map: { x: 0.5, row: 2 },
   },
 
   // ── The Deep Hive (team fights) ────────────────────────────────
@@ -298,7 +298,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [part('legs-crawler'), part('legs-crawler'), part('thorax-chitin')],
     lootTable: tierTable('rare'),
     unlockedBy: ['vexa'],
-    map: { x: 0.5, y: 0.505 },
+    map: { x: 0.5, row: 0 },
   },
   {
     id: 'glimmer',
@@ -312,7 +312,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('ghost-shell'), part('armor-mirage')],
     lootTable: [...tierTable('epic'), { reward: part('armor-mirage'), weight: 20 }],
     unlockedBy: ['twins'],
-    map: { x: 0.26, y: 0.425 },
+    map: { x: 0.27, row: 1 },
   },
   {
     id: 'nullshade',
@@ -327,7 +327,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [part('sting-lance'), part('armor-mirage'), part('head-visor')],
     lootTable: [...tierTable('epic'), { reward: part('armor-mirage'), weight: 20 }, { reward: part('sting-lance'), weight: 14 }, { reward: part('sting-laser'), weight: 14 }],
     unlockedBy: ['glimmer'],
-    map: { x: 0.14, y: 0.345 },
+    map: { x: 0.15, row: 2 },
   },
   {
     id: 'lenswing',
@@ -341,7 +341,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('sunder-beam'), part('sting-laser'), part('sensor-radar')],
     lootTable: [...tierTable('epic'), { reward: part('sting-laser'), weight: 18 }, { reward: part('sensor-radar'), weight: 14 }],
     unlockedBy: ['twins'],
-    map: { x: 0.74, y: 0.425 },
+    map: { x: 0.73, row: 1 },
   },
   {
     id: 'tunnelkings',
@@ -357,7 +357,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [part('abdomen-tank'), part('core-fusion')],
     lootTable: [...tierTable('epic'), { reward: part('pinc-digger'), weight: 15 }],
     unlockedBy: ['glimmer', 'lenswing'],
-    map: { x: 0.5, y: 0.345 },
+    map: { x: 0.5, row: 2 },
   },
   {
     id: 'hiveguard',
@@ -376,7 +376,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [part('horn-drill'), part('armor-aegis')],
     lootTable: [...tierTable('epic'), { reward: part('horn-drill'), weight: 10 }, { reward: part('sting-lance'), weight: 10 }],
     unlockedBy: ['tunnelkings'],
-    map: { x: 0.5, y: 0.255 },
+    map: { x: 0.5, row: 3 },
   },
   {
     id: 'kalyx',
@@ -403,7 +403,7 @@ export const OPPONENTS: Opponent[] = [
       { reward: part('wings-glass'), weight: 10 },
     ],
     unlockedBy: ['hiveguard'],
-    map: { x: 0.5, y: 0.15 },
+    map: { x: 0.5, row: 4 },
   },
 ];
 

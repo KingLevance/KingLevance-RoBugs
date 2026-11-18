@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import { useEffect, useRef, type ComponentRef } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -30,20 +30,50 @@ import { useGame } from '@/state/game-store';
 
 const ARENA_TINT = { pit: '#7CE654', foundry: '#FF8A3D', hive: '#F2C14E' } as const;
 const OPTIONAL = '#C77DFF';
-/** Map height as a multiple of its width (the map scrolls). */
-const MAP_ASPECT = 3.3;
-/** Campaign zones, as bands of the map (y from, y to). */
-const ZONES: { id: ZoneId; name: string; from: number; to: number; tint: string }[] = [
-  { id: 'hive', name: 'THE DEEP HIVE', from: 0.09, to: 0.545, tint: '#F2C14E' },
-  { id: 'undergrowth', name: 'THE UNDERGROWTH', from: 0.545, to: 0.785, tint: '#7CE654' },
-  { id: 'scrapyard', name: 'THE SCRAPYARD', from: 0.785, to: 1, tint: '#FF8A3D' },
-];
+const ZONE_TINT: Record<ZoneId, string> = { scrapyard: '#FF8A3D', undergrowth: '#7CE654', hive: '#F2C14E' };
+/**
+ * Map spacing, as fractions of the map's width. Zones stack bottom-up; each
+ * starts at a boundary line (its name chip sits on it, with no fights nearby),
+ * then its rows of fights.
+ */
+const GAP = {
+  /** Map bottom → first boundary line. */
+  bottom: 0.08,
+  /** Boundary line → a zone's first row (room for that row's labels and stars). */
+  entry: 0.27,
+  /** Row to row. */
+  row: 0.4,
+  /** A zone's top row → the next boundary line (room for a boss crown). */
+  top: 0.25,
+  /** Top row of the last zone → map top. */
+  topPad: 0.2,
+};
 
-function Link({ a, b, w, h, lit }: { a: Opponent; b: Opponent; w: number; h: number; lit: boolean }) {
-  const x1 = a.map.x * w;
-  const y1 = a.map.y * h;
-  const x2 = b.map.x * w;
-  const y2 = b.map.y * h;
+/** Pixel positions of every fight and zone band for a map `w` wide. */
+function mapLayout(w: number) {
+  const up = new Map<string, number>();
+  const bands: { id: ZoneId; name: string; index: number; from: number; to: number }[] = [];
+  let line = GAP.bottom * w;
+  GAME_ZONES.forEach((z, i) => {
+    const rows = Math.max(...z.stops.map((id) => getOpponent(id).map.row));
+    for (const id of z.stops) up.set(id, line + (GAP.entry + getOpponent(id).map.row * GAP.row) * w);
+    const top = line + (GAP.entry + rows * GAP.row) * w;
+    const next = top + (i < GAME_ZONES.length - 1 ? GAP.top : GAP.topPad) * w;
+    bands.push({ id: z.id, name: z.name.toUpperCase(), index: i, from: line, to: next });
+    line = next;
+  });
+  const h = line;
+  return {
+    h,
+    pos: (o: Opponent) => ({ x: o.map.x * w, y: h - (up.get(o.id) ?? 0) }),
+    /** Bands from the top of the map: `top`..`line` (its boundary line at the bottom). */
+    zones: bands.map((b) => ({ ...b, top: h - b.to, line: h - b.from })),
+  };
+}
+
+function Link({ a, b, lit }: { a: { x: number; y: number }; b: { x: number; y: number }; lit: boolean }) {
+  const { x: x1, y: y1 } = a;
+  const { x: x2, y: y2 } = b;
   const len = Math.hypot(x2 - x1, y2 - y1);
   const angle = Math.atan2(y2 - y1, x2 - x1);
   const dots = Math.max(2, Math.floor(len / 14));
@@ -72,7 +102,8 @@ export default function Campaign() {
   useMusic('hub');
   const { width, height } = useWindowDimensions();
   const mapW = Math.min(width, MaxContentWidth) - Spacing.lg * 2;
-  const mapH = mapW * MAP_ASPECT;
+  const layout = mapLayout(mapW);
+  const mapH = layout.h;
   const sel = getOpponent(game.selected);
   const errors = validateBuild(game.build.placements);
   const selUnlocked = isUnlocked(sel, game.cleared, game.stars);
@@ -91,7 +122,7 @@ export default function Campaign() {
   );
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   // Open the map on the selected fight.
-  const startY = Math.max(0, sel.map.y * mapH - height * 0.22);
+  const startY = Math.max(0, layout.pos(sel).y - height * 0.22);
   useEffect(() => {
     const t = setTimeout(() => scroll.current?.scrollTo({ y: startY, animated: false }), 0);
     return () => clearTimeout(t);
@@ -101,32 +132,39 @@ export default function Campaign() {
 
   return (
     <SafeAreaView style={styles.root} edges={['bottom']}>
-      <View style={styles.totalBadge} pointerEvents="none">
-        <Text style={styles.total}>
-          <Text style={{ color: '#FFD23F' }}>★</Text> {totalStars}/{OPPONENTS.length * MAX_STARS}
-        </Text>
-      </View>
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <Text style={styles.total}>
+              <Text style={{ color: '#FFD23F' }}>★</Text> {totalStars}/{OPPONENTS.length * MAX_STARS}
+            </Text>
+          ),
+        }}
+      />
       <ScrollView ref={scroll} contentContainerStyle={styles.content} contentOffset={{ x: 0, y: startY }}>
         <View style={[styles.map, { width: mapW, height: mapH }]}>
-          {ZONES.map((z) => {
-            const gz = GAME_ZONES.findIndex((g) => g.id === z.id);
-            const prev = GAME_ZONES[gz - 1];
+          {layout.zones.map((z) => {
+            const tint = ZONE_TINT[z.id];
+            const prev = GAME_ZONES[z.index - 1];
             const have = prev ? prev.stops.reduce((a, id) => a + (game.stars[id] ?? 0), 0) : 0;
-            const need = GAME_ZONES[gz].starsToEnter;
+            const need = GAME_ZONES[z.index].starsToEnter;
             return (
-              <View key={z.name} style={[styles.zone, { top: z.from * mapH, height: (z.to - z.from) * mapH, borderTopColor: z.tint }]}>
-                <Text style={[styles.zoneName, { color: z.tint }]}>{z.name}</Text>
-                {prev && (
-                  <Text style={[styles.zoneGate, { color: have >= need ? Colors.good : '#FFD23F' }]}>
-                    {have >= need ? `✓ ★${need} TO ENTER` : `★${have}/${need} TO ENTER`}
-                  </Text>
-                )}
+              <View key={z.id} pointerEvents="none" style={[styles.zone, { top: z.top, height: z.line - z.top, backgroundColor: `${tint}08` }]}>
+                <View style={[styles.zoneLine, { backgroundColor: tint }]} />
+                <View style={[styles.zoneChip, { borderColor: tint }]}>
+                  <Text style={[styles.zoneName, { color: tint }]}>{z.name}</Text>
+                  {prev && (
+                    <Text style={[styles.zoneGate, { color: have >= need ? Colors.good : '#FFD23F' }]}>
+                      {have >= need ? '✓' : `★${have}/${need}`}
+                    </Text>
+                  )}
+                </View>
               </View>
             );
           })}
           {OPPONENTS.flatMap((o) =>
             o.unlockedBy.map((from) => (
-              <Link key={`${from}-${o.id}`} a={getOpponent(from)} b={o} w={mapW} h={mapH} lit={game.cleared.includes(from)} />
+              <Link key={`${from}-${o.id}`} a={layout.pos(getOpponent(from))} b={layout.pos(o)} lit={game.cleared.includes(from)} />
             )),
           )}
           {OPPONENTS.map((o) => {
@@ -148,8 +186,8 @@ export default function Campaign() {
                 style={[
                   styles.node,
                   {
-                    left: o.map.x * mapW - node / 2,
-                    top: o.map.y * mapH - node / 2,
+                    left: layout.pos(o).x - node / 2,
+                    top: layout.pos(o).y - node / 2,
                     width: node,
                     height: node,
                     borderRadius: node / 2,
@@ -182,12 +220,16 @@ export default function Campaign() {
                   </View>
                 )}
                 {o.boss && <Text style={[styles.crown, { left: node / 2 - 13 }]}>{o.optional ? '💀' : '👑'}</Text>}
-                <View style={[styles.nodeLabel, { left: (node - 130) / 2 }]}>
-                  <Text style={[styles.nodeLabelText, selected && { color: Colors.accent }]} numberOfLines={1}>
-                    {unlocked ? o.name : '???'}
-                  </Text>
-                  {cleared && <Stars n={game.stars[o.id] ?? 1} size={12} />}
-                </View>
+                {unlocked && (
+                  <View pointerEvents="none" style={[styles.nodeLabel, { left: (node - 130) / 2 }]}>
+                    <View style={styles.labelPill}>
+                      <Text style={[styles.nodeLabelText, selected && { color: Colors.accent }]} numberOfLines={1}>
+                        {o.name}
+                      </Text>
+                      {cleared && <Stars n={game.stars[o.id] ?? 1} size={12} />}
+                    </View>
+                  </View>
+                )}
               </Pressable>
             );
           })}
@@ -308,23 +350,25 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     overflow: 'hidden',
   },
-  totalBadge: {
-    position: 'absolute',
-    top: Spacing.sm,
-    right: Spacing.md,
-    zIndex: 5,
-    backgroundColor: 'rgba(10,14,20,0.85)',
-    borderColor: '#FFD23F',
-    borderWidth: 1.5,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-  },
-  total: { fontFamily: Fonts.display, fontSize: 18, color: Colors.text },
+  total: { fontFamily: Fonts.display, fontSize: 18, color: Colors.text, marginRight: Spacing.sm },
   goals: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5 },
   goal: { color: Colors.textDim, fontSize: 11, fontWeight: '800', borderWidth: 1, borderColor: Colors.border, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2, overflow: 'hidden' },
-  zone: { position: 'absolute', left: 0, right: 0, borderTopWidth: 2, opacity: 0.9 },
-  zoneName: { fontSize: 10, fontWeight: '900', letterSpacing: 2, margin: 10, opacity: 0.85 },
+  zone: { position: 'absolute', left: 0, right: 0 },
+  zoneLine: { position: 'absolute', left: 0, right: 0, bottom: -1, height: 2, opacity: 0.55 },
+  zoneChip: {
+    position: 'absolute',
+    bottom: -12,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    height: 24,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    backgroundColor: Colors.bgDeep,
+  },
+  zoneName: { fontSize: 10, fontWeight: '900', letterSpacing: 2 },
   node: {
     position: 'absolute',
     backgroundColor: Colors.panel,
@@ -335,7 +379,7 @@ const styles = StyleSheet.create({
   nodeInner: { ...StyleSheet.absoluteFill, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   lock: { fontSize: 20 },
   gateText: { fontFamily: Fonts.display, fontSize: 13, lineHeight: 17, color: '#FFD23F', textAlign: 'center' },
-  zoneGate: { fontSize: 10, fontWeight: '900', letterSpacing: 1, marginLeft: 10, marginTop: -6 },
+  zoneGate: { fontSize: 11, fontWeight: '900', letterSpacing: 0.5 },
   badge: {
     position: 'absolute',
     right: -4,
@@ -363,7 +407,9 @@ const styles = StyleSheet.create({
   },
   teamBadgeText: { color: Colors.bgDeep, fontFamily: Fonts.display, fontSize: 11 },
   crown: { position: 'absolute', top: -20, fontSize: 22 },
-  nodeLabel: { position: 'absolute', top: '100%', marginTop: 4, width: 130, alignItems: 'center', gap: 1 },
+  nodeLabel: { position: 'absolute', top: '100%', marginTop: 3, width: 130, alignItems: 'center' },
+  // A dark backing so the path dots pass behind names and stars.
+  labelPill: { alignItems: 'center', gap: 1, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 8, backgroundColor: 'rgba(11,13,17,0.82)', maxWidth: 130 },
   nodeLabelText: {
     color: Colors.text,
     fontFamily: Fonts.display,
