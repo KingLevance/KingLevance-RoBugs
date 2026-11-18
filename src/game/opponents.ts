@@ -123,7 +123,7 @@ export const OPPONENTS: Opponent[] = [
     guaranteed: [move('carapace-lock'), part('armor-ceramic')],
     lootTable: tierTable('uncommon'),
     unlockedBy: [],
-    map: { x: 0.5, y: 0.955 },
+    map: { x: 0.5, y: 0.94 },
   },
   {
     id: 'needlewisp',

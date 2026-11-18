@@ -29,7 +29,7 @@ RoBugs is an original 3D mobile game. You collect robotic bug parts, snap them o
 ## 1. Core loop
 
 ```
-Garage (build + equip moves) → Campaign map → 3D Arena (1v1 vs AI) → Rewards (guaranteed + rolled) → Garage …
+Garage (build + equip moves) → Campaign map → 3D Arena (1v1 vs AI) → Rewards (stars, guaranteed + rolled) → Garage …
 ```
 
 1. **Build** — place parts on a 5×7 grid. Your layout sets weight, speed, handling, armor and attacks.
@@ -189,8 +189,20 @@ The campaign (`src/game/opponents.ts`) is a scrolling map of 18 stops in three z
 
 Each opponent has:
 - `guaranteed: Reward[]` — given **once**, on first clear (parts or moves).
-- `lootTable: { reward, weight }[]` — **weighted rolls, repeatable.** Normal opponents roll once per win. **Bosses** (`boss: true`) roll 3 times per win and can be farmed; their tables include their **signature parts and moves** at low weight.
+- `lootTable: { reward, weight }[]` — **weighted rolls, repeatable.** Normal opponents roll 2 times per win. **Bosses** (`boss: true`) roll 3 times per win and can be farmed; their tables include their **signature parts and moves** at low weight.
 - A loss gives one common salvage part. **Forfeiting gives nothing.**
+
+**Stars** (`src/game/stars.ts`): every win is rated 1–3 stars, one per challenge met:
+1. Win.
+2. Finish with at least 50% of your side's total integrity.
+3. Win fast: under 45s (normal), 60s (boss) or 70s (team fight).
+
+The best rating per stop is saved (`SaveData.stars`) and shown under each node on the map, with a total (★ n / 54). Stars shape the loot (`weighByStars` in `rewards.ts`):
+- At 1 star the table is unchanged. Each star past the first makes rare and epic drops more likely and common drops less likely.
+- A 3-star win adds one extra roll.
+- The **first** 3-star win on a stop adds a one-off bonus roll that is always rare or better.
+
+The first-clear reward stays fixed whatever the rating. Old saves count each cleared stop as 1 star. `npm test` reports the star spread per stop: the auto-player currently earns 3 stars on roughly half its wins. *(Assumption: challenge thresholds and loot scaling are first-pass numbers.)*
 
 A `Reward` is `{ kind: 'part' | 'move', id }`.
 

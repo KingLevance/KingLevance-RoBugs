@@ -4,12 +4,14 @@ import { Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, Vi
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BUG_PORTRAITS } from '@/components/bug-portraits';
+import { Stars } from '@/components/stars';
 import { RewardChip } from '@/components/reward-chip';
 import { Button, Label, Pill } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { validateBuild } from '@/game/build';
 import { getMove } from '@/game/moves';
 import { alliesFor, allySlots, ARENA_NAMES, fightSize, getOpponent, isUnlocked, OPPONENTS, type Opponent } from '@/game/opponents';
+import { MAX_STARS, starGoals } from '@/game/stars';
 import { useGame } from '@/state/game-store';
 
 const ARENA_TINT = { pit: '#7CE654', foundry: '#FF8A3D', hive: '#F2C14E' } as const;
@@ -61,6 +63,8 @@ export default function Campaign() {
   const selUnlocked = isUnlocked(sel, game.cleared);
   const firstClear = !game.cleared.includes(sel.id);
   const size = fightSize(sel);
+  const totalStars = OPPONENTS.reduce((a, o) => a + (game.stars[o.id] ?? 0), 0);
+  const best = game.stars[sel.id] ?? 0;
   // Team fights: your squad bugs (valid ones, in order), then borrowed opponents for any gaps.
   const slots = allySlots(sel);
   const readySquad = game.squad.filter((i) => game.bugs[i] && validateBuild(game.bugs[i].placements).length === 0);
@@ -80,6 +84,11 @@ export default function Campaign() {
 
   return (
     <SafeAreaView style={styles.root} edges={['bottom']}>
+      <View style={styles.totalBadge} pointerEvents="none">
+        <Text style={styles.total}>
+          <Text style={{ color: '#FFD23F' }}>★</Text> {totalStars}/{OPPONENTS.length * MAX_STARS}
+        </Text>
+      </View>
       <ScrollView ref={scroll} contentContainerStyle={styles.content} contentOffset={{ x: 0, y: startY }}>
         <View style={[styles.map, { width: mapW, height: mapH }]}>
           {ZONES.map((z) => (
@@ -139,6 +148,7 @@ export default function Campaign() {
                   <Text style={[styles.nodeLabelText, selected && { color: Colors.accent }]} numberOfLines={1}>
                     {unlocked ? o.name : '???'}
                   </Text>
+                  {cleared && <Stars n={game.stars[o.id] ?? 1} size={12} />}
                 </View>
               </Pressable>
             );
@@ -203,6 +213,16 @@ export default function Campaign() {
             {game.bugs.length < 2 && <Text style={styles.dim}>Build more bugs in the Garage (＋ New bug) to bring your own squad.</Text>}
           </View>
         )}
+        {selUnlocked && (
+          <View style={styles.goals}>
+            <Stars n={best} size={16} />
+            {starGoals(sel).map((g, i) => (
+              <Text key={g} style={[styles.goal, i < best && { color: '#FFD23F', borderColor: '#FFD23F' }]}>
+                ★ {g}
+              </Text>
+            ))}
+          </View>
+        )}
         {selUnlocked && sel.moves.length > 0 && (
           <Text style={styles.dim} numberOfLines={1}>
             Moves: {sel.moves.map((m) => getMove(m).name).join(', ')}
@@ -210,7 +230,11 @@ export default function Campaign() {
         )}
         {selUnlocked && (
           <>
-            <Label>{firstClear ? 'FIRST-CLEAR REWARD (GUARANTEED)' : `FIRST CLEAR ✓ · EVERY WIN: ${sel.boss ? 3 : 2} LOOT ROLLS`}</Label>
+            <Label>
+              {firstClear
+                ? 'FIRST-CLEAR REWARD (GUARANTEED)'
+                : `EVERY WIN: ${sel.boss ? 3 : 2} LOOT ROLLS · MORE STARS = RARER${best < 3 ? ' · FIRST 3★: BONUS RARE' : ''}`}
+            </Label>
             {firstClear && (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
                 {sel.guaranteed.map((r, i) => (
@@ -242,6 +266,21 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     overflow: 'hidden',
   },
+  totalBadge: {
+    position: 'absolute',
+    top: Spacing.sm,
+    right: Spacing.md,
+    zIndex: 5,
+    backgroundColor: 'rgba(10,14,20,0.85)',
+    borderColor: '#FFD23F',
+    borderWidth: 1.5,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  total: { fontFamily: Fonts.display, fontSize: 18, color: Colors.text },
+  goals: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5 },
+  goal: { color: Colors.textDim, fontSize: 11, fontWeight: '800', borderWidth: 1, borderColor: Colors.border, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2, overflow: 'hidden' },
   zone: { position: 'absolute', left: 0, right: 0, borderTopWidth: 2, opacity: 0.9 },
   zoneName: { fontSize: 10, fontWeight: '900', letterSpacing: 2, margin: 10, opacity: 0.85 },
   node: {
@@ -280,7 +319,7 @@ const styles = StyleSheet.create({
   },
   teamBadgeText: { color: Colors.bgDeep, fontFamily: Fonts.display, fontSize: 11 },
   crown: { position: 'absolute', top: -20, fontSize: 22 },
-  nodeLabel: { position: 'absolute', bottom: -24, width: 130, alignItems: 'center' },
+  nodeLabel: { position: 'absolute', top: '100%', marginTop: 4, width: 130, alignItems: 'center', gap: 1 },
   nodeLabelText: {
     color: Colors.text,
     fontFamily: Fonts.display,

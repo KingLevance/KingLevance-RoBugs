@@ -11,7 +11,7 @@ import { GUIDE } from '@/game/guide';
 import { getMove, PROC } from '@/game/moves';
 import { alliesFor, getOpponent, lineup } from '@/game/opponents';
 import { validateBuild } from '@/game/build';
-import { aiInput, CELL, createTeamSim, forfeit, hud, MATCH_SECONDS, step, STEP, type HudBug } from '@/game/sim';
+import { aiInput, CELL, createTeamSim, forfeit, hud, MATCH_SECONDS, step, STEP, teamHp, type HudBug } from '@/game/sim';
 import { ArenaRenderer } from '@/render/scene';
 import { useGame } from '@/state/game-store';
 
@@ -252,7 +252,7 @@ export default function Arena() {
       if (frame % 3 === 0 || sim.over) setView(hud(sim));
       if (sim.over && !finished) {
         finished = true;
-        recordRef.current(opponent.id, sim.winner, sim.forfeited);
+        recordRef.current(opponent.id, sim.winner, sim.forfeited, { hp: teamHp(sim, 0), time: sim.time });
         loop.current.timer = setTimeout(() => router.replace('/rewards'), sim.forfeited ? 500 : 1600);
       }
       loop.current.raf = requestAnimationFrame(tick);

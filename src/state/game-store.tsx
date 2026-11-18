@@ -4,6 +4,7 @@ import type { Build, Placement } from '@/game/build';
 import { MOVE_SLOTS, type MoveId } from '@/game/moves';
 import { getOpponent, OPPONENTS, STARTER_BUILD, STARTER_INVENTORY, STARTER_MOVES } from '@/game/opponents';
 import { rollMatchRewards, type MatchRewards } from '@/game/rewards';
+import { rateWin, type StarCheck } from '@/game/stars';
 
 import { loadString, saveString } from './storage';
 
@@ -15,6 +16,11 @@ export type LastResult = {
   forfeited: boolean;
   firstClear: boolean;
   rewards: MatchRewards;
+  /** Stars earned this fight (0 on a loss) and which challenges were met. */
+  stars: number;
+  checks: StarCheck[];
+  /** Stars on this fight before this result. */
+  prevBest: number;
 };
 
 /** One bug in your garage: its build and the moves it has equipped. */
@@ -37,6 +43,8 @@ export type SaveData = {
   losses: number;
   /** Opponent ids beaten at least once. */
   cleared: string[];
+  /** Best stars earned on each opponent (1–3). */
+  stars: Record<string, number>;
   /** Opponent selected on the campaign map. */
   selected: string;
   lastResult: LastResult | null;
@@ -51,6 +59,7 @@ const FRESH: SaveData = {
   wins: 0,
   losses: 0,
   cleared: [],
+  stars: {},
   selected: OPPONENTS[0].id,
   lastResult: null,
 };
@@ -64,7 +73,9 @@ function load(): SaveData {
     const bugs = saved.bugs?.length ? saved.bugs : saved.build ? [{ ...saved.build, equipped: saved.equipped ?? [] }] : FRESH.bugs;
     const { build: _b, equipped: _e, ...rest } = saved;
     const active = Math.min(Math.max(0, rest.active ?? 0), bugs.length - 1);
-    return { ...FRESH, ...rest, bugs, active, squad: (rest.squad ?? []).filter((i) => i < bugs.length && i !== active) };
+    // Clears from before stars existed count as 1 star.
+    const stars = { ...Object.fromEntries((rest.cleared ?? []).map((id) => [id, 1])), ...(rest.stars ?? {}) };
+    return { ...FRESH, ...rest, stars, bugs, active, squad: (rest.squad ?? []).filter((i) => i < bugs.length && i !== active) };
   } catch {
     return FRESH;
   }
@@ -91,7 +102,7 @@ type GameStore = SaveData & {
   /** Add or remove a bug from your team-fight squad. */
   toggleSquad: (index: number) => void;
   /** Records a match result, grants rewards and stores them as `lastResult`. */
-  recordResult: (opponentId: string, winner: 0 | 1 | null, forfeited?: boolean) => void;
+  recordResult: (opponentId: string, winner: 0 | 1 | null, forfeited?: boolean, perf?: { hp: number; time: number }) => void;
   selectOpponent: (id: string) => void;
   resetSave: () => void;
 };
@@ -110,15 +121,18 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const recordResult = useCallback(
-    (opponentId: string, winner: 0 | 1 | null, forfeited = false) => {
+    (opponentId: string, winner: 0 | 1 | null, forfeited = false, perf = { hp: 0, time: Infinity }) => {
       const opp = getOpponent(opponentId);
-      const won = winner === 0;
+      const won = winner === 0 && !forfeited;
       const firstClear = won && !data.cleared.includes(opponentId);
-      const rewards = rollMatchRewards(opp, won, firstClear, forfeited);
+      const rating = won ? rateWin(opp, perf.hp, perf.time) : { stars: 0, checks: [] };
+      // A save from before stars counts an old clear as 1 star.
+      const prevBest = data.stars?.[opponentId] ?? (data.cleared.includes(opponentId) ? 1 : 0);
+      const rewards = rollMatchRewards(opp, won, firstClear, forfeited, Math.random, rating.stars, rating.stars >= 3 && prevBest < 3);
       update((d) => {
         const inventory = { ...d.inventory };
         const moves = [...d.moves];
-        for (const r of [...rewards.guaranteed, ...rewards.rolled]) {
+        for (const r of [...rewards.guaranteed, ...rewards.rolled, ...rewards.bonus]) {
           if (r.kind === 'part') inventory[r.id] = (inventory[r.id] ?? 0) + 1;
           else if (!moves.includes(r.id as MoveId)) moves.push(r.id as MoveId);
         }
@@ -129,11 +143,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
           wins: d.wins + (won ? 1 : 0),
           losses: d.losses + (winner === 1 ? 1 : 0),
           cleared: won && !d.cleared.includes(opponentId) ? [...d.cleared, opponentId] : d.cleared,
-          lastResult: { opponentId, winner, forfeited, firstClear, rewards },
+          stars: won ? { ...d.stars, [opponentId]: Math.max(prevBest, rating.stars) } : d.stars,
+          lastResult: { opponentId, winner, forfeited, firstClear, rewards, stars: rating.stars, checks: rating.checks, prevBest },
         };
       });
     },
-    [data.cleared, update],
+    [data.cleared, data.stars, update],
   );
 
   const value = useMemo<GameStore>(() => {

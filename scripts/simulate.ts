@@ -10,7 +10,8 @@ import { getMove, meetsRequirement, MOVE_SLOTS, type MoveId } from '../src/game/
 import { fightSize, lineup, OPPONENTS, STARTER_BUILD, STARTER_INVENTORY, STARTER_MOVES, type Opponent } from '../src/game/opponents';
 import { getPart } from '../src/game/parts';
 import { rollMatchRewards } from '../src/game/rewards';
-import { aiInput, createTeamSim, step, STEP, type Fighter } from '../src/game/sim';
+import { rateWin } from '../src/game/stars';
+import { aiInput, createTeamSim, step, STEP, teamHp, type Fighter } from '../src/game/sim';
 
 const builds: Build[] = [STARTER_BUILD, ...OPPONENTS.flatMap((o) => [o.build, ...(o.team ?? []).map((t) => t.build)])];
 for (const b of builds) {
@@ -47,6 +48,7 @@ function run(opp: Opponent, player: Fighter, seed: number) {
   return {
     winner: sim.winner,
     time: sim.time,
+    hpLeft: teamHp(sim, 0),
     solo,
     casts: sim.events.filter((e) => (e.type === 'ult-release' || e.type === 'move') && e.bug === 0).length,
     crits: hits.filter((e) => e.type === 'hit' && e.crit).length,
@@ -96,9 +98,13 @@ for (const opp of OPPONENTS) {
   let casts = 0;
   let crits = 0;
   let hits = 0;
+  const stars = [0, 0, 0];
   for (let k = 0; k < N; k++) {
     const r = run(opp, player, k * 7919 + 1);
-    if (r.winner === 0) w++;
+    if (r.winner === 0) {
+      w++;
+      stars[rateWin(opp, r.hpLeft, r.time).stars - 1]++;
+    }
     else if (r.winner === 1) l++;
     t += r.time;
     casts += r.casts;
@@ -112,6 +118,7 @@ for (const opp of OPPONENTS) {
     fightSize(opp),
     `W${String(w).padStart(2)} L${String(l).padStart(2)} D${N - w - l}`.padEnd(12),
     `avg ${(t / N).toFixed(0).padStart(2)}s`,
+    `★1/2/3 ${stars.join('/')}`.padEnd(14),
     `moves/match ${(casts / N).toFixed(1)}`,
     `crits ${((crits / Math.max(1, hits)) * 100).toFixed(0)}%`,
     `| player hp ${s.totalHp} dps ${s.dps.toFixed(0)} [${player.moves.join(', ')}]`,
@@ -120,7 +127,7 @@ for (const opp of OPPONENTS) {
   // Clear it: guaranteed drops plus the rolls from a couple of wins.
   for (const first of [true, false]) {
     const rewards = rollMatchRewards(opp, true, first, false, rng);
-    for (const r of [...rewards.guaranteed, ...rewards.rolled]) {
+    for (const r of [...rewards.guaranteed, ...rewards.rolled, ...rewards.bonus]) {
       if (r.kind === 'part') inventory[r.id] = (inventory[r.id] ?? 0) + 1;
       else if (!owned.includes(r.id as MoveId)) owned.push(r.id as MoveId);
     }

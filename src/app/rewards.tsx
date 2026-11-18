@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BUG_PORTRAITS } from '@/components/bug-portraits';
 import { RewardChip } from '@/components/reward-chip';
+import { Stars } from '@/components/stars';
 import { Button, Label, Panel } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { getOpponent } from '@/game/opponents';
@@ -45,6 +46,19 @@ export default function Rewards() {
           {title}
         </Animated.Text>
         <Text style={styles.vs}>vs {opp.name}</Text>
+        {won && (r.stars ?? 0) > 0 && (
+          <View style={{ alignItems: 'center', gap: 6, marginTop: 4 }}>
+            <Stars n={r.stars} size={46} animate />
+            <View style={styles.checks}>
+              {(r.checks ?? []).map((c) => (
+                <Text key={c.label} style={[styles.check, c.ok ? styles.checkOk : styles.checkMiss]}>
+                  {c.ok ? '★' : '☆'} {c.label}
+                </Text>
+              ))}
+            </View>
+            {r.stars > (r.prevBest ?? 0) && r.prevBest > 0 && <Text style={styles.newBest}>NEW BEST!</Text>}
+          </View>
+        )}
       </View>
       <Text style={styles.dim}>
         {won
@@ -63,9 +77,20 @@ export default function Rewards() {
         </Panel>
       )}
 
+      {(r.rewards.bonus?.length ?? 0) > 0 && (
+        <Panel style={{ gap: Spacing.sm, borderColor: '#FFD23F' }}>
+          <Label color="#FFD23F">FIRST ★★★ BONUS · RARE OR BETTER</Label>
+          {r.rewards.bonus.map((rw, i) => (
+            <RewardChip key={i} reward={rw} />
+          ))}
+        </Panel>
+      )}
+
       {r.rewards.rolled.length > 0 && (
         <Panel style={{ gap: Spacing.sm }}>
-          <Label>{won ? (opp.boss ? 'BOSS LOOT ROLLS' : 'LOOT ROLLS') : 'SALVAGE'}</Label>
+          <Label>
+            {won ? `${opp.boss ? 'BOSS LOOT ROLLS' : 'LOOT ROLLS'}${(r.stars ?? 1) > 1 ? ` · ${'★'.repeat(r.stars)} LUCK` : ''}` : 'SALVAGE'}
+          </Label>
           {r.rewards.rolled.map((rw, i) => (
             <RewardChip key={i} reward={rw} />
           ))}
@@ -101,5 +126,10 @@ const styles = StyleSheet.create({
   title: { fontFamily: Fonts.display, fontSize: 56, textAlign: 'center', letterSpacing: 1, textShadowColor: 'rgba(0,0,0,0.6)', textShadowRadius: 10, textShadowOffset: { width: 0, height: 4 } },
   vs: { fontFamily: Fonts.display, fontSize: 18, color: Colors.textDim },
   dim: { color: Colors.textDim, fontSize: 14, textAlign: 'center' },
+  checks: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6 },
+  check: { fontSize: 12, fontWeight: '800', borderWidth: 1.5, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3, overflow: 'hidden' },
+  checkOk: { color: '#FFD23F', borderColor: '#FFD23F' },
+  checkMiss: { color: Colors.textDim, borderColor: Colors.border },
+  newBest: { fontFamily: Fonts.display, color: '#FFD23F', fontSize: 16, letterSpacing: 1 },
   actions: { flexDirection: 'row', gap: Spacing.sm },
 });
