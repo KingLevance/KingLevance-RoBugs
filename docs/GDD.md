@@ -159,6 +159,11 @@ Moves are unlocked like parts (from drops) and **equipped** in the Garage. There
 - **Blood Siphon** (Siphon Proboscis): latches on for 2.4 s, draining 9 damage every 0.3 s from the nearest enemy part while in reach and pouring all of it back into its own most-damaged parts. The AI won't break off mid-drink.
 - **Gale Flap** (wings): hurls nearby enemies back (lighter ones further) and drains flyers' wing stamina so they drop.
 
+**Scorpion kit** (won from Barbtail in the Deep Hive):
+- **Barbed Tail** (stinger slot, melee): arcs over the bug's own body, so it's mounted at the back. Very long reach (76), 22 damage, slow (1.3 s). Unlocks **Skewer**.
+- **Gripper Claws** (pincers): 15 damage; a hit **pins** the victim, so it can't dodge for 1.5 s. Sets up the tail.
+- **Skewer** (move, 45 PP, 12 s): the tail whips over the top into the enemy's thorax (22 damage, ignoring the armor around it) and staggers it at once.
+
 **Vampiric weapons:** the Siphon Proboscis (a jaw-slot mosquito needle) heals its bug for 60% of the damage each hit deals, most-damaged parts first (broken parts stay broken). Heals show as red droplets flowing from the victim and green **+n** numbers.
 
 **Sunder Beam** (Prism Cutter) is the fourth ultimate: the bug swings its lens onto the target and fires a beam that hits up to 5 parts in a line (piercing).
@@ -190,13 +195,13 @@ Measured with `scripts/simulate.ts` and an ad-hoc behaviour probe: about 5–7 c
 
 ## 8. Campaign and loot
 
-The campaign (`src/game/opponents.ts`) is a scrolling map of 18 stops in three zones. A stop unlocks when any of its `unlockedBy` stops is cleared (and, for a zone's first stop, the star gate is met; see Stars below).
+The campaign (`src/game/opponents.ts`) is a scrolling map of 19 stops in three zones. A stop unlocks when any of its `unlockedBy` stops is cleared (and, for a zone's first stop, the star gate is met; see Stars below).
 
 | Zone | Stops |
 |---|---|
 | **The Scrapyard** | Rustmite → Needlewisp / Snapclaw → **Ironback** (boss). Optional: **Old Scrapjaw** (teaches Overclock). |
 | **The Undergrowth** | Silkjaw (webs) → Gravelgrub (burrows) / Arcfly (static, gale) / Bloodgnat (vampire) → **Queen Vexa** (boss). Optional: **Mother Lattice**. |
-| **The Deep Hive** | Rivet & Ratchet (2v2) → Glimmer (cloak) / Lenswing (laser) → The Tunnel Kings (2v2) → **The Hive Guard** (3v3 boss) → **Empress Kalyx** (3v3 finale, farmable). Optional: **Nullshade**. |
+| **The Deep Hive** | Rivet & Ratchet (2v2) → Glimmer (cloak) / Barbtail (scorpion) / Lenswing (laser) → The Tunnel Kings (2v2) → **The Hive Guard** (3v3 boss) → **Empress Kalyx** (3v3 finale, farmable). Optional: **Nullshade**. |
 
 **Your garage holds up to 6 bugs** (`SaveData.bugs`), each with its own build, name and equipped moves. Tabs at the top of the garage switch between them; ＋ adds an empty one, ⧉ copies the current one, and 🗑 scraps it (after a confirm). The active bug is the one you edit and lead into battle. Bugs are blueprints: they all draw on the same parts inventory, so two bugs can use the same part. *(Assumption; see Open decisions.)* Old single-bug saves migrate automatically. In the garage, **↶ Undo** steps back through part and move edits (40 steps, per bug, cleared on switching bugs), and **💾 Save** stores the current parts and moves as a named *saved build* (up to 12, `SaveData.saved`), which can be loaded onto any bug from the Saved builds list (loading is undoable).
 
@@ -216,7 +221,7 @@ Each opponent has:
 2. Finish with at least 50% of your side's total integrity.
 3. Win fast: under 30s (normal), 40s (boss) or 45s (team fight).
 
-The best rating per stop is saved (`SaveData.stars`) and shown under each node on the map, with a total (★ n / 54). Stars shape the loot (`weighByStars` in `rewards.ts`):
+The best rating per stop is saved (`SaveData.stars`) and shown under each node on the map, with a total (★ n / 57). Stars shape the loot (`weighByStars` in `rewards.ts`):
 - At 1 star the table is unchanged. Each star past the first makes rare and epic drops more likely and common drops less likely.
 - A 3-star win adds one extra roll.
 - The **first** 3-star win on a stop adds a one-off bonus roll that is always rare or better.

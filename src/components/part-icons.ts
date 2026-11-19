@@ -28,6 +28,8 @@ export const PART_ICONS: Record<string, ImageSourcePropType> = {
   'horn-drill': require('@/assets/parts/horn-drill.png'),
   'sting-laser': require('@/assets/parts/sting-laser.png'),
   'pinc-digger': require('@/assets/parts/pinc-digger.png'),
+  'sting-tail': require('@/assets/parts/sting-tail.png'),
+  'pinc-grip': require('@/assets/parts/pinc-grip.png'),
   'horn-shock': require('@/assets/parts/horn-shock.png'),
   'armor-hex': require('@/assets/parts/armor-hex.png'),
   'armor-ceramic': require('@/assets/parts/armor-ceramic.png'),

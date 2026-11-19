@@ -18,6 +18,7 @@ export const BUG_PORTRAITS: Record<string, ImageSourcePropType> = {
   glimmer: require('@/assets/bugs/glimmer.png'),
   nullshade: require('@/assets/bugs/nullshade.png'),
   lenswing: require('@/assets/bugs/lenswing.png'),
+  barbtail: require('@/assets/bugs/barbtail.png'),
   tunnelkings: require('@/assets/bugs/tunnelkings.png'),
   hiveguard: require('@/assets/bugs/hiveguard.png'),
   kalyx: require('@/assets/bugs/kalyx.png'),

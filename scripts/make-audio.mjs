@@ -528,6 +528,19 @@ sfxLate('overdrive', 0.9, -4, (r) => {
     return f(a.pulse(hz, 0.3) + b.pulse(hz * 1.5, 0.3) * 0.5, 3200) * (k < 3 ? env(u, 0.004, 0.11) : 0);
   };
 });
+sfxLate('m_skewer', 0.5, -3, (r) => {
+  // A whip-crack of air, then the barb punching through plate.
+  const f = svf(r);
+  const o = osc(r);
+  const lp = lp1(r);
+  const ping = metal(r, 2100, [1, 1.47, 2.2], [0.1, 0.07, 0.05], [0.3, 0.2, 0.12]);
+  return (t) => {
+    const whip = f.run(noise(), glide(700, 6000, 0.12, t), 3).bp * (t < 0.14 ? Math.sin((Math.PI * t) / 0.14) : 0) * 1.2;
+    const u = t - 0.13;
+    const punch = u > 0 ? Math.tanh(2.2 * (o.sin(glide(170, 50, 0.1, u)) * env(u, 0.001, 0.1) + lp(noise(), 2400) * env(u, 0.001, 0.05))) + ping(u) : 0;
+    return whip + punch;
+  };
+});
 
 // ---------------------------------------------------------------- music
 

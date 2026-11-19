@@ -28,6 +28,7 @@ export type MoveId =
   | 'static-burst'
   | 'overclock'
   | 'gale-flap'
+  | 'skewer'
   | 'blood-siphon';
 
 export type MoveDef = {
@@ -168,6 +169,17 @@ export const MOVES: readonly MoveDef[] = [
     cooldown: 8,
     ultimate: false,
     requires: { category: 'wings', count: 1, label: 'wings' },
+  },
+  {
+    id: 'skewer',
+    name: 'Skewer',
+    description: 'The tail whips over the top and drives into the enemy\'s body, past its armor: heavy damage to its thorax, and it staggers. Needs a Barbed Tail.',
+    rarity: 'epic',
+    color: '#B6F23C',
+    cost: 45,
+    cooldown: 12,
+    ultimate: false,
+    requires: { tag: 'scorpion', count: 1, label: 'a Barbed Tail' },
   },
   {
     id: 'blood-siphon',

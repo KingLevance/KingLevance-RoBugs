@@ -41,10 +41,12 @@ export type WeaponStats = {
   beam?: boolean;
   /** Vampiric: this share of the damage dealt heals the attacker's most damaged parts. */
   drain?: number;
+  /** Gripping claws: a hit pins the victim, so it can't dodge for this many seconds. */
+  grip?: number;
 };
 
 /** Special hardware a signature move can need (see MoveDef.requires). */
-export type PartTag = 'venom' | 'silk' | 'spider' | 'dig' | 'cloak' | 'laser' | 'shock' | 'drain';
+export type PartTag = 'venom' | 'silk' | 'spider' | 'dig' | 'cloak' | 'laser' | 'shock' | 'drain' | 'scorpion' | 'grip';
 
 export type PartDef = {
   id: string;
@@ -102,6 +104,8 @@ export const PARTS: readonly PartDef[] = [
 
   { id: 'sting-laser', name: 'Prism Cutter', category: 'stinger', rarity: 'rare', description: 'A focusing lens that spits rapid bolts of light. Lets you use Sunder Beam.', hp: 30, mass: 4, power: 4, tag: 'laser', weapon: { damage: 7, range: 210, cooldown: 0.45, arc: deg(16), projectileSpeed: 900, beam: true } },
   { id: 'pinc-digger', name: 'Mole Diggers', category: 'pincers', rarity: 'uncommon', description: 'Broad shovel claws. Lets you use Burrow Strike.', hp: 60, mass: 7, power: 2, tag: 'dig', weapon: { damage: 10, range: 36, cooldown: 0.8, arc: deg(60) } },
+  { id: 'sting-tail', name: 'Barbed Tail', category: 'stinger', rarity: 'epic', description: 'A scorpion tail that arcs right over your own body to stab. Melee, very long reach, hits hard but slowly: mount it at the back. Lets you use Skewer.', hp: 50, mass: 5, power: 3, tag: 'scorpion', weapon: { damage: 22, range: 76, cooldown: 1.3, arc: deg(35) } },
+  { id: 'pinc-grip', name: 'Gripper Claws', category: 'pincers', rarity: 'rare', description: 'Big scorpion claws that clamp on. A hit pins the enemy: it can\'t dodge for 1.5 seconds.', hp: 60, mass: 7, power: 3, tag: 'grip', weapon: { damage: 15, range: 46, cooldown: 1.0, arc: deg(65), grip: 1.5 } },
   { id: 'horn-shock', name: 'Tesla Prongs', category: 'horn', rarity: 'rare', description: 'Twin prongs that zap on contact. Lets you use Static Burst.', hp: 45, mass: 5, power: 3, tag: 'shock', weapon: { damage: 7, range: 30, cooldown: 0.6, arc: deg(40) } },
 
   // ── Defense & systems ──────────────────────────────────────────

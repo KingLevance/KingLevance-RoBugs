@@ -34,6 +34,7 @@ export const SFX = {
   counter: { src: require('@/assets/audio/sfx/counter.wav'), dur: 0.4, vol: 0.7 },
   stagger: { src: require('@/assets/audio/sfx/stagger.wav'), dur: 0.6, vol: 0.7 },
   overdrive: { src: require('@/assets/audio/sfx/overdrive.wav'), dur: 0.9, vol: 0.6 },
+  m_skewer: { src: require('@/assets/audio/sfx/m_skewer.wav'), dur: 0.5, vol: 0.75 },
   m_crush: { src: require('@/assets/audio/sfx/m_crush.wav'), dur: 0.4, vol: 0.45 },
   m_venom: { src: require('@/assets/audio/sfx/m_venom.wav'), dur: 0.55, vol: 0.9 },
   m_lock: { src: require('@/assets/audio/sfx/m_lock.wav'), dur: 0.5, vol: 0.7 },
@@ -70,5 +71,6 @@ export const MOVE_SFX: Record<MoveId, SfxId> = {
   'static-burst': 'm_static',
   overclock: 'm_overclock',
   'gale-flap': 'm_gale',
+  skewer: 'm_skewer',
   'blood-siphon': 'm_siphon',
 };

@@ -106,6 +106,8 @@ const L = {
   t: 'horn-shock',
   i: 'armor-mirage',
   y: 'mand-proboscis',
+  k: 'sting-tail',
+  j: 'pinc-grip',
 };
 
 const bug = (name: string, rows: string[]): Build => ({ name, placements: fromLayout(rows, L) });
@@ -350,6 +352,20 @@ export const OPPONENTS: Opponent[] = [
     map: { x: 0.73, row: 1 },
   },
   {
+    id: 'barbtail',
+    name: 'Barbtail',
+    blurb: 'A scorpion build. Its claws pin you so you can\'t dodge, then the tail comes over the top.',
+    arena: 'pit',
+    aggression: 0.6,
+    build: bug('Barbtail', ['.jHj.', '.TOT.', 'lBKBl', 'lokol']),
+    moves: ['skewer', 'carapace-lock'],
+    boss: false,
+    guaranteed: [move('skewer'), part('sting-tail'), part('pinc-grip'), part('pinc-grip')],
+    lootTable: [...tierTable('epic'), { reward: part('sting-tail'), weight: 20 }, { reward: part('pinc-grip'), weight: 25 }],
+    unlockedBy: ['twins'],
+    map: { x: 0.5, row: 1 },
+  },
+  {
     id: 'tunnelkings',
     name: 'The Tunnel Kings',
     blurb: 'Two-on-two. One digs, one bites. Bring a partner bug (or borrow Silkjaw).',
@@ -362,7 +378,7 @@ export const OPPONENTS: Opponent[] = [
     boss: false,
     guaranteed: [part('abdomen-tank'), part('core-fusion')],
     lootTable: [...tierTable('epic'), { reward: part('pinc-digger'), weight: 15 }],
-    unlockedBy: ['glimmer', 'lenswing'],
+    unlockedBy: ['glimmer', 'lenswing', 'barbtail'],
     map: { x: 0.5, row: 2 },
   },
   {
@@ -469,7 +485,7 @@ export type Zone = { id: ZoneId; name: string; stops: string[]; starsToEnter: nu
 export const ZONES: Zone[] = [
   { id: 'scrapyard', name: 'The Scrapyard', stops: ['rustmite', 'needlewisp', 'snapclaw', 'scrapjaw', 'ironback'], starsToEnter: 0 },
   { id: 'undergrowth', name: 'The Undergrowth', stops: ['silkjaw', 'lattice', 'gravelgrub', 'arcfly', 'bloodgnat', 'vexa'], starsToEnter: 9 },
-  { id: 'hive', name: 'The Deep Hive', stops: ['twins', 'glimmer', 'nullshade', 'lenswing', 'tunnelkings', 'hiveguard', 'kalyx'], starsToEnter: 12 },
+  { id: 'hive', name: 'The Deep Hive', stops: ['twins', 'glimmer', 'nullshade', 'lenswing', 'barbtail', 'tunnelkings', 'hiveguard', 'kalyx'], starsToEnter: 12 },
 ];
 
 export function zoneIndex(o: Opponent) {

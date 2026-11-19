@@ -788,6 +788,11 @@ function resolveSwing(sim: Sim, bug: Bug, p: SimPart) {
     knock(enemy, n, Math.min(150, 30 + dealt * 6) * (crit ? 1.4 : 1));
   }
   if (w.drain) heal(sim, bug, dealt * w.drain, enemy);
+  // Gripping claws pin what they catch: no dodging out of the follow-up.
+  if (w.grip && dealt > 0 && !enemy.dead) {
+    enemy.dodgeCd = Math.max(enemy.dodgeCd, w.grip);
+    enemy.react = -1;
+  }
 }
 
 /**
@@ -871,6 +876,9 @@ function judge(sim: Sim, bug: Bug, id: MoveId): boolean {
       return dist < 300 && Math.abs(foe.alt - bug.alt) < 40;
     case 'static-burst':
       return near(105);
+    case 'skewer':
+      // In tail reach of something that isn't already reeling or shelled up.
+      return dist < bug.radius + foe.radius + 55 && Math.abs(foe.alt - bug.alt) < 30 && foe.stagger <= 0 && foe.shield <= 0 && foe.burrow <= 0;
     case 'overclock':
       return bug.haste <= 0 && dist < 170;
     case 'gale-flap':
@@ -1061,6 +1069,23 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
           .slice(0, 5)
           .forEach(({ p }, k) => damagePart(sim, e, p, 22 * (1 - k * 0.08), bug));
       }
+      break;
+    }
+    case 'skewer': {
+      // Over the top: the tail goes for the body itself (the thorax), whatever armor is in the way.
+      if (foe.burrow > 0 || !canBeHurt(sim, foe)) break;
+      const inner = (c: Category) => foe.parts.find((p) => p.alive && p.z !== -1 && p.part.category === c);
+      const mark = inner('thorax') ?? inner('core') ?? nearestPart(foe, bug.pos, true)?.p;
+      if (!mark) break;
+      const at = partWorld(foe, mark);
+      for (const p of bug.parts) if (p.alive && p.part.tag === 'scorpion') p.struck = 0; // the tail whips
+      damagePart(sim, foe, mark, 22, bug);
+      if (!foe.dead && foe.shield <= 0) {
+        foe.steady = 0;
+        staggerBug(sim, foe);
+      }
+      knock(foe, unit({ x: foe.pos.x - bug.pos.x, y: foe.pos.y - bug.pos.y }), 110);
+      sim.effects.push({ x: at.x, y: at.y, h: foe.alt, ttl: 0.35, color: '#B6F23C', size: 70 });
       break;
     }
     case 'static-burst':

@@ -1118,6 +1118,17 @@ export class ArenaRenderer {
         this.wave(mid, 0xffffff, 1.5);
         this.burst(mid, 18, color, 1.6);
         break;
+      case 'skewer': {
+        // The tail comes down on the enemy: a toxic flash and a ring where it lands.
+        const foe = foeOf(sim, b);
+        const hit = toWorld(foe.pos.x, foe.pos.y, foe.alt / CELL + 0.9);
+        this.flash(hit, color, 1.6, 0.3);
+        this.flash(hit, 0xffffff, 0.8, 0.14);
+        this.wave(hit, color, 1.5);
+        this.burst(hit, 16, color, 1.6);
+        this.startStreaks(bi, color, 0.3);
+        break;
+      }
       case 'gale-flap':
         this.wave(mid, color, 2.6);
         this.wave(mid, 0xffffff, 1.8);

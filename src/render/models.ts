@@ -343,6 +343,8 @@ const LOOK: Record<string, number> = {
   'armor-mirage': 3,
   'sting-laser': 2,
   'horn-shock': 2,
+  'sting-tail': 3,
+  'pinc-grip': 3,
 };
 
 const STEEL = 0x9aa6b4;
@@ -752,7 +754,8 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
 
     case 'pincers': {
       root.add(at(shape(rbox(0.62, 0.32, 0.36, 0.12), dark), 0, 0.5, 0.26));
-      const big = look === 1 ? 1.2 : 1;
+      // (3 = scorpion gripper: half again as big, with a toothed finger.)
+      const big = look === 1 ? 1.2 : look === 3 ? 1.5 : 1;
       const claws: { g: THREE.Group; finger: THREE.Group; d: number }[] = [];
       for (const d of [-1, 1]) {
         const wrist = V(0.36 * d, 0.5, -0.18);
@@ -781,7 +784,7 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           claw.add(at(shape(ellip(0.16 * big, 0.13 * big, 0.2 * big), main), 0.04 * d, 0, -0.2 * big));
           claw.add(chain([V(0.1 * d, 0, -0.3 * big), V(0.1 * d, 0, -0.48 * big), V(0.0, 0, -0.62 * big)], 0.075 * big, 0.03 * big, main));
           finger.add(chain([V(0, 0, 0), V(-0.06 * d, 0, -0.18 * big), V(0.0, 0, -0.32 * big)], 0.06 * big, 0.025 * big, light));
-          if (look === 1) for (let i = 0; i < 3; i++) finger.add(at(new THREE.Mesh(cone(0.025, 0.07, 4), steel), -0.0 * d, 0, -0.08 - i * 0.08).rotateZ((Math.PI / 2) * d));
+          if (look === 1 || look === 3) for (let i = 0; i < 3; i++) finger.add(at(new THREE.Mesh(cone(0.025, 0.07, 4), steel), -0.0 * d, 0, -0.08 - i * 0.08).rotateZ((Math.PI / 2) * d));
         }
         claw.add(finger);
         root.add(claw);
@@ -798,6 +801,33 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
     }
 
     case 'stinger': {
+      if (look === 3) {
+        // Scorpion tail: fat armored segments arching up and over the body, ending in a venom bulb and a barb.
+        const venom = mat(0xd8ff7a, { emissive: 0x7fd61a });
+        root.add(at(shape(rbox(0.5, 0.2, 0.44, 0.08), dark), 0, 0.4, 0.16)); // socket
+        const tail = new THREE.Group();
+        tail.position.set(0, 0.46, 0.18);
+        tail.scale.setScalar(1.22);
+        const pts = [V(0, 0, 0), V(0, 0.4, 0.2), V(0, 0.82, 0.22), V(0, 1.2, 0.04), V(0, 1.42, -0.32), V(0, 1.44, -0.72)];
+        for (let i = 0; i < pts.length - 1; i++) {
+          const r0 = 0.2 - i * 0.022;
+          tail.add(seg(pts[i], pts[i + 1], r0, i % 2 ? light : main, r0 - 0.03));
+          tail.add(at(shape(ball(r0 * 0.78), steel, 0.02), pts[i + 1].x, pts[i + 1].y, pts[i + 1].z)); // joint
+        }
+        const tip = pts[pts.length - 1];
+        tail.add(at(new THREE.Mesh(ellip(0.17, 0.16, 0.2), venom), tip.x, tip.y - 0.02, tip.z - 0.12));
+        const barb = shape(cone(0.075, 0.42, 6), mat(IVORY), 0.02);
+        barb.rotation.x = -Math.PI / 2 - 0.75; // forward and down
+        tail.add(at(barb, tip.x, tip.y - 0.2, tip.z - 0.36));
+        root.add(tail);
+        animate = ({ t, attack }) => {
+          // Rears back through the wind-up, then whips over the top.
+          tail.rotation.x = Math.sin(t * 1.3 + row) * 0.05 - attack * (attack > 0 ? 0.85 : 0.3);
+          tail.rotation.z = Math.sin(t * 0.9 + row) * 0.04;
+          venom.emissiveIntensity = 0.6 + Math.sin(t * 3 + row) * 0.2 + Math.max(0, attack) * 1.5;
+        };
+        break;
+      }
       // Venom gland: glass bulb with glowing fluid inside and banding.
       const glass = mat(0xf1dcff, { transparent: true, opacity: 0.3 });
       const venom = look === 2 ? mat(0xb8fbff, { emissive: 0x19c8e0 }) : mat(0xe6a6ff, { emissive: 0xa23ee0 });
