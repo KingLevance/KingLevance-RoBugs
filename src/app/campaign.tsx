@@ -9,7 +9,7 @@ import { Stars } from '@/components/stars';
 import { RewardChip } from '@/components/reward-chip';
 import { Button, Label, Pill } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
-import { validateBuild } from '@/game/build';
+import { bugProblems, bugReady } from '@/game/build';
 import { getMove } from '@/game/moves';
 import {
   alliesFor,
@@ -144,7 +144,7 @@ export default function Campaign() {
   const mapH = layout.h;
   const avoid = keepOut(layout, (o) => ({ name: isUnlocked(o, game.cleared, game.stars), stars: game.cleared.includes(o.id) }));
   const sel = getOpponent(game.selected);
-  const errors = validateBuild(game.build.placements);
+  const errors = bugProblems(game.inventory, game.bugs, game.active);
   const selUnlocked = isUnlocked(sel, game.cleared, game.stars);
   const selGate = starGate(sel, game.stars);
   const gateBlocks = !selUnlocked && pathOpen(sel, game.cleared) && selGate && !selGate.met;
@@ -154,7 +154,7 @@ export default function Campaign() {
   const best = game.stars[sel.id] ?? 0;
   // Team fights: your squad bugs (valid ones, in order), then borrowed opponents for any gaps.
   const slots = allySlots(sel);
-  const readySquad = game.squad.filter((i) => game.bugs[i] && validateBuild(game.bugs[i].placements).length === 0);
+  const readySquad = game.squad.filter((i) => bugReady(game.inventory, game.bugs, i));
   const { borrowed } = alliesFor(
     sel,
     readySquad.map((i) => ({ build: game.bugs[i], moves: game.bugs[i].equipped, aggression: 0.7 })),
@@ -308,7 +308,7 @@ export default function Campaign() {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.allies}>
               {game.bugs.map((b, i) => {
                 if (i === game.active) return null;
-                const ready = validateBuild(b.placements).length === 0;
+                const ready = bugReady(game.inventory, game.bugs, i);
                 const pos = readySquad.indexOf(i);
                 const fighting = pos >= 0 && pos < slots;
                 return (

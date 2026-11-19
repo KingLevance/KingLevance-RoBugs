@@ -244,3 +244,57 @@ export function usage(placements: Placement[]): Record<string, number> {
   for (const p of placements) out[p.partId] = (out[p.partId] ?? 0) + 1;
   return out;
 }
+
+// ── Parts across bugs ───────────────────────────────────────────────
+// Every part you own can sit on one bug at a time: a bug can use what you own
+// minus what your other bugs are using.
+
+/** What bug `index` may use: everything owned minus what the other bugs use (can go negative). */
+export function availableFor(inventory: Record<string, number>, bugs: { placements: Placement[] }[], index: number) {
+  const out: Record<string, number> = { ...inventory };
+  bugs.forEach((b, i) => {
+    if (i !== index) for (const p of b.placements) out[p.partId] = (out[p.partId] ?? 0) - 1;
+  });
+  return out;
+}
+
+/** Parts bug `index` uses that it can't have because other bugs are using them: part id → how many. */
+export function shortParts(inventory: Record<string, number>, bugs: { placements: Placement[] }[], index: number) {
+  const avail = availableFor(inventory, bugs, index);
+  const out: Record<string, number> = {};
+  for (const [id, n] of Object.entries(usage(bugs[index]?.placements ?? []))) {
+    const over = n - Math.max(0, avail[id] ?? 0);
+    if (over > 0) out[id] = over;
+  }
+  return out;
+}
+
+/** Ready to fight: a valid build, and none of its parts are claimed by another bug. */
+export function bugReady(inventory: Record<string, number>, bugs: { placements: Placement[] }[], index: number) {
+  const b = bugs[index];
+  return !!b && validateBuild(b.placements).length === 0 && Object.keys(shortParts(inventory, bugs, index)).length === 0;
+}
+
+/** Plain-language problems for bug `index`: build errors first, then parts held by other bugs. */
+export function bugProblems(inventory: Record<string, number>, bugs: (Build & { placements: Placement[] })[], index: number): string[] {
+  const b = bugs[index];
+  if (!b) return [];
+  const out = validateBuild(b.placements);
+  for (const [id, n] of Object.entries(shortParts(inventory, bugs, index))) {
+    const holder = bugs.find((o, i) => i !== index && o.placements.some((p) => p.partId === id));
+    out.push(`${n > 1 ? `${n}× ` : ''}${getPart(id).name} ${n > 1 ? 'are' : 'is'} on ${holder?.name || 'another bug'}`);
+  }
+  return out;
+}
+
+/** Keep only the placements that `avail` covers (in order); the rest are left off. */
+export function fitToParts(placements: Placement[], avail: Record<string, number>) {
+  const left = { ...avail };
+  const kept: Placement[] = [];
+  for (const p of placements) {
+    if ((left[p.partId] ?? 0) <= 0) continue;
+    left[p.partId]--;
+    kept.push(p);
+  }
+  return { kept, dropped: placements.length - kept.length };
+}

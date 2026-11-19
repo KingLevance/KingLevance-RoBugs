@@ -8,7 +8,7 @@ import { BugShowcase } from '@/components/bug-showcase';
 import { PART_ICONS } from '@/components/part-icons';
 import { Button, Label, Panel, Pill } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
-import { validateBuild } from '@/game/build';
+import { bugProblems } from '@/game/build';
 import { ARENA_NAMES, fightSize, getOpponent, OPPONENTS } from '@/game/opponents';
 import { useGame } from '@/state/game-store';
 
@@ -21,7 +21,7 @@ const STEPS: [string, string, string][] = [
 export default function Hub() {
   const game = useGame();
   useMusic('hub');
-  const errors = validateBuild(game.build.placements);
+  const errors = bugProblems(game.inventory, game.bugs, game.active);
   const next = getOpponent(game.selected);
   const totalParts = Object.values(game.inventory).reduce((a, n) => a + n, 0);
   const allClear = game.cleared.length >= OPPONENTS.length;

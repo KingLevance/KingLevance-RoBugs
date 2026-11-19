@@ -17,7 +17,22 @@ import { sfx, useMusic } from '@/audio/audio';
 import { PartCell } from '@/components/part-cell';
 import { Button, Meter, Panel } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
-import { computeStats, connectedKeys, FACING_NAMES, facingsFor, MAX_MASS, resolve, usage, validateBuild, type BugStats, type Placement } from '@/game/build';
+import {
+  availableFor,
+  bugReady,
+  computeStats,
+  connectedKeys,
+  FACING_NAMES,
+  facingsFor,
+  fitToParts,
+  MAX_MASS,
+  resolve,
+  shortParts,
+  usage,
+  validateBuild,
+  type BugStats,
+  type Placement,
+} from '@/game/build';
 import { autoBuild, autoPlace, dropLayer, flipLayer, movePart, partAt, rankSlots, removeAt, rotatePart, sameSlot, type Slot } from '@/game/editor';
 import { GROUPS, GUIDE } from '@/game/guide';
 import { getMove, meetsRequirement, MOVE_SLOTS, type MoveId } from '@/game/moves';
@@ -121,6 +136,19 @@ type Touch = {
   last: { cell: Cell | null; inside: boolean };
 };
 
+/** One line per part another bug is using, or one line per bug when that bug holds several. */
+function sharedNotes(short: Record<string, number>, holder: (id: string) => string): string[] {
+  const byHolder = new Map<string, [string, number][]>();
+  for (const [id, n] of Object.entries(short)) byHolder.set(holder(id), [...(byHolder.get(holder(id)) ?? []), [id, n]]);
+  const out: string[] = [];
+  for (const [who, list] of byHolder) {
+    const total = list.reduce((a, [, n]) => a + n, 0);
+    if (list.length > 2) out.push(`${total} parts are on ${who}`);
+    else for (const [id, n] of list) out.push(`${n > 1 ? `${n}× ` : ''}${getPart(id).name} ${n > 1 ? 'are' : 'is'} on ${who}`);
+  }
+  return out;
+}
+
 const UNDO_STEPS = 40;
 type Snapshot = { placements: Placement[]; equipped: MoveId[] };
 /** Same parts (in any order) and the same moves. */
@@ -194,18 +222,30 @@ export default function Garage() {
     if (!b) return;
     remember();
     sfx('snap', { gap: 0 });
-    game.setLoadout([...b.placements], b.equipped.filter((m) => game.moves.includes(m)));
+    // Only parts this bug can have: anything your other bugs are using stays on them.
+    const { kept, dropped } = fitToParts(b.placements, availableFor(game.inventory, game.bugs, game.active));
+    game.setLoadout(kept, b.equipped.filter((m) => game.moves.includes(m)));
     setSelected(null);
     setConfirmSaved(null);
-    setToast(`Loaded "${b.name}" · ↶ to go back`);
+    setToast(dropped ? `Loaded "${b.name}" minus ${dropped} part${dropped > 1 ? 's' : ''} your other bugs are using` : `Loaded "${b.name}" · ↶ to go back`);
   };
   const used = usage(placements);
+  /** Parts this bug may use: what you own minus what your other bugs use. */
+  const avail = availableFor(game.inventory, game.bugs, game.active);
+  const short = shortParts(game.inventory, game.bugs, game.active);
+  const holder = (id: string) => game.bugs.find((b, i) => i !== game.active && b.placements.some((p) => p.partId === id))?.name || 'another bug';
   const stats = computeStats(resolve(placements));
   const errors = validateBuild(placements);
+  /** Ready to fight: a valid build with no parts that another bug is using. */
+  const blocked = errors.length > 0 || Object.keys(short).length > 0;
   const checks = buildChecks(placements, stats);
   // The power line is redundant while there's no core at all (adding one fixes both).
   const noCore = !checks[2].ok;
-  const missing = checks.filter((c) => !c.ok && !c.optional && !(noCore && c.short.startsWith('Less power')));
+  const missing = [
+    ...checks.filter((c) => !c.ok && !c.optional && !(noCore && c.short.startsWith('Less power'))),
+    // Parts that are also on another bug: one of them has to give it up.
+    ...sharedNotes(short, holder).map((text) => ({ label: text, short: text, ok: false })),
+  ];
   const tips = checks.filter((c) => !c.ok && c.optional);
   const editorW = Math.min(width, MaxContentWidth);
   const editorH = Math.min(editorW * 1.05, height * 0.44);
@@ -367,10 +407,11 @@ export default function Garage() {
   }
 
   function addPart(id: string) {
-    const free = (game.inventory[id] ?? 0) - (used[id] ?? 0);
+    const free = (avail[id] ?? 0) - (used[id] ?? 0);
     const part = getPart(id);
     if (free <= 0) {
-      setToast(`All your ${part.name} are already on the bug`);
+      const elsewhere = (game.inventory[id] ?? 0) - Math.max(0, avail[id] ?? 0);
+      setToast(elsewhere > 0 ? `No ${part.name} left: ${holder(id)} is using it` : `All your ${part.name} are already on the bug`);
       return;
     }
     const spot = autoPlace(placements, id);
@@ -421,7 +462,7 @@ export default function Garage() {
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bugTabs}>
           {game.bugs.map((b, i) => {
             const on = i === game.active;
-            const ready = validateBuild(b.placements).length === 0;
+            const ready = bugReady(game.inventory, game.bugs, i);
             const squad = game.squad.includes(i);
             return (
               <Pressable
@@ -467,10 +508,12 @@ export default function Garage() {
             <Pressable
               accessibilityLabel="Copy this bug"
               onPress={() => {
+                // The copy only gets parts you have spare: parts sit on one bug at a time.
+                const { dropped } = fitToParts(placements, availableFor(game.inventory, [...game.bugs, { placements: [] }], game.bugs.length));
                 game.addBug(game.active);
                 forgetHistory();
                 setSelected(null);
-                setToast('Copied. Tweak away!');
+                setToast(dropped ? `Copied without ${dropped} part${dropped > 1 ? 's' : ''} you don't have spare` : 'Copied. Tweak away!');
               }}
               style={styles.iconBtn}>
               <Text style={styles.iconBtnText}>⧉</Text>
@@ -603,7 +646,7 @@ export default function Garage() {
         )}
 
         <Panel style={{ gap: Spacing.sm }}>
-          <Text style={styles.section}>{errors.length ? 'YOUR BUG STILL NEEDS' : 'READY TO FIGHT'}</Text>
+          <Text style={styles.section}>{blocked ? 'YOUR BUG STILL NEEDS' : 'READY TO FIGHT'}</Text>
           <Checklist items={checks} />
           {!selPart && <Text style={styles.dim}>Tap a part on the bug to see what it does and where it goes.</Text>}
         </Panel>
@@ -647,7 +690,8 @@ export default function Garage() {
               <View style={styles.bin}>
                 {items.map(([id, count]) => {
                   const part = getPart(id);
-                  const free = count - (used[id] ?? 0);
+                  const free = Math.max(0, (avail[id] ?? 0) - (used[id] ?? 0));
+                  const onOthers = count - Math.max(0, avail[id] ?? 0);
                   return (
                     <Pressable
                       key={id}
@@ -666,6 +710,7 @@ export default function Garage() {
                         {part.name}
                       </Text>
                       <Text style={[styles.binRarity, { color: RARITY_COLOR[part.rarity] }]}>{part.rarity.toUpperCase()}</Text>
+                      {onOthers > 0 && <Text style={styles.binOther}>{onOthers} on other bugs</Text>}
                     </Pressable>
                   );
                 })}
@@ -756,13 +801,14 @@ export default function Garage() {
             label="Auto-build"
             variant="secondary"
             onPress={() => {
-              edit(autoBuild(game.inventory));
+              // Only from parts your other bugs aren't using.
+              edit(autoBuild(Object.fromEntries(Object.entries(avail).map(([id, n]) => [id, Math.max(0, n)]))));
               setSelected(null);
               setToast('Built from your best parts. Drag things around to tweak it.');
             }}
             style={{ flex: 1.3, paddingHorizontal: 4 }}
           />
-          <Button label="Campaign" disabled={errors.length > 0} onPress={() => router.dismissTo('/campaign')} style={{ flex: 1.3, paddingHorizontal: 4 }} />
+          <Button label="Campaign" disabled={blocked} onPress={() => router.dismissTo('/campaign')} style={{ flex: 1.3, paddingHorizontal: 4 }} />
         </View>
       </ScrollView>
     </View>
@@ -862,6 +908,7 @@ const styles = StyleSheet.create({
   },
   toolBtnText: { color: Colors.text, fontSize: 20, lineHeight: 24 },
   toolBtnLabel: { color: Colors.textDim, fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+  binOther: { color: Colors.textDim, fontSize: 10, fontWeight: '700' },
   savedRow: {
     flexDirection: 'row',
     alignItems: 'center',

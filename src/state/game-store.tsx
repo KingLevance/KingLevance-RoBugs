@@ -1,6 +1,6 @@
 import { createContext, use, useCallback, useMemo, useState, type ReactNode } from 'react';
 
-import type { Build, Placement } from '@/game/build';
+import { availableFor, fitToParts, type Build, type Placement } from '@/game/build';
 import { MOVE_SLOTS, type MoveId } from '@/game/moves';
 import { getOpponent, OPPONENTS, STARTER_BUILD, STARTER_INVENTORY, STARTER_MOVES } from '@/game/opponents';
 import { rollMatchRewards, type MatchRewards } from '@/game/rewards';
@@ -194,8 +194,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
         if (data.bugs.length >= MAX_BUGS) return false;
         update((d) => {
           const src = copyOf !== undefined ? d.bugs[copyOf] : undefined;
+          // A copy only gets the parts you still have spare (parts sit on one bug at a time).
+          const spare = availableFor(d.inventory, [...d.bugs, { placements: [] }], d.bugs.length);
           const fresh: SavedBug = src
-            ? { ...src, name: `${src.name} II`.slice(0, 18), placements: [...src.placements], equipped: [...src.equipped] }
+            ? { ...src, name: `${src.name} II`.slice(0, 18), placements: fitToParts(src.placements, spare).kept, equipped: [...src.equipped] }
             : { name: newName(d.bugs), placements: [], equipped: [] };
           return { ...d, bugs: [...d.bugs, fresh], active: d.bugs.length };
         });

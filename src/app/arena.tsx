@@ -12,7 +12,7 @@ import { Colors, Fonts, Spacing } from '@/constants/theme';
 import { GUIDE } from '@/game/guide';
 import { getMove, PROC } from '@/game/moves';
 import { alliesFor, getOpponent, lineup } from '@/game/opponents';
-import { validateBuild } from '@/game/build';
+import { bugReady } from '@/game/build';
 import { aiInput, CELL, createTeamSim, forfeit, hud, MATCH_SECONDS, OVERDRIVE_AT, step, STEP, teamHp, type HudBug } from '@/game/sim';
 import { ArenaRenderer } from '@/render/scene';
 import { useGame } from '@/state/game-store';
@@ -112,8 +112,8 @@ export default function Arena() {
     // Your lead bug and your squad (borrowing beaten opponents for any empty slots)
     // against the opponent's whole team.
     const squad = game.squad
+      .filter((i) => bugReady(game.inventory, game.bugs, i))
       .map((i) => game.bugs[i])
-      .filter((b) => b && validateBuild(b.placements).length === 0)
       .map((b) => ({ build: { name: b.name, placements: b.placements }, moves: b.equipped, aggression: 0.7 }));
     const { allies } = alliesFor(opponent, squad);
     const { enemies } = lineup(opponent);
