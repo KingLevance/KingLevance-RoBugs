@@ -11,9 +11,22 @@ export function playFightEvent(e: SimEvent, sim: Sim) {
   switch (e.type) {
     case 'hit':
       if (e.shielded) sfx('hit_shield', { gap: 70, rate: vary() });
+      else if (e.counter) sfx('counter', { gap: 90 });
       else if (e.crit) sfx('hit_crit', { gap: 90 });
       else if (e.dmg >= 14) sfx('hit_heavy', { gap: 60, rate: vary() });
       else sfx('hit_light', { gap: 45, rate: vary(0.25), volume: e.by === null ? 0.6 : 1 });
+      break;
+    case 'dash':
+      sfx('dash', { gap: 80, rate: vary() });
+      break;
+    case 'whiff':
+      sfx('whiff', { gap: 60, rate: vary(0.3), volume: e.dodged ? 1 : 0.6 });
+      break;
+    case 'clash':
+      sfx('clash', { gap: 150 });
+      break;
+    case 'stagger':
+      sfx('stagger', { gap: 200 });
       break;
     case 'break':
       sfx('break', { gap: 120 });
@@ -43,7 +56,7 @@ export function playFightEvent(e: SimEvent, sim: Sim) {
   }
 }
 
-const FIGHT_SFX: SfxId[] = ['count', 'fight', 'hit_light', 'hit_heavy', 'hit_crit', 'hit_shield', 'break', 'crash', 'wall', 'ult_charge', 'ult_boom', 'ko'];
+const FIGHT_SFX: SfxId[] = ['count', 'fight', 'hit_light', 'hit_heavy', 'hit_crit', 'hit_shield', 'break', 'crash', 'wall', 'ult_charge', 'ult_boom', 'ko', 'dash', 'whiff', 'clash', 'counter', 'stagger', 'overdrive'];
 
 /** Warm up the common fight sounds plus the moves in play. */
 export function preloadFight(sim: Sim) {

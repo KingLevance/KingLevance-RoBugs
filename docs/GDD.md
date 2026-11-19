@@ -82,9 +82,24 @@ On top of the hard cap, weight is a soft trade-off: heavier bugs are slower and 
 - A strike hits the enemy part nearest the weapon, or a random part right next to it. Damage varies ±20% (× a global `DAMAGE_SCALE`). Outer parts, especially armor, soak hits for the parts inside.
 - When a part hits 0 HP it's destroyed. Then a **connectivity check** runs: anything no longer linked to the main thorax group **breaks off**. Lose the plate your jaws were bolted to and the jaws go too.
 - Stats are recalculated live. Lose legs and you slow down and pull to one side. Lose a weapon and that attack is gone. Lose wings and you lose speed.
-- **Knockout**: no core left, or no thorax left.
-- **Time limit** is 90 s. After that the judges pick whoever has the most remaining integrity (HP %).
+- **Knockout**: no core left, no thorax left, or **disarmed** (no weapon left: a bug with nothing to fight with is out, so fights don't end in a chase). *(Assumption; see Open decisions.)*
+- **Time limit** is 90 s. After that the judges pick whoever has the most remaining integrity (HP %). It's rarely reached: from 40 s, **Overdrive** ramps all damage up steadily (to 2.6× at the bell), and the HUD timer turns orange.
 - **Collisions**: bugs push each other by mass. Hard rams hurt both bugs at the contact point, scaled by the mass ratio.
+
+### 4b. Footwork and timing (the feel of a fight)
+
+Melee is not instant. Constants live in `FIGHT` in `sim.ts`; everything is deterministic (seeded rolls).
+
+- **Wind-up and lunge.** A melee weapon winds up for 0.17–0.34 s (heavier hits take longer; horns barely wind up) while the bug lunges at its target. The strike lands when the wind-up ends, if the target is still in reach. Shots still fire at once.
+- **Dodge.** A bug that sees a strike (or a dart) coming may hop aside just before it lands: a 0.18 s dash, untouchable while it lasts. Whether it reads the attack is a **reflex** roll (28–78%: faster bugs and sensors read better), and dodges have a cooldown (4.2 s for plodders down to 1.6 s for the nimblest). No dodging while stunned, webbed, staggered, shielded or mid-miss. A cloaked attacker can't be read.
+- **Miss and counter.** A strike that hits nothing leaves the attacker **open** (0.55 s after a dodge, shorter if it just fell short): slow, unable to dodge, and any hit on it is a **counter** (a guaranteed crit). The dodger's weapons come round at once, so dodge → counter is the core rhythm.
+- **Clash.** Two strikes landing on each other within 0.14 s cancel: no damage, sparks, both bugs thrown back.
+- **Knockback.** Every hit shoves the victim (lighter bugs fly further; a locked carapace barely moves). Shoving a bug into spikes, acid or a press is a real tactic.
+- **Poise and stagger.** Damage wears down poise (45 + 0.35 × mass; refills when left alone). At zero the bug is **staggered** for 0.8 s (can't move, strike or dodge), then can't be staggered again for 4 s.
+- **AI.** Bugs punish openings (a miss or a stagger pulls them straight in), and between strikes lighter bugs slide round the enemy instead of standing in its jaws.
+- The garage shows **Dodge** (reflex % and cooldown) and **Poise** for the current build.
+
+Typical boss fight (balance script): ~110 hits, 30 misses, 10 dodges, 7 counters, 3 clashes, 4 staggers in ~35 s.
 
 ## 5. Arenas and hazards
 
@@ -189,7 +204,7 @@ The campaign (`src/game/opponents.ts`) is a scrolling map of 18 stops in three z
 
 **Optional bosses** (`optional: true`) sit off the main path, are harder than the stops around them, and pay out signature parts.
 
-**Balance check:** `npm test` plays the whole campaign in order with an auto-built player bug that picks up each stop's rewards. Current win rates for that auto-player: early stops 75–100%, bosses about 45–50%, optional bosses 35–45%, the finale 40%.
+**Balance check:** `npm test` plays the whole campaign in order with an auto-built player bug that picks up each stop's rewards. Current win rates for that auto-player: early stops 60–100%, bosses about 50–65%, optional bosses 30–45%, the finale 43%.
 
 Each opponent has:
 - `guaranteed: Reward[]` — given **once**, on first clear (parts or moves).
@@ -199,7 +214,7 @@ Each opponent has:
 **Stars** (`src/game/stars.ts`): every win is rated 1–3 stars, one per challenge met:
 1. Win.
 2. Finish with at least 50% of your side's total integrity.
-3. Win fast: under 45s (normal), 60s (boss) or 70s (team fight).
+3. Win fast: under 30s (normal), 40s (boss) or 45s (team fight).
 
 The best rating per stop is saved (`SaveData.stars`) and shown under each node on the map, with a total (★ n / 54). Stars shape the loot (`weighByStars` in `rewards.ts`):
 - At 1 star the table is unchanged. Each star past the first makes rare and epic drops more likely and common drops less likely.
@@ -243,7 +258,7 @@ All audio is original and synthesized in code by `scripts/make-audio.mjs` (oscil
 
 ## 11. Open decisions (for the owner)
 
-1. **Pre-fight tactics.** Should players get light control over the autonomous AI, such as an aggressive/defensive stance or a target-priority setting?
+1. **Player input in fights.** Fights are still autonomous. Should the player get a hand in them: light pre-fight tactics (stance, target priority), or live input such as tapping to dodge or to fire a signature move?
 2. ~~Part orientation~~ Decided: weapons can face front, sides or back.
 3. **Grid size and shape.** Currently 5×7. Should it grow with progression?
 4. **Economy.** Should there be scrap or currency to craft or upgrade parts? Duplicates currently just stack.
@@ -251,4 +266,5 @@ All audio is original and synthesized in code by `scripts/make-audio.mjs` (oscil
 6. **Move slots.** 2 for now. Should more unlock through the campaign?
 8. ~~Team fight allies~~ Decided: your own garage bugs (borrowed opponents fill any gaps).
 9. **Shared parts.** Garage bugs are blueprints sharing one inventory, so one head can be on three bugs at once. Should a squad instead need enough parts for every bug in it?
-7. **Balance.** First-pass numbers. Fights often go to time, and melee mirror matches can snowball.
+7. **Balance.** First-pass numbers. Fights now end in knockouts (about 25–35 s, bosses 35–50 s) rather than on time.
+10. **Disarmed = out.** A bug with no weapons left is knocked out. Assumed, to stop weaponless bugs fleeing for the rest of the match; the alternative is letting unarmed bugs ram.

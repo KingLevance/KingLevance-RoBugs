@@ -79,6 +79,15 @@ type BugView = {
   lastHeading: number;
   /** Knockback flinch (world units), springs back to zero. */
   kick: THREE.Vector3;
+  /** Smoothed wind-up crouch (0..1) and stagger reel (0..1). */
+  wind: number;
+  reel: number;
+  /** Dizzy stars that circle a staggered bug. */
+  stars: THREE.Group;
+  /** Dodge streak: a fading ghost of the hop, from where it started. */
+  trail: THREE.Mesh;
+  trailFrom: THREE.Vector3;
+  trailLife: number;
 };
 /**
  * A signature move being staged: `charge` while the sim is frozen for the
@@ -450,7 +459,24 @@ export class ArenaRenderer {
     shadow.renderOrder = 1;
     shadows.add(shadow);
     softShadow(shadow, parts);
-    return { group, pose, parts, links, rig, spine, tether, web, mound, sink: 0, ghost: 1, fxClock: 0, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3() };
+    const stars = new THREE.Group();
+    const starMat = new THREE.MeshBasicMaterial({ color: 0xffd23f });
+    for (let i = 0; i < 4; i++) {
+      const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.2), starMat);
+      const a = (i / 4) * Math.PI * 2;
+      star.position.set(Math.cos(a) * r * 0.55, 0, Math.sin(a) * r * 0.55);
+      stars.add(star);
+    }
+    stars.position.y = 2.7;
+    stars.visible = false;
+    group.add(stars);
+    const trail = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 0.05, 1),
+      new THREE.MeshBasicMaterial({ color: bug.team === 0 ? 0x9df3ff : 0xffc9a8, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }),
+    );
+    trail.visible = false;
+    this.scene.add(trail);
+    return { group, pose, parts, links, rig, spine, tether, web, mound, sink: 0, ghost: 1, fxClock: 0, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3(), wind: 0, reel: 0, stars, trail, trailFrom: new THREE.Vector3(), trailLife: 0 };
   }
 
   private fitOffset(aspect: number) {
@@ -552,8 +578,21 @@ export class ArenaRenderer {
         v.pose.rotation.y *= 0.7;
         // Nose down when diving, up when climbing, levelling out on the way down to land.
         const high = THREE.MathUtils.clamp((bug.alt - 2) / 26, 0, 1);
-        const tilt = THREE.MathUtils.clamp(bug.vAlt / 260, -0.35, 0.3) * high;
+        // Wide open after a miss: it slumps forward.
+        const tilt = THREE.MathUtils.clamp(bug.vAlt / 260, -0.35, 0.3) * high - (bug.open > 0 && !bug.dead ? 0.1 : 0);
         v.pose.rotation.x += (tilt - v.pose.rotation.x) * (high < 1 ? 0.35 : 0.2);
+        // Strikes read as a motion: crouch back while a weapon winds up, then snap forward as it lands.
+        let swinging = false;
+        let struck = 9;
+        for (const p of bug.parts) {
+          if (!p.alive || !p.part.weapon || p.part.weapon.projectileSpeed) continue;
+          if (p.windup > 0) swinging = true;
+          struck = Math.min(struck, p.struck);
+        }
+        v.wind += ((swinging && !bug.dead ? 1 : 0) - v.wind) * Math.min(1, dt * 24);
+        const lash = !bug.dead && sim.time > 1 && struck < 0.16 ? 1 - struck / 0.16 : 0;
+        v.pose.position.z += (0.24 * v.wind - 0.42 * lash) * 0.25; // (×0.25: this adds up against the ×0.75 decay above)
+        v.pose.scale.set(1 + 0.06 * v.wind - 0.03 * lash, 1 - 0.13 * v.wind + 0.05 * lash, 1 - 0.05 * v.wind + 0.14 * lash);
         // While pitched, lift the body so the dipping end (the pivot is mid-body) can't sink into the floor.
         const clear = Math.abs(Math.sin(v.pose.rotation.x)) * (bug.radius / CELL) * 0.9;
         const bob = bug.dead ? 0 : Math.abs(Math.sin(v.walk)) * 0.05 * speed + Math.sin(t * 2.2 + bi) * 0.012;
@@ -577,8 +616,33 @@ export class ArenaRenderer {
         l.c.obj.visible = l.a.attached && l.b.attached && v.ghost > 0.9;
         if (l.c.obj.visible) l.c.update(l.a.model.root.position, l.b.model.root.position);
       }
+      // Staggered: it reels, with stars circling. Dodging: it banks into the hop.
+      v.reel += ((bug.stagger > 0 && !bug.dead ? 1 : 0) - v.reel) * Math.min(1, dt * 10);
+      v.stars.visible = v.reel > 0.3 && v.ghost > 0.5;
+      if (v.stars.visible) {
+        v.stars.rotation.y = t * 5;
+        v.stars.position.y = 2.7 + Math.sin(t * 6) * 0.12;
+      }
+      let bank = 0;
+      if (bug.dash > 0) {
+        const sp = Math.hypot(bug.dashVel.x, bug.dashVel.y) || 1;
+        bank = ((-Math.sin(bug.heading) * bug.dashVel.x + Math.cos(bug.heading) * bug.dashVel.y) / sp) * -0.38;
+      }
       if (bug.dead) v.pose.rotation.z = Math.min(0.5, v.pose.rotation.z + dt);
-      else v.pose.rotation.z = v.lean + Math.sin(v.walk) * 0.025 * speed;
+      else v.pose.rotation.z = v.lean + Math.sin(v.walk) * 0.025 * speed + Math.sin(t * 13) * 0.17 * v.reel + bank;
+      // Dodge streak, fading out behind it.
+      v.trailLife = Math.max(0, v.trailLife - dt);
+      v.trail.visible = v.trailLife > 0;
+      if (v.trail.visible) {
+        const to = v.group.position;
+        const dx = to.x - v.trailFrom.x;
+        const dz = to.z - v.trailFrom.z;
+        const len = Math.hypot(dx, dz);
+        v.trail.position.set((to.x + v.trailFrom.x) / 2, to.y + 0.45, (to.z + v.trailFrom.z) / 2);
+        v.trail.rotation.y = Math.atan2(dx, dz);
+        v.trail.scale.set(v.baseRadius * 1.1, 1, Math.max(0.01, len));
+        (v.trail.material as THREE.MeshBasicMaterial).opacity = 0.42 * (v.trailLife / 0.38);
+      }
 
       const attachedNow = v.parts.reduce((n, pv) => n + (pv.attached ? 1 : 0), 0);
       if (attachedNow !== v.shadowCount) {
@@ -595,7 +659,9 @@ export class ArenaRenderer {
         if (bug.dead) continue;
         // 1 at the moment the weapon fires, fading over ~0.28 s.
         const w = p.part.weapon;
-        let attack = w && sim.time > 1 ? THREE.MathUtils.clamp(1 - (w.cooldown - p.cooldown) / 0.28, 0, 1) : 0;
+        // Rear back (jaws wide, stinger cocked) through the wind-up; 1 at the moment it lands or fires, fading over ~0.28 s.
+        let attack = 0;
+        if (w && sim.time > 1) attack = p.windup > 0 ? -0.9 * Math.min(1, 1.35 - p.windup / 0.34) : THREE.MathUtils.clamp(1 - p.struck / 0.28, 0, 1);
         if (ov.attack !== undefined && ov.weapon === p.part.category) attack = ov.attack;
         pv.model.animate({ t, walk: v.walk, speed, attack, air: Math.max(ov.air ?? 0, Math.min(1, bug.alt / 14)) });
       }
@@ -678,6 +744,38 @@ export class ArenaRenderer {
             if (dir.lengthSq() > 1e-6) v.kick.addScaledVector(dir.normalize(), 0.25);
           }
         }
+        if (e.counter) {
+          // Punished a miss: a cold flash and a ring on top of the crit.
+          this.flash(at, 0x7cf0ff, 1.1, 0.25);
+          this.wave(at, 0x7cf0ff, 1.2);
+        }
+      } else if (e.type === 'dash') {
+        const v = this.bugs[e.bug];
+        v.trailFrom.copy(toWorld(e.x, e.y, e.h / CELL));
+        v.trailLife = 0.38;
+        // Kicked-up dust where it pushed off.
+        this.burst(toWorld(e.x - e.dx * 8, e.y - e.dy * 8, e.h / CELL + 0.1), 8, e.h > 8 ? 0xffffff : 0xd9d4c7, 0.8);
+      } else if (e.type === 'whiff') {
+        // Cutting air: a thin white flick where the strike ended up.
+        const at = toWorld(e.x, e.y, e.h / CELL + 0.7);
+        this.flash(at, 0xffffff, 0.45, 0.1);
+        if (e.dodged) this.burst(at, 4, 0xffffff, 0.6);
+      } else if (e.type === 'clash') {
+        const at = toWorld(e.x, e.y, e.h / CELL + 0.8);
+        this.arena.hype(0.7);
+        this.flash(at, 0xffffff, 1.7, 0.22);
+        this.flash(at, 0xffd23f, 1.2, 0.36);
+        this.wave(at, 0xffffff, 1.7);
+        this.wave(at, 0xffd23f, 1.1);
+        this.burst(at, 26, 0xffe08a, 2);
+        this.burst(at, 12, 0xffffff, 2.5);
+      } else if (e.type === 'stagger') {
+        const v = this.bugs[e.bug];
+        const at = toWorld(e.x, e.y, e.h / CELL + 1.2);
+        this.arena.hype(0.5);
+        this.wave(at, 0xffd23f, 1.4);
+        this.burst(at, 12, 0xffd23f, 1.3);
+        v.spine.kick(0, 3);
       } else if (e.type === 'ult-release') {
         this.arena.hype(0.9);
         this.finisher = { id: e.move, caster: e.bug, t: 0 };

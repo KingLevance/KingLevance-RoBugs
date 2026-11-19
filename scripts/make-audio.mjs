@@ -161,6 +161,10 @@ const SFX = {};
 function sfx(name, dur, peakDb, make) {
   SFX[name] = { dur, peakDb, make };
 }
+const SFX_LATE = {};
+function sfxLate(name, dur, peakDb, make) {
+  SFX_LATE[name] = { dur, peakDb, make };
+}
 function renderSfx(dur, make) {
   const out = new Float32Array(Math.ceil(dur * SFX_RATE));
   const fn = make(SFX_RATE);
@@ -480,6 +484,48 @@ sfx('m_siphon', 0.75, -4, (r) => {
     const slurp = o.sin(300 + 180 * Math.sin(TAU * 3 * t) + 120 * Math.sin(TAU * 13 * t)) * 0.6;
     const gurgle = f(noise(), 500) * (0.5 + 0.5 * Math.sin(TAU * 12 * t)) * 2;
     return (slurp + gurgle) * Math.sin(Math.PI * Math.min(1, t / 0.74));
+  };
+});
+
+// Footwork: dodges, misses, clashes, staggers. (Added after the first set: these render
+// after the music, so the seeded noise of everything defined earlier stays byte-identical.)
+sfxLate('dash', 0.24, -7, (r) => {
+  const f = svf(r);
+  return (t) => f.run(noise(), glide(900, 4200, 0.18, t), 1.8).bp * Math.sin(Math.PI * Math.min(1, t / 0.23)) * 1.3;
+});
+sfxLate('whiff', 0.14, -10, (r) => {
+  const f = svf(r);
+  return (t) => f.run(noise(), glide(5200, 2200, 0.12, t), 2.5).bp * Math.sin(Math.PI * Math.min(1, t / 0.13));
+});
+sfxLate('clash', 0.75, -1, (r) => {
+  const ring = metal(r, 1240, [1, 1.51, 2.37, 3.42, 4.9], [0.45, 0.34, 0.24, 0.15, 0.08], [0.5, 0.4, 0.3, 0.2, 0.12]);
+  const ring2 = metal(r, 1675, [1, 2.09, 3.3], [0.3, 0.2, 0.1], [0.35, 0.22, 0.12]);
+  const o = osc(r);
+  return (t) => ring(t) + ring2(t) + noise() * env(t, 0.0005, 0.006) * 0.9 + o.sin(glide(180, 70, 0.08, t)) * env(t, 0.001, 0.06) * 0.7;
+});
+sfxLate('counter', 0.4, -3, (r) => {
+  const shing = metal(r, 3100, [1, 1.34, 1.82, 2.47], [0.22, 0.17, 0.12, 0.08], [0.4, 0.3, 0.2, 0.12]);
+  const z = osc(r);
+  return (t) => shing(t) + z.saw(glide(900, 3200, 0.06, t)) * env(t, 0.001, 0.035) * 0.3 + noise() * env(t, 0.0005, 0.004) * 0.5;
+});
+sfxLate('stagger', 0.6, -4, (r) => {
+  const a = osc(r);
+  const b = osc(r);
+  const thud = osc(r);
+  return (t) => {
+    const wob = glide(880, 330, 0.5, t) * (1 + 0.06 * Math.sin(TAU * 11 * t));
+    return (a.sin(wob) + b.sin(wob * 1.5) * 0.4) * env(t, 0.004, 0.2) * 0.6 + thud.sin(glide(140, 55, 0.1, t)) * env(t, 0.001, 0.07) * 0.9;
+  };
+});
+sfxLate('overdrive', 0.9, -4, (r) => {
+  const a = osc(r);
+  const b = osc(r);
+  const f = lp1(r);
+  return (t) => {
+    const k = Math.floor(t / 0.3);
+    const u = t - k * 0.3;
+    const hz = 440 * Math.pow(2, k * (4 / 12));
+    return f(a.pulse(hz, 0.3) + b.pulse(hz * 1.5, 0.3) * 0.5, 3200) * (k < 3 ? env(u, 0.004, 0.11) : 0);
   };
 });
 
@@ -940,11 +986,14 @@ function songBoss() {
 mkdirSync(join(OUT, 'sfx'), { recursive: true });
 mkdirSync(join(OUT, 'music'), { recursive: true });
 
-for (const [name, def] of Object.entries(SFX)) {
-  const x = master(renderSfx(def.dur, def.make), def.peakDb);
-  writeFileSync(join(OUT, 'sfx', `${name}.wav`), wavBuffer(x, SFX_RATE));
-  console.log(`sfx   ${name.padEnd(12)} ${def.dur.toFixed(2)}s rms ${db(rms(x))} dB`);
+function writeSfx(set) {
+  for (const [name, def] of Object.entries(set)) {
+    const x = master(renderSfx(def.dur, def.make), def.peakDb);
+    writeFileSync(join(OUT, 'sfx', `${name}.wav`), wavBuffer(x, SFX_RATE));
+    console.log(`sfx   ${name.padEnd(12)} ${def.dur.toFixed(2)}s rms ${db(rms(x))} dB`);
+  }
 }
+writeSfx(SFX);
 
 const tmp = mkdtempSync(join(tmpdir(), 'robugs-audio-'));
 for (const [name, fn] of Object.entries({ hub: songHub, garage: songGarage, battle: songBattle, boss: songBoss })) {
@@ -955,3 +1004,4 @@ for (const [name, fn] of Object.entries({ hub: songHub, garage: songGarage, batt
   console.log(`music ${name.padEnd(8)} ${(out.length / MUSIC_RATE).toFixed(1)}s rms ${db(rms(out))} dB | ${report.join(', ')}`);
 }
 rmSync(tmp, { recursive: true, force: true });
+writeSfx(SFX_LATE);

@@ -53,6 +53,10 @@ function run(opp: Opponent, player: Fighter, seed: number) {
     casts: sim.events.filter((e) => (e.type === 'ult-release' || e.type === 'move') && e.bug === 0).length,
     crits: hits.filter((e) => e.type === 'hit' && e.crit).length,
     hits: hits.length,
+    ev: Object.fromEntries(['whiff', 'dash', 'clash', 'stagger'].map((t) => [t, sim.events.filter((e) => e.type === t).length])) as Record<string, number>,
+    dodged: sim.events.filter((e) => e.type === 'whiff' && e.dodged).length,
+    counters: hits.filter((e) => e.type === 'hit' && e.counter).length,
+    timeout: sim.time >= 90,
     hash: `${sim.winner}:${sim.time.toFixed(4)}:${sim.rng}`,
   };
 }
@@ -106,6 +110,7 @@ for (const opp of OPPONENTS) {
   let crits = 0;
   let hits = 0;
   const stars = [0, 0, 0];
+  const feel = { whiff: 0, dodged: 0, dash: 0, clash: 0, stagger: 0, counters: 0, timeout: 0 };
   for (let k = 0; k < N; k++) {
     const r = run(opp, player, k * 7919 + 1);
     if (r.winner === 0) {
@@ -120,6 +125,13 @@ for (const opp of OPPONENTS) {
     crits += r.crits;
     hits += r.hits;
     selfWalls += r.solo;
+    feel.whiff += r.ev.whiff;
+    feel.dash += r.ev.dash;
+    feel.clash += r.ev.clash;
+    feel.stagger += r.ev.stagger;
+    feel.dodged += r.dodged;
+    feel.counters += r.counters;
+    feel.timeout += r.timeout ? 1 : 0;
   }
   typical[opp.id] = w ? (stars[0] + 2 * stars[1] + 3 * stars[2]) / w : 0;
   const s = computeStats(resolve(build.placements));
@@ -131,6 +143,7 @@ for (const opp of OPPONENTS) {
     `★1/2/3 ${stars.join('/')}`.padEnd(14),
     `moves/match ${(casts / N).toFixed(1)}`,
     `crits ${((crits / Math.max(1, hits)) * 100).toFixed(0)}%`,
+    `| hits ${(hits / N).toFixed(0)} miss ${(feel.whiff / N).toFixed(0)} dodge ${(feel.dodged / N).toFixed(1)} ctr ${(feel.counters / N).toFixed(1)} clash ${(feel.clash / N).toFixed(1)} stag ${(feel.stagger / N).toFixed(1)} t/o ${feel.timeout}`,
     `| player hp ${s.totalHp} dps ${s.dps.toFixed(0)} [${player.moves.join(', ')}]`,
     errs.length ? `PLAYER BUILD INVALID: ${errs[0]}` : '',
   );

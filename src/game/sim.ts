@@ -16,7 +16,16 @@ export const ARENA_SIZE = 830;
 export const MATCH_SECONDS = 90;
 export const STEP = 1 / 60;
 /** Global damage multiplier — lower = longer fights. */
-export const DAMAGE_SCALE = 0.8;
+export const DAMAGE_SCALE = 0.68;
+/**
+ * Overdrive: from this many seconds in, all damage climbs steadily (to
+ * `OVERDRIVE_MAX`× at the bell), so long fights end in a knockout, not on points.
+ */
+export const OVERDRIVE_AT = 40;
+export const OVERDRIVE_MAX = 2.6;
+export function overdrive(time: number) {
+  return 1 + (Math.max(0, time - OVERDRIVE_AT) / (MATCH_SECONDS - OVERDRIVE_AT)) * (OVERDRIVE_MAX - 1);
+}
 
 export type Vec = { x: number; y: number };
 
@@ -35,6 +44,12 @@ export type SimPart = {
   alive: boolean;
   cooldown: number;
   flash: number;
+  /** Melee: seconds left before a strike in progress lands (0 = not swinging). */
+  windup: number;
+  /** Index of the bug the strike in progress is aimed at. */
+  aim: number;
+  /** Seconds since this weapon last struck or fired (for the attack animation). */
+  struck: number;
 };
 
 export type Bug = {
@@ -82,6 +97,32 @@ export type Bug = {
   siphonTick: number;
   /** Exponentially decaying recent damage taken, for move judgement. */
   recentDamage: number;
+  // ── Footwork (see FIGHT) ──
+  /** Seconds until it can dodge again. */
+  dodgeCd: number;
+  /** Seconds left in a dodge hop, and its velocity. */
+  dash: number;
+  dashVel: Vec;
+  /** Seconds since its last dodge started. */
+  dashed: number;
+  /** Seconds left untouchable by strikes and shots (during a dodge). */
+  evade: number;
+  /** Seconds until a dodge it has decided on starts (−1 = none), and where the threat is. */
+  react: number;
+  threat: Vec;
+  /** Seconds left wide open after a missed strike: slow, can't dodge, and hits on it are counters (crits). */
+  open: number;
+  /** Seconds left staggered (poise broken): can't move, strike or dodge. */
+  stagger: number;
+  /** Poise left: drops as it takes damage, refills when left alone; at 0 it staggers. */
+  poise: number;
+  /** Seconds since it last took damage. */
+  sinceHit: number;
+  /** Seconds left before it can be staggered again. */
+  steady: number;
+  /** Seconds until it can lunge / clash again. */
+  lungeCd: number;
+  clashCd: number;
   /** Autonomous driver state (see aiInput). */
   ai: AiState;
 };
@@ -99,7 +140,15 @@ export type Effect = { x: number; y: number; h: number; ttl: number; color: stri
 
 export type SimEvent =
   /** A part took damage. `part` indexes the victim's parts; `by` is the attacking bug (null for hazards/walls). */
-  | { type: 'hit'; bug: number; by: number | null; part: number; x: number; y: number; h: number; dmg: number; broke: boolean; shielded: boolean; crit: boolean }
+  | { type: 'hit'; bug: number; by: number | null; part: number; x: number; y: number; h: number; dmg: number; broke: boolean; shielded: boolean; crit: boolean; counter: boolean }
+  /** A melee strike missed `target`. `dodged`: it was dodged (not just out of reach). */
+  | { type: 'whiff'; bug: number; target: number; x: number; y: number; h: number; dodged: boolean }
+  /** A bug dodged: a quick hop along (dx, dy). */
+  | { type: 'dash'; bug: number; x: number; y: number; h: number; dx: number; dy: number }
+  /** Two strikes met head-on: no damage, both bugs thrown back. */
+  | { type: 'clash'; a: number; b: number; x: number; y: number; h: number }
+  /** A bug's poise broke: it reels for a moment. */
+  | { type: 'stagger'; bug: number; x: number; y: number; h: number }
   | { type: 'break'; bug: number; x: number; y: number; h: number; category: Category; time: number }
   /** A bug hit the floor after losing lift; `impact` is its fall speed. */
   | { type: 'crash'; bug: number; x: number; y: number; impact: number }
@@ -162,6 +211,67 @@ const STOMP_WARN = 1.2;
  * victim's side or rear, plus sensor bonuses (stats.crit). Crits multiply damage.
  */
 export const CRIT = { base: 0.06, flank: 0.06, rear: 0.12, max: 0.35, mult: 1.6 } as const;
+
+/**
+ * Footwork and timing. Melee isn't instant: a weapon winds up while the bug
+ * lunges, and the strike lands (or misses) when the wind-up ends. That gives
+ * the other bug a beat to dodge; a miss leaves the attacker open to a counter.
+ * Hits shove bugs around and wear down poise until they stagger.
+ */
+export const FIGHT = {
+  /** Wind-up seconds = base + damage × perDamage (clamped). Rams barely wind up. */
+  windupBase: 0.15,
+  windupPerDamage: 0.008,
+  windupMin: 0.17,
+  windupMax: 0.34,
+  ramWindup: 0.08,
+  /** A strike can start from this much further than the weapon reaches: the lunge covers it. */
+  lungeReach: 24,
+  lungeSpeed: 150,
+  lungeCooldown: 0.32,
+  /** Dodge hop: seconds, base speed, and how much of top speed adds to it. */
+  dashTime: 0.18,
+  dashSpeed: 250,
+  dashSpeedPerSpeed: 0.8,
+  /** How long before the strike lands the dodge begins. */
+  dodgeLead: 0.09,
+  /** Seconds a bug is left open after missing. */
+  openTime: 0.55,
+  /** Seconds a bug reels when its poise breaks, and how long before it can happen again. */
+  staggerTime: 0.8,
+  steadyTime: 4,
+  /** Poise refills at this rate after `poiseDelay` seconds without being hit. */
+  poiseRegen: 16,
+  poiseDelay: 1.2,
+  /** Two strikes landing within this window of each other clash. */
+  clashWindow: 0.14,
+  clashCooldown: 1.5,
+} as const;
+
+/** 0..1: how light on its feet a bug is (from its top speed). */
+function agility(s: BugStats) {
+  return Math.max(0, Math.min(1, (s.topSpeed - 40) / 140));
+}
+/** Chance to read an incoming strike and dodge it (when a dodge is ready). Sensors sharpen it. */
+export function reflex(s: BugStats) {
+  return s.topSpeed < 25 ? 0 : Math.min(0.78, 0.28 + 0.22 * agility(s) + s.crit * 1.6);
+}
+/** Seconds between dodges: nimble bugs dodge far more often. */
+export function dodgeCooldown(s: BugStats) {
+  return 4.2 - 2.6 * agility(s);
+}
+/** Poise: how much punishment a bug soaks up before it staggers. Heavier = steadier. */
+export function maxPoise(s: BugStats) {
+  return 45 + s.mass * 0.35;
+}
+/** Lighter bugs are thrown further. */
+function shove(s: BugStats) {
+  return Math.max(0.5, Math.min(1.6, 90 / Math.max(1, s.mass)));
+}
+function windupTime(w: NonNullable<PartDef['weapon']>) {
+  if (w.ramBonus) return FIGHT.ramWindup;
+  return Math.max(FIGHT.windupMin, Math.min(FIGHT.windupMax, FIGHT.windupBase + w.damage * FIGHT.windupPerDamage));
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -247,6 +357,9 @@ function makeBug(index: number, team: 0 | 1, fighter: Fighter, pos: Vec, heading
     alive: true,
     cooldown: 0.5,
     flash: 0,
+    windup: 0,
+    aim: -1,
+    struck: 9,
   }));
   const bug: Bug = {
     index,
@@ -275,6 +388,20 @@ function makeBug(index: number, team: 0 | 1, fighter: Fighter, pos: Vec, heading
     siphon: 0,
     siphonTick: 0,
     recentDamage: 0,
+    dodgeCd: 1,
+    dash: 0,
+    dashVel: { x: 0, y: 0 },
+    dashed: 9,
+    evade: 0,
+    react: -1,
+    threat: { x: 0, y: 0 },
+    open: 0,
+    stagger: 0,
+    poise: 0,
+    sinceHit: 9,
+    steady: 0,
+    lungeCd: 0,
+    clashCd: 0,
     alt: 0,
     vAlt: 0,
     stamina: 0,
@@ -283,6 +410,7 @@ function makeBug(index: number, team: 0 | 1, fighter: Fighter, pos: Vec, heading
   };
   refresh(bug);
   bug.stamina = maxStamina(bug);
+  bug.poise = maxPoise(bug.stats);
   return bug;
 }
 
@@ -385,7 +513,9 @@ function refresh(bug: Bug) {
   bug.radius = alive.reduce((m, p) => Math.max(m, Math.hypot(p.lx, p.ly)), 0) + CELL * 0.5;
   const hasCore = alive.some((p) => p.part.category === 'core');
   const hasThorax = alive.some((p) => p.part.category === 'thorax');
-  if (!hasCore || !hasThorax) bug.dead = true;
+  // Out of the fight: no power, no body, or nothing left to fight with (disarmed).
+  const armed = alive.some((p) => p.part.weapon);
+  if (!hasCore || !hasThorax || !armed) bug.dead = true;
 }
 
 // ── Damage ──────────────────────────────────────────────────────────
@@ -446,14 +576,17 @@ export function critChance(attacker: Bug, victim: Bug, from: Vec) {
 }
 
 /** Damage a part; returns the damage actually done (0 if it couldn't be hurt). */
-function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug | null, crit = false): number {
+function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug | null, crit = false, counter = false): number {
   if (!p.alive || !canBeHurt(sim, bug)) return 0;
   if (bug.cloak > 0) bug.cloak = Math.min(bug.cloak, 0.4); // a hit flushes it out of hiding
-  dmg *= DAMAGE_SCALE * (0.8 + rand(sim) * 0.4) * (crit ? CRIT.mult : 1);
+  dmg *= DAMAGE_SCALE * overdrive(sim.time) * (0.8 + rand(sim) * 0.4) * (crit ? CRIT.mult : 1);
   if (bug.shield > 0) dmg *= 0.3;
   p.hp -= dmg;
   p.flash = 0.15;
   bug.recentDamage += dmg;
+  bug.sinceHit = 0;
+  // Poise wears down under punishment; when it breaks the bug reels (see stepBug).
+  if (bug.steady <= 0 && bug.shield <= 0 && bug.stagger <= 0) bug.poise -= dmg * (crit ? 1.3 : 1);
   gainProc(bug, (dmg / 5) * PROC.damageTakenPer5);
   if (p.part.category === 'armor') gainProc(bug, PROC.armorAbsorb);
   if (attacker) gainProc(attacker, PROC.hitLanded + (crit ? PROC.crit : 0));
@@ -472,6 +605,7 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
     broke: p.hp <= 0,
     shielded: bug.shield > 0,
     crit,
+    counter,
   });
   // Heavier hits rattle the camera a little; crits get a beat of hit-stop.
   sim.shake = Math.max(sim.shake, Math.min(0.12, dmg * 0.006));
@@ -501,8 +635,159 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
     }
   }
   refresh(bug);
-  if (bug.dead) sim.log.push(`${bug.name} is disabled!`);
+  if (bug.dead) sim.log.push(bug.parts.some((q) => q.alive && q.part.weapon) ? `${bug.name} is disabled!` : `${bug.name} is disarmed!`);
   return dmg;
+}
+
+// ── Footwork: dodges, lunges, clashes, staggers ─────────────────────
+
+function cancelSwings(bug: Bug, cooldown: number) {
+  for (const q of bug.parts) {
+    if (q.windup <= 0) continue;
+    q.windup = 0;
+    q.cooldown = Math.min(q.cooldown, cooldown);
+  }
+}
+
+/** Shove `bug` along `dir` (unit) at `speed`, scaled by how light it is. A locked carapace barely budges. */
+function knock(bug: Bug, dir: Vec, speed: number) {
+  if (bug.dead || bug.burrow > 0) return;
+  const k = speed * shove(bug.stats) * (bug.shield > 0 ? 0.2 : 1);
+  bug.vel.x += dir.x * k;
+  bug.vel.y += dir.y * k;
+}
+
+function canDodge(sim: Sim, bug: Bug) {
+  if (bug.dead || sim.ult || bug.dodgeCd > 0 || bug.react >= 0 || bug.dash > 0) return false;
+  if (bug.stun > 0 || bug.stagger > 0 || bug.open > 0 || bug.burrow > 0 || bug.siphon > 0 || bug.shield > 0) return false;
+  // Tangled in silk (spider legs pick their way through).
+  if (bug.webbed > 0 && !bug.parts.some((p) => p.alive && p.part.tag === 'spider')) return false;
+  return reflex(bug.stats) > 0;
+}
+
+/**
+ * `victim` sees a strike or shot coming `lead` seconds out, from `from`. If it
+ * reads it (a reflex roll) it will hop clear just before it lands.
+ */
+function considerDodge(sim: Sim, victim: Bug, from: Vec, lead: number, sharpness = 1) {
+  if (!canDodge(sim, victim)) return;
+  // Mid-swing with a strike that lands first? Commit to the trade.
+  if (victim.parts.some((q) => q.windup > 0 && q.windup < lead)) return;
+  if (rand(sim) > reflex(victim.stats) * sharpness) {
+    victim.dodgeCd = Math.max(victim.dodgeCd, 0.4); // misread it
+    return;
+  }
+  victim.react = Math.max(0.02, lead - FIGHT.dodgeLead);
+  victim.threat = { x: from.x, y: from.y };
+}
+
+/** The dodge itself: a quick hop sideways from the threat, toward open floor. */
+function startDash(sim: Sim, bug: Bug) {
+  const away = unit({ x: bug.pos.x - bug.threat.x, y: bug.pos.y - bug.threat.y });
+  const speed = (FIGHT.dashSpeed + bug.stats.topSpeed * FIGHT.dashSpeedPerSpeed) * (bug.webbed > 0 ? 0.7 : 1);
+  const reach = speed * FIGHT.dashTime * 1.5 + bug.radius;
+  const airborne = bug.alt > 10;
+  let best: Vec = away;
+  let bestScore = -Infinity;
+  // Mostly sideways (so it stays close enough to hit back), a little backwards.
+  for (const a of [1.35 * bug.ai.side, -1.35 * bug.ai.side, 0.5 * bug.ai.side, -0.5 * bug.ai.side]) {
+    const d = rotate(away, a);
+    const score = Math.min(1, room(bug, d, reach) / (bug.radius + 40)) - danger(sim, bug, d, reach, airborne) * 1.5 - (Math.abs(a) < 1 ? 0.25 : 0);
+    if (score > bestScore + 1e-9) {
+      bestScore = score;
+      best = d;
+    }
+  }
+  bug.dash = FIGHT.dashTime;
+  bug.dashVel = { x: best.x * speed, y: best.y * speed };
+  bug.evade = FIGHT.dashTime + 0.05;
+  bug.dashed = 0;
+  bug.dodgeCd = dodgeCooldown(bug.stats);
+  cancelSwings(bug, 0.15);
+  sim.events.push({ type: 'dash', bug: bug.index, x: bug.pos.x, y: bug.pos.y, h: bug.alt, dx: best.x, dy: best.y });
+}
+
+function staggerBug(sim: Sim, bug: Bug) {
+  bug.stagger = FIGHT.staggerTime;
+  bug.steady = FIGHT.staggerTime + FIGHT.steadyTime;
+  bug.poise = maxPoise(bug.stats);
+  bug.react = -1;
+  cancelSwings(bug, 0.3);
+  sim.hitstop = Math.max(sim.hitstop, 0.06);
+  sim.shake = Math.max(sim.shake, 0.3);
+  sim.events.push({ type: 'stagger', bug: bug.index, x: bug.pos.x, y: bug.pos.y, h: bug.alt });
+  sim.log.push(`${bug.name} is staggered!`);
+}
+
+/** A melee wind-up ends: the strike lands, misses, or meets the enemy's own strike. */
+function resolveSwing(sim: Sim, bug: Bug, p: SimPart) {
+  const w = p.part.weapon!;
+  const enemy = sim.bugs[p.aim];
+  p.struck = 0;
+  if (!enemy || enemy.dead) return;
+  const wp = partWorld(bug, p);
+  const miss = (dodged: boolean) => {
+    sim.events.push({ type: 'whiff', bug: bug.index, target: enemy.index, x: wp.x, y: wp.y, h: bug.alt, dodged });
+    // Dodged: wide open. Merely fell short (it backed out of reach): a shorter stumble.
+    bug.open = Math.max(bug.open, dodged ? FIGHT.openTime : FIGHT.openTime * 0.45);
+    if (!dodged) return;
+    // The dodger gets its opening: proc, and its weapons come round at once.
+    gainProc(enemy, PROC.dodge);
+    for (const q of enemy.parts) if (q.alive && q.part.weapon && !q.part.weapon.projectileSpeed) q.cooldown = Math.min(q.cooldown, 0.1);
+  };
+  const slipped = enemy.evade > 0 || enemy.dashed < 0.5;
+  if (enemy.burrow > 0 || enemy.evade > 0) return miss(slipped);
+  const target = nearestPart(enemy, wp, true);
+  if (!target) return;
+  // (A little extra reach: the lunge carries the strike forward.)
+  const reach = (w.range * bug.stats.reach + CELL * 0.5) * 1.1 + (w.ramBonus ? 0 : FIGHT.lungeReach * 0.5);
+  const dz = enemy.alt - bug.alt;
+  const toward = Math.atan2(target.w.y - wp.y, target.w.x - wp.x);
+  if (Math.hypot(target.d, dz) > reach || (target.d > CELL && Math.abs(angleDiff(facingAngle(bug, p), toward)) > w.arc * 1.2)) return miss(slipped);
+
+  // Clash: the enemy's own strike at us is about to land, weapon to weapon.
+  const back = Math.atan2(bug.pos.y - enemy.pos.y, bug.pos.x - enemy.pos.x);
+  const rival = enemy.parts.find(
+    (q) =>
+      q.alive &&
+      q.windup > 0 &&
+      q.windup <= FIGHT.clashWindow &&
+      q.aim === bug.index &&
+      !q.part.weapon!.ramBonus &&
+      Math.abs(angleDiff(facingAngle(enemy, q), back)) < 1,
+  );
+  if (rival && !w.ramBonus && bug.clashCd <= 0 && enemy.clashCd <= 0) {
+    const n = unit({ x: enemy.pos.x - bug.pos.x, y: enemy.pos.y - bug.pos.y });
+    cancelSwings(bug, 0.35);
+    cancelSwings(enemy, 0.35);
+    rival.struck = 0;
+    knock(enemy, n, 150);
+    knock(bug, { x: -n.x, y: -n.y }, 150);
+    bug.clashCd = enemy.clashCd = FIGHT.clashCooldown;
+    gainProc(bug, PROC.dodge * 0.5);
+    gainProc(enemy, PROC.dodge * 0.5);
+    sim.hitstop = Math.max(sim.hitstop, 0.07);
+    sim.shake = Math.max(sim.shake, 0.3);
+    sim.events.push({ type: 'clash', a: bug.index, b: enemy.index, x: (wp.x + target.w.x) / 2, y: (wp.y + target.w.y) / 2, h: (bug.alt + enemy.alt) / 2 });
+    return;
+  }
+
+  let dmg = w.damage;
+  if (w.ramBonus) {
+    const closing = (bug.vel.x - enemy.vel.x) * Math.cos(toward) + (bug.vel.y - enemy.vel.y) * Math.sin(toward);
+    dmg += Math.max(0, closing) * w.ramBonus;
+  }
+  // Striking gives away a cloaked bug, but the ambush always crits. So does punishing a miss.
+  const ambush = bug.cloak > 0;
+  if (ambush) bug.cloak = 0;
+  const counter = enemy.open > 0;
+  const crit = rand(sim) < critChance(bug, enemy, wp) || ambush || counter;
+  const dealt = damagePart(sim, enemy, strikeTarget(sim, enemy, wp, bug.alt > enemy.alt + 15) ?? target.p, dmg, bug, crit, counter);
+  if (dealt > 0) {
+    const n = unit({ x: enemy.pos.x - bug.pos.x, y: enemy.pos.y - bug.pos.y });
+    knock(enemy, n, Math.min(150, 30 + dealt * 6) * (crit ? 1.4 : 1));
+  }
+  if (w.drain) heal(sim, bug, dealt * w.drain, enemy);
 }
 
 /**
@@ -835,6 +1120,31 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
   bug.stun = Math.max(0, bug.stun - dt);
   bug.cloak = Math.max(0, bug.cloak - dt);
   bug.haste = Math.max(0, bug.haste - dt);
+  bug.dodgeCd = Math.max(0, bug.dodgeCd - dt);
+  bug.evade = Math.max(0, bug.evade - dt);
+  bug.open = Math.max(0, bug.open - dt);
+  bug.stagger = Math.max(0, bug.stagger - dt);
+  bug.steady = Math.max(0, bug.steady - dt);
+  bug.lungeCd = Math.max(0, bug.lungeCd - dt);
+  bug.clashCd = Math.max(0, bug.clashCd - dt);
+  bug.dashed += dt;
+  bug.sinceHit += dt;
+  if (!bug.dead) {
+    if (bug.poise <= 0 && bug.stagger <= 0) staggerBug(sim, bug);
+    else if (bug.sinceHit > FIGHT.poiseDelay) bug.poise = Math.min(maxPoise(bug.stats), bug.poise + FIGHT.poiseRegen * dt);
+    if (bug.stun > 0 || bug.stagger > 0) {
+      cancelSwings(bug, 0.3);
+      bug.react = -1;
+    }
+    // A dodge it decided on: hop just before the strike lands.
+    if (bug.react >= 0) {
+      bug.react -= dt;
+      if (bug.react < 0) {
+        bug.react = -1;
+        if (bug.burrow <= 0 && bug.stun <= 0) startDash(sim, bug);
+      }
+    }
+  }
   // Blood Siphon: while latched on and in reach, drink from the nearest enemy part.
   if (bug.siphon > 0) {
     bug.siphon = Math.max(0, bug.siphon - dt);
@@ -859,7 +1169,7 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
     return;
   }
   const s = bug.stats;
-  const throttle = bug.stun > 0 ? 0 : Math.min(1, Math.hypot(input.x, input.y));
+  const throttle = bug.stun > 0 || bug.stagger > 0 ? 0 : Math.min(1, Math.hypot(input.x, input.y)) * (bug.open > 0 ? 0.45 : 1);
   // Silk slows (spider legs mostly ignore it); Overclock speeds up.
   const spider = bug.webbed > 0 && bug.parts.some((p) => p.alive && p.part.tag === 'spider');
   const mud = bug.alt < 6 && sim.hazards.some((h) => h.kind === 'mud' && Math.hypot(bug.pos.x - h.x, bug.pos.y - h.y) < h.r);
@@ -869,7 +1179,7 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
   let align = 0;
   if (throttle > 0.05) {
     const d = angleDiff(bug.heading, crab ? input.face! : want);
-    const turn = Math.sign(d) * Math.min(Math.abs(d), s.turnRate * (bug.webbed > 0 && !spider ? 0.55 : 1) * dt);
+    const turn = Math.sign(d) * Math.min(Math.abs(d), s.turnRate * (bug.webbed > 0 && !spider ? 0.55 : 1) * (bug.open > 0 ? 0.4 : 1) * dt);
     bug.heading += turn;
     align = Math.max(0, Math.cos(angleDiff(bug.heading, want)));
   }
@@ -882,17 +1192,39 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
   const k = Math.min(1, 5 * dt);
   bug.vel.x += (f.x * speed - bug.vel.x) * k;
   bug.vel.y += (f.y * speed - bug.vel.y) * k;
+  // Dodging: the hop overrides walking, then it skids to a stop.
+  if (bug.dash > 0) {
+    bug.dash -= dt;
+    const slow = mud ? 0.6 : 1;
+    bug.vel.x = bug.dashVel.x * slow;
+    bug.vel.y = bug.dashVel.y * slow;
+    if (bug.dash <= 0) {
+      bug.vel.x *= 0.4;
+      bug.vel.y *= 0.4;
+    }
+  }
 
   stepFlight(sim, bug, input, dt);
 
-  // Weapons fire automatically when an enemy part is inside their cone and reach.
+  // Weapons act on their own when an enemy part is inside their cone and reach.
+  // Shots fire at once; melee winds up (with a lunge) and lands when the wind-up ends.
   const foes = foesOf(sim, bug);
-  if (foes.length && bug.stun <= 0) {
+  const quick = bug.haste > 0 ? 1.5 : 1;
+  for (const p of bug.parts) if (p.part.weapon) p.struck += dt;
+  if (foes.length && bug.stun <= 0 && bug.stagger <= 0) {
     for (const p of bug.parts) {
       const w = p.part.weapon;
       if (!p.alive || !w) continue;
-      p.cooldown -= dt * (bug.haste > 0 ? 1.5 : 1);
-      if (p.cooldown > 0) continue;
+      p.cooldown -= dt * quick;
+      if (p.windup > 0) {
+        p.windup -= dt * quick;
+        if (p.windup <= 0) {
+          p.windup = 0;
+          resolveSwing(sim, bug, p);
+        }
+        continue;
+      }
+      if (p.cooldown > 0 || bug.dash > 0) continue;
       const wp = partWorld(bug, p);
       // The nearest exposed part of any enemy.
       let target: ReturnType<typeof nearestPart> = null;
@@ -910,41 +1242,47 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
       const reach = w.range * s.reach + CELL * 0.5;
       // Height difference counts: ground jaws can't reach a bug flying overhead.
       const dz = enemy.alt - bug.alt;
-      if (Math.hypot(target.d, dz) > reach) continue;
+      const gap = Math.hypot(target.d, dz);
       const toward = Math.atan2(target.w.y - wp.y, target.w.x - wp.x);
+      const melee = !w.projectileSpeed;
+      const lunge = melee && !w.ramBonus && bug.open <= 0 ? FIGHT.lungeReach : 0;
+      if (gap > reach + lunge) continue;
       if (target.d > CELL && Math.abs(angleDiff(facingAngle(bug, p), toward)) > w.arc) continue;
       p.cooldown = w.cooldown;
-      // Striking gives away a cloaked bug, but the ambush always crits (melee).
-      const ambush = bug.cloak > 0;
-      if (ambush) bug.cloak = 0;
-      if (w.projectileSpeed) {
-        const dx = target.w.x - wp.x;
-        const dy = target.w.y - wp.y;
-        const n = Math.hypot(dx, dy) || 1;
-        const flight = Math.max(0.05, Math.hypot(n, dz) / w.projectileSpeed);
-        sim.projectiles.push({
-          x: wp.x,
-          y: wp.y,
-          z: bug.alt,
-          vx: (dx / n) * w.projectileSpeed,
-          vy: (dy / n) * w.projectileSpeed,
-          vz: dz / flight,
-          damage: w.damage,
-          owner: i,
-          ttl: (reach * 1.3) / w.projectileSpeed,
-          big: false,
-          kind: w.beam ? 'laser' : undefined,
-        });
-      } else {
-        let dmg = w.damage;
-        if (w.ramBonus) {
-          const closing = (bug.vel.x - enemy.vel.x) * Math.cos(toward) + (bug.vel.y - enemy.vel.y) * Math.sin(toward);
-          dmg += Math.max(0, closing) * w.ramBonus;
+      if (melee) {
+        // Wind up. Past arm's length, lunge to close the gap.
+        p.windup = windupTime(w);
+        p.aim = enemy.index;
+        if (gap > reach * 0.75 && bug.lungeCd <= 0 && !w.ramBonus) {
+          bug.lungeCd = FIGHT.lungeCooldown;
+          bug.vel.x += Math.cos(toward) * FIGHT.lungeSpeed;
+          bug.vel.y += Math.sin(toward) * FIGHT.lungeSpeed;
         }
-        const crit = rand(sim) < critChance(bug, enemy, wp) || ambush;
-        const dealt = damagePart(sim, enemy, strikeTarget(sim, enemy, wp, bug.alt > enemy.alt + 15) ?? target.p, dmg, bug, crit);
-        if (w.drain) heal(sim, bug, dealt * w.drain, enemy);
+        // The enemy sees it coming (unless we're cloaked) and may dodge.
+        if (bug.cloak <= 0) considerDodge(sim, enemy, wp, p.windup / quick);
+        continue;
       }
+      p.struck = 0;
+      if (bug.cloak > 0) bug.cloak = 0;
+      const dx = target.w.x - wp.x;
+      const dy = target.w.y - wp.y;
+      const n = Math.hypot(dx, dy) || 1;
+      const flight = Math.max(0.05, Math.hypot(n, dz) / w.projectileSpeed!);
+      sim.projectiles.push({
+        x: wp.x,
+        y: wp.y,
+        z: bug.alt,
+        vx: (dx / n) * w.projectileSpeed!,
+        vy: (dy / n) * w.projectileSpeed!,
+        vz: dz / flight,
+        damage: w.damage,
+        owner: i,
+        ttl: (reach * 1.3) / w.projectileSpeed!,
+        big: false,
+        kind: w.beam ? 'laser' : undefined,
+      });
+      // A shot in the air can be sidestepped too, if it's read in time (light is too fast).
+      if (!w.beam && flight > 0.2) considerDodge(sim, enemy, wp, flight, 0.75);
     }
     tryMoves(sim, bug);
   }
@@ -1138,7 +1476,7 @@ export function step(sim: Sim, dt: number, inputs: Input[]) {
     pr.ttl -= dt;
     const attacker = sim.bugs[pr.owner];
     for (const target of foesOf(sim, attacker)) {
-      if (target.burrow > 0) continue;
+      if (target.burrow > 0 || target.evade > 0) continue; // underground, or mid-dodge
       const hit = nearestPart(target, pr, true);
       if (!(hit && hit.d < CELL * (pr.kind === 'web' ? 1.1 : 0.6) && Math.abs(pr.z - target.alt) < (pr.kind === 'web' ? 30 : 20))) continue;
       if (pr.kind === 'web') {
@@ -1150,7 +1488,9 @@ export function step(sim: Sim, dt: number, inputs: Input[]) {
       // Weapon darts can crit (judged by where they came from); move volleys can't.
       const from = { x: pr.x - pr.vx * 0.2, y: pr.y - pr.vy * 0.2 };
       const crit = !pr.big && rand(sim) < critChance(attacker, target, from);
-      damagePart(sim, target, strikeTarget(sim, target, pr, pr.z > target.alt + 8) ?? hit.p, pr.damage, attacker, crit);
+      const dealt = damagePart(sim, target, strikeTarget(sim, target, pr, pr.z > target.alt + 8) ?? hit.p, pr.damage, attacker, crit);
+      const sp = Math.hypot(pr.vx, pr.vy) || 1;
+      if (dealt > 0) knock(target, { x: pr.vx / sp, y: pr.vy / sp }, Math.min(90, dealt * 4));
       pr.ttl = 0;
       break;
     }
@@ -1224,10 +1564,10 @@ export function newAi(index: number): AiState {
 const TARGET_VALUE: Record<Category, number> = {
   core: 3,
   thorax: 2.2,
-  mandibles: 2.4,
-  pincers: 2.4,
-  stinger: 2.6,
-  horn: 2,
+  mandibles: 1.7,
+  pincers: 1.7,
+  stinger: 1.9,
+  horn: 1.5,
   legs: 2,
   wings: 1.6,
   head: 1.4,
@@ -1495,6 +1835,9 @@ export function aiInput(sim: Sim, me: number, aggression: number = sim.bugs[me].
     ai.stuck = 0;
     setMode('retreat');
   }
+  // The enemy just missed or is reeling: that's the opening. Get in there.
+  const opening = (foe.open > 0.1 || foe.stagger > 0.15) && melee.length > 0;
+  if (opening && (ai.mode === 'approach' || ai.mode === 'retreat') && dist < contact + 130) setMode('strike');
 
   if (ranged && melee.length === 0) {
     // ── Sniper: orbit at range; turn in to shoot when a stinger is ready.
@@ -1589,7 +1932,17 @@ export function aiInput(sim: Sim, me: number, aggression: number = sim.bugs[me].
       const threat = foeArmed && dist < contact + 90;
       ai.guard += ((threat && melee.length ? guardOffset(bug, foe, meleeR, aim) : 0) - ai.guard) * Math.min(1, dt * 3);
       if (meleeR !== 0 || Math.abs(ai.guard) > 0.03) face = faceFor(meleeR, aim) + ai.guard;
-      const touching = dist < contact * 0.95;
+      // Footwork: between strikes, don't stand in its jaws. Slide round it (still facing it)
+      // and step back in when a weapon is about ready. Heavy bugs just plant their feet.
+      const swinging = melee.some((p) => p.windup > 0);
+      const nextReady = melee.reduce((m, p) => Math.min(m, p.cooldown), Infinity);
+      if (!opening && !swinging && !heavy && bug.siphon <= 0 && foeArmed && nextReady > 0.22 && dist < contact * 1.15) {
+        if (room(bug, rotate(toFoeN, 1.8 * ai.side), 90) < bug.radius + 25) ai.side = ai.side === 1 ? -1 : 1;
+        dir = rotate(toFoeN, 1.8 * ai.side);
+        goalDist = Infinity;
+        face = faceFor(meleeR, aim) + ai.guard;
+      }
+      const touching = dist < contact * 1.1;
       if (touching) ai.engaged += dt;
       else if (ai.t > 2.2) setMode('approach'); // lost them: re-set up the attack
       const flurry = 0.5 + aggression * 1.1;
@@ -1601,7 +1954,7 @@ export function aiInput(sim: Sim, me: number, aggression: number = sim.bugs[me].
         (p) => p.alive && (p.part.category === 'core' || (p.part.weapon && weapons.length <= 1)) && p.hp < p.part.hp * 0.3,
       );
       // (Don't break off mid-drink.)
-      if (bug.siphon <= 0 && (ai.engaged > flurry * (fragile ? 0.65 : 1) || (losingTrade && ai.engaged > 0.4))) {
+      if (bug.siphon <= 0 && !opening && (ai.engaged > flurry * (fragile ? 0.65 : 1) || (losingTrade && ai.engaged > 0.4))) {
         ai.engaged = 0;
         setMode('retreat');
       }
@@ -1697,7 +2050,7 @@ export function hud(sim: Sim): Hud {
     dead: bug.dead,
     hp: hpFraction(bug),
     proc: bug.proc,
-    status: `${bug.webbed > 0 ? ' 🕸' : ''}${bug.stun > 0 ? ' ⚡' : ''}${bug.cloak > 0 ? ' 👻' : ''}${bug.burrow > 0 ? ' ⛏' : ''}${bug.haste > 0 ? ' 🔥' : ''}${bug.siphon > 0 ? ' 🩸' : ''}`,
+    status: `${bug.webbed > 0 ? ' 🕸' : ''}${bug.stun > 0 ? ' ⚡' : ''}${bug.stagger > 0 ? ' 💫' : ''}${bug.cloak > 0 ? ' 👻' : ''}${bug.burrow > 0 ? ' ⛏' : ''}${bug.haste > 0 ? ' 🔥' : ''}${bug.siphon > 0 ? ' 🩸' : ''}`,
     shield: bug.shield > 0,
     flying: bug.alt > 8,
     wings: maxStamina(bug) > 0 ? bug.stamina / maxStamina(bug) : -1,

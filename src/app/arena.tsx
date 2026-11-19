@@ -13,7 +13,7 @@ import { GUIDE } from '@/game/guide';
 import { getMove, PROC } from '@/game/moves';
 import { alliesFor, getOpponent, lineup } from '@/game/opponents';
 import { validateBuild } from '@/game/build';
-import { aiInput, CELL, createTeamSim, forfeit, hud, MATCH_SECONDS, step, STEP, teamHp, type HudBug } from '@/game/sim';
+import { aiInput, CELL, createTeamSim, forfeit, hud, MATCH_SECONDS, OVERDRIVE_AT, step, STEP, teamHp, type HudBug } from '@/game/sim';
 import { ArenaRenderer } from '@/render/scene';
 import { useGame } from '@/state/game-store';
 
@@ -165,6 +165,7 @@ export default function Arena() {
     // Don't start counting until the arena has actually drawn (first frames can stall on shader compiles).
     let warmup = 3;
     let goTimer = 0;
+    let overdriven = false;
     renderer.intro = 1;
     /** Turn new hit / break events into floating combat text at their on-screen position. */
     const combatText = () => {
@@ -185,6 +186,22 @@ export default function Arena() {
           });
           continue;
         }
+        if (e.type === 'whiff' || e.type === 'clash' || e.type === 'stagger') {
+          // Call-outs for the big beats: a dodge, a clash, a stagger.
+          const who = e.type === 'whiff' ? sim.bugs[e.target] : e.type === 'stagger' ? sim.bugs[e.bug] : null;
+          if (e.type === 'whiff' && !e.dodged) continue;
+          const at = who ? renderer.project(who.pos.x, who.pos.y, who.alt / CELL + 2.6) : renderer.project(e.x, e.y, e.h / CELL + 2.2);
+          const good = who ? (who.team === 0) === (e.type === 'whiff') : true;
+          items.push({
+            id: nextId++,
+            x: Math.min(size.current.w - 60, Math.max(60, at.x * size.current.w)),
+            y: Math.min(size.current.h - 120, Math.max(90, at.y * size.current.h)),
+            text: e.type === 'whiff' ? 'DODGE!' : e.type === 'clash' ? 'CLASH!' : 'STAGGERED!',
+            color: e.type === 'clash' ? '#FFD23F' : e.type === 'whiff' ? (good ? '#7CF0FF' : '#FFB347') : good ? '#7CFFB2' : '#FF5D5D',
+            size: e.type === 'clash' ? 30 : 20,
+          });
+          continue;
+        }
         if (e.type !== 'hit' && e.type !== 'break' && e.type !== 'crash') continue;
         const crit = e.type === 'hit' && e.crit;
         const h = e.type === 'crash' ? 0 : e.h / CELL;
@@ -201,7 +218,7 @@ export default function Arena() {
           const big = e.dmg >= 14;
           items.push(
             crit
-              ? { id: nextId++, x, y: y - 10, text: `CRIT ${n}!`, color: mine ? '#FF5D5D' : '#FF9A2E', size: mine ? 22 : 30 }
+              ? { id: nextId++, x, y: y - 10, text: `${e.counter ? 'COUNTER' : 'CRIT'} ${n}!`, color: mine ? '#FF5D5D' : e.counter ? '#7CF0FF' : '#FF9A2E', size: mine ? 22 : 30 }
               : {
                   id: nextId++,
                   x,
@@ -254,6 +271,12 @@ export default function Arena() {
       }
       renderer.render(sim, dt);
       combatText();
+      if (!overdriven && sim.time >= OVERDRIVE_AT && !sim.over) {
+        // Overdrive kicks in: say so, loudly.
+        overdriven = true;
+        sfx('overdrive', { gap: 0 });
+        setFloaters((f) => [...f, { id: nextId++, x: size.current.w / 2, y: size.current.h * 0.3, text: 'OVERDRIVE!', color: '#FF8A3D', size: 34 }].slice(-16));
+      }
       frame++;
       if (frame % 3 === 0 || sim.over) setView(hud(sim));
       if (sim.over && !finished) {
@@ -273,6 +296,8 @@ export default function Arena() {
   const others = view.bugs.filter((b) => b.team === 1 && b !== foe);
   const remaining = Math.max(0, Math.ceil(MATCH_SECONDS - view.time));
   const cutscene = !!view.ult;
+  /** Late in the fight all damage climbs: fights end in a knockout, not on the clock. */
+  const overdrive = view.time >= OVERDRIVE_AT && !view.over;
 
   return (
     <View
@@ -303,7 +328,10 @@ export default function Arena() {
                 <MiniHud key={i} bug={b} color="#58C7FF" align="left" />
               ))}
             </View>
-            <Text style={styles.timer}>{remaining}</Text>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={[styles.timer, overdrive && { color: '#FF8A3D' }]}>{remaining}</Text>
+              {overdrive && <Text style={styles.overdrive}>OVERDRIVE</Text>}
+            </View>
             <View style={{ flex: 1, gap: 4 }}>
               <BugHud bug={foe} color={Colors.bad} align="right" />
               {others.map((b, i) => (
@@ -373,6 +401,7 @@ const styles = StyleSheet.create({
   fill: { height: '100%', borderRadius: 4 },
   moveChip: { borderWidth: 1.5, borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
   moveChipText: { color: Colors.text, fontSize: 10, fontWeight: '800' },
+  overdrive: { color: '#FF8A3D', fontSize: 8, fontWeight: '900', letterSpacing: 1, textAlign: 'center', marginTop: -4 },
   timer: { color: Colors.text, fontSize: 28, fontFamily: Fonts.display, fontVariant: ['tabular-nums'], minWidth: 40, textAlign: 'center' },
   log: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: Spacing.lg, paddingBottom: Spacing.sm },
   logLine: { color: Colors.text, fontSize: 12, textShadowColor: '#000', textShadowRadius: 3, textShadowOffset: { width: 0, height: 1 } },

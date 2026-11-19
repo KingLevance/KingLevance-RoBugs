@@ -10,7 +10,7 @@ export const STAR_HP = 0.5;
 
 /** Seconds to beat for the "fast" star: longer for bosses and team fights. */
 export function starTime(o: Opponent) {
-  return (o.team?.length ?? 0) > 0 ? 70 : o.boss ? 60 : 45;
+  return (o.team?.length ?? 0) > 0 ? 45 : o.boss ? 40 : 30;
 }
 
 export type StarCheck = { label: string; ok: boolean };
