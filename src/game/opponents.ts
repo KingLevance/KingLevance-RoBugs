@@ -515,6 +515,22 @@ export function pathOpen(o: Opponent, cleared: string[]) {
   return o.unlockedBy.length === 0 || o.unlockedBy.some((id) => cleared.includes(id));
 }
 
+/**
+ * The fight to go to after `from`: the next playable, unbeaten main-path stop
+ * (in campaign order), else any playable unbeaten stop (optional bosses too),
+ * else null when everything is beaten.
+ */
+export function nextFight(from: string, cleared: string[], stars: Record<string, number>): Opponent | null {
+  const open = OPPONENTS.filter((o) => !cleared.includes(o.id) && isUnlocked(o, cleared, stars));
+  const at = OPPONENTS.findIndex((o) => o.id === from);
+  return (
+    open.find((o) => !o.optional && OPPONENTS.indexOf(o) > at) ??
+    open.find((o) => !o.optional) ??
+    open[0] ??
+    null
+  );
+}
+
 /** Playable: the path is open and any zone star gate is met. Stops you've already beaten always stay open. */
 export function isUnlocked(o: Opponent, cleared: string[], stars: Record<string, number>) {
   if (cleared.includes(o.id)) return true;

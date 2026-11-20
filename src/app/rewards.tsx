@@ -9,7 +9,8 @@ import { RewardChip } from '@/components/reward-chip';
 import { Stars } from '@/components/stars';
 import { Button, Label, Panel } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
-import { getOpponent } from '@/game/opponents';
+import { bugProblems } from '@/game/build';
+import { getOpponent, nextFight } from '@/game/opponents';
 import { useGame } from '@/state/game-store';
 
 export default function Rewards() {
@@ -40,6 +41,14 @@ export default function Rewards() {
     );
   }
   const opp = getOpponent(r.opponentId);
+  /** Where Continue goes: the next unbeaten fight on the map (null once everything's beaten). */
+  const next = nextFight(r.opponentId, game.cleared, game.stars);
+  /** Your lead can only go again if its build still works (it may have been changed in the meantime). */
+  const canFight = bugProblems(game.inventory, game.bugs, game.active, game.active).length === 0;
+  const fight = (id: string) => {
+    game.selectOpponent(id);
+    router.replace('/arena');
+  };
   const won = r.winner === 0;
   const title = won ? 'VICTORY' : r.forfeited ? 'FORFEIT' : r.winner === 1 ? 'DEFEAT' : 'DRAW';
   const color = won ? Colors.good : r.winner === 1 ? Colors.bad : Colors.accent;
@@ -113,11 +122,35 @@ export default function Rewards() {
 
       {won && opp.boss && <Text style={styles.dim}>Bosses can be re-fought for more rolls on their loot table.</Text>}
 
-      <View style={styles.actions}>
-        <Button label="Campaign" variant="secondary" onPress={() => router.dismissTo('/campaign')} style={{ flex: 1 }} />
-        <Button label="Garage" onPress={() => router.replace('/garage')} style={{ flex: 1 }} />
-      </View>
     </ScrollView>
+      {/* Pinned, so Continue / Try again are always in reach however long the loot list is. */}
+      <View style={styles.bar}>
+        <View style={styles.actions}>
+          {won ? (
+            <>
+              {/* Replay for more stars or loot, or move on to the next fight on the map. */}
+              <Button label="↻ Replay" variant="secondary" disabled={!canFight} onPress={() => fight(r.opponentId)} style={{ flex: 1 }} />
+              <Button
+                label={next ? 'Continue ▸' : 'Campaign'}
+                onPress={() => {
+                  if (next) game.selectOpponent(next.id);
+                  router.dismissTo('/campaign');
+                }}
+                style={{ flex: 1.3 }}
+              />
+            </>
+          ) : (
+            <>
+              <Button label="Garage" variant="secondary" onPress={() => router.replace('/garage')} style={{ flex: 1 }} />
+              <Button label={canFight ? '↻ Try again' : 'Fix your bug first'} disabled={!canFight} onPress={() => fight(r.opponentId)} style={{ flex: 1.3 }} />
+            </>
+          )}
+        </View>
+        <View style={styles.links}>
+          {won && <Button label="Garage" variant="secondary" size="sm" onPress={() => router.replace('/garage')} style={{ flex: 1 }} />}
+          <Button label="Campaign map" variant="secondary" size="sm" onPress={() => router.dismissTo('/campaign')} style={{ flex: 1 }} />
+        </View>
+      </View>
     </SafeAreaView>
   );
 }
@@ -146,4 +179,17 @@ const styles = StyleSheet.create({
   checkMiss: { color: Colors.textDim, borderColor: Colors.border },
   newBest: { fontFamily: Fonts.display, color: '#FFD23F', fontSize: 16, letterSpacing: 1 },
   actions: { flexDirection: 'row', gap: Spacing.sm },
+  links: { flexDirection: 'row', gap: Spacing.sm },
+  bar: {
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    backgroundColor: Colors.bg,
+    width: '100%',
+    maxWidth: MaxContentWidth,
+    alignSelf: 'center',
+  },
 });

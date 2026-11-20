@@ -30,6 +30,8 @@ RoBugs is an original 3D mobile game. You collect robotic bug parts, snap them o
 
 ```
 Garage (build + equip moves) → Campaign map → 3D Arena (1v1 vs AI) → Rewards (stars, guaranteed + rolled) → Garage …
+
+The results screen has pinned buttons: after a loss **↻ Try again** (straight back into the same fight) or Garage; after a win **Continue ▸** (back to the map with the next unbeaten fight selected: the next main-path stop, else any open one) or **↻ Replay** (same fight again, for stars or loot). Garage and the campaign map are one tap away either way.
 ```
 
 1. **Build** — place parts on a 5×7 grid. Your layout sets weight, speed, handling, armor and attacks.
