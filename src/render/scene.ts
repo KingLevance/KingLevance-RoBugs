@@ -1107,6 +1107,12 @@ export class ArenaRenderer {
     const floor = toWorld(b.pos.x, b.pos.y, 0.2);
     const mid = toWorld(b.pos.x, b.pos.y, b.alt / CELL + 0.8);
     switch (id) {
+      case 'carapace-lock':
+        // The plates slam shut: a blue flash and a ring (the shell itself shows while it holds).
+        this.flash(mid, color, 1.9, 0.3);
+        this.wave(mid, color, 1.4);
+        this.burst(mid, 10, 0xffffff, 0.9);
+        break;
       case 'skitter-dash':
         this.burst(floor, 12, 0xc9c2b0, 0.9); // dust kicked up
         this.startStreaks(bi, color, 0.35);

@@ -1,5 +1,4 @@
 import type { Build, Placement } from './build';
-import type { MoveId } from './moves';
 import { PARTS, type Rarity } from './parts';
 
 /**
@@ -36,7 +35,6 @@ export type Opponent = {
   arena: ArenaId;
   aggression: number;
   build: Build;
-  moves: MoveId[];
   /** Bosses roll their loot table several times per win and are meant to be farmed. */
   boss: boolean;
   /** Given once, on first clear. */
@@ -56,10 +54,9 @@ export type Opponent = {
 };
 
 /** Another bug in a team fight. */
-export type Teammate = { build: Build; moves: MoveId[]; aggression: number };
+export type Teammate = { build: Build; aggression: number };
 
 const part = (id: string): Reward => ({ kind: 'part', id });
-const move = (id: MoveId): Reward => ({ kind: 'move', id });
 
 const RARITY_WEIGHT: Record<Rarity, number> = { common: 50, uncommon: 30, rare: 15, epic: 6 };
 const ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic'];
@@ -126,9 +123,8 @@ export const OPPONENTS: Opponent[] = [
     arena: 'pit',
     aggression: 0.5,
     build: bug('Rustmite', ['..m..', '.lHl.', '.lTo.', '..A..']),
-    moves: [],
     boss: false,
-    guaranteed: [move('carapace-lock'), part('armor-ceramic')],
+    guaranteed: [part('armor-ceramic')],
     lootTable: tierTable('uncommon'),
     unlockedBy: [],
     map: { x: 0.5, row: 0 },
@@ -138,11 +134,10 @@ export const OPPONENTS: Opponent[] = [
     name: 'Needlewisp',
     blurb: 'A flitting dart-spitter that keeps its distance.',
     arena: 'meadow',
-    aggression: 0.35,
-    build: bug('Needlewisp', ['..d..', '.eHe.', '.wTw.', '.lAl.', '.oAo.']),
-    moves: ['venom-barrage', 'skitter-dash'],
+    aggression: 0.3,
+    build: bug('Needlewisp', ['..d..', '..H..', '.wTw.', '.l.l.', '.oAo.']),
     boss: false,
-    guaranteed: [part('sting-dart'), move('venom-barrage')],
+    guaranteed: [part('sting-dart')],
     lootTable: [...tierTable('uncommon'), { reward: part('wings-foil'), weight: 40 }],
     unlockedBy: ['rustmite'],
     map: { x: 0.25, row: 1 },
@@ -154,9 +149,8 @@ export const OPPONENTS: Opponent[] = [
     arena: 'foundry',
     aggression: 0.7,
     build: bug('Snapclaw', ['.pHp.', '.rTr.', '.lTl.', '.lAo.']),
-    moves: ['carapace-lock'],
     boss: false,
-    guaranteed: [move('skitter-dash'), part('legs-strider'), part('legs-strider')],
+    guaranteed: [part('legs-strider'), part('legs-strider')],
     lootTable: tierTable('rare'),
     unlockedBy: ['rustmite'],
     map: { x: 0.75, row: 1 },
@@ -166,12 +160,11 @@ export const OPPONENTS: Opponent[] = [
     name: 'Old Scrapjaw',
     blurb: 'Optional. A battered veteran that has out-bitten every newcomer. Teaches Overclock.',
     arena: 'pit',
-    aggression: 0.85,
-    build: bug('Old Scrapjaw', ['.Mh..', '.rHr.', '.lTo.', '.lAl.']),
-    moves: ['mandible-crusher', 'skitter-dash'],
+    aggression: 0.95,
+    build: bug('Old Scrapjaw', ['.Mh..', '.cHc.', '.lTo.', '.lAl.']),
     boss: true,
     optional: true,
-    guaranteed: [move('overclock'), part('head-octo'), part('core-cell')],
+    guaranteed: [part('head-octo'), part('core-fusion')],
     lootTable: [...tierTable('rare'), { reward: part('head-octo'), weight: 20 }, { reward: part('core-cell'), weight: 20 }],
     unlockedBy: ['snapclaw'],
     map: { x: 0.8, row: 2 },
@@ -181,9 +174,8 @@ export const OPPONENTS: Opponent[] = [
     name: 'Ironback',
     blurb: 'Foundry boss. Slow, plated, and it hits like a press. Farmable.',
     arena: 'foundry',
-    aggression: 0.6,
-    build: bug('Ironback', ['.p.p.', 'rBVBr', 'sBOBs', '.KKK.', '.s.s.']),
-    moves: ['carapace-lock'],
+    aggression: 0.45,
+    build: bug('Ironback', ['.p.p.', 'rBVBr', 'sBOBs', '.KKK.', '.g.g.']),
     boss: true,
     guaranteed: [part('core-fusion'), part('pinc-vise')],
     lootTable: [
@@ -203,11 +195,10 @@ export const OPPONENTS: Opponent[] = [
     name: 'Silkjaw',
     blurb: 'An eight-eyed weaver. Its webs pin you down while its jaws go to work.',
     arena: 'meadow',
-    aggression: 0.75,
+    aggression: 0.9,
     build: bug('Silkjaw', ['.mMm.', '.vCv.', '.oBo.', '.vSv.']),
-    moves: ['web-snare', 'mandible-crusher'],
     boss: false,
-    guaranteed: [move('web-snare'), part('abdomen-spinner'), part('legs-weaver'), part('legs-weaver')],
+    guaranteed: [part('abdomen-spinner'), part('legs-weaver'), part('legs-weaver')],
     lootTable: [...tierTable('rare'), { reward: part('legs-weaver'), weight: 25 }, { reward: part('abdomen-spinner'), weight: 15 }],
     unlockedBy: ['ironback'],
     map: { x: 0.5, row: 0 },
@@ -217,9 +208,8 @@ export const OPPONENTS: Opponent[] = [
     name: 'Mother Lattice',
     blurb: 'Optional. The great weaver at the heart of the web. Six legs of pure spite.',
     arena: 'meadow',
-    aggression: 0.95,
-    build: bug('Mother Lattice', ['.MCM.', 'vBOBv', 'vKSKv', 'vcocv']),
-    moves: ['web-snare', 'mandible-crusher', 'skitter-dash'],
+    aggression: 0.88,
+    build: bug('Mother Lattice', ['.MCM.', 'vBOBv', 'vKSKv', 'vXoXv']),
     boss: true,
     optional: true,
     guaranteed: [part('legs-weaver'), part('legs-weaver'), part('armor-aegis'), part('mand-shear')],
@@ -233,10 +223,9 @@ export const OPPONENTS: Opponent[] = [
     blurb: 'It vanishes under the floor, then the floor comes up to meet you.',
     arena: 'meadow',
     aggression: 0.8,
-    build: bug('Gravelgrub', ['.qHq.', 'rBOBr', 'sKKKs', '.s.s.']),
-    moves: ['burrow-strike', 'carapace-lock'],
+    build: bug('Gravelgrub', ['.qHq.', 'cBOBc', 'sKKKs', '.s.s.']),
     boss: false,
-    guaranteed: [move('burrow-strike'), part('pinc-digger'), part('pinc-digger')],
+    guaranteed: [part('pinc-digger'), part('pinc-digger')],
     lootTable: [...tierTable('rare'), { reward: part('pinc-digger'), weight: 25 }],
     unlockedBy: ['silkjaw'],
     map: { x: 0.2, row: 1 },
@@ -248,9 +237,8 @@ export const OPPONENTS: Opponent[] = [
     arena: 'pond',
     aggression: 0.85,
     build: bug('Arcfly', ['.MtM.', '.eHe.', 'wBOBw', 'sAoAs']),
-    moves: ['static-burst', 'gale-flap', 'skitter-dash'],
     boss: false,
-    guaranteed: [move('static-burst'), move('gale-flap'), part('horn-shock'), part('wings-foil'), part('wings-foil')],
+    guaranteed: [part('horn-shock'), part('wings-foil'), part('wings-foil')],
     lootTable: [...tierTable('rare'), { reward: part('horn-shock'), weight: 20 }, { reward: part('wings-foil'), weight: 30 }],
     unlockedBy: ['silkjaw'],
     map: { x: 0.8, row: 1 },
@@ -262,9 +250,8 @@ export const OPPONENTS: Opponent[] = [
     arena: 'pond',
     aggression: 0.9,
     build: bug('Bloodgnat', ['.MyM.', 'ceHec', 'GBOBG', 'sKoKs', '.s.s.']),
-    moves: ['blood-siphon', 'overclock'],
     boss: false,
-    guaranteed: [move('blood-siphon'), part('mand-proboscis')],
+    guaranteed: [part('mand-proboscis')],
     lootTable: [...tierTable('rare'), { reward: part('mand-proboscis'), weight: 20 }, { reward: part('wings-glass'), weight: 6 }],
     unlockedBy: ['silkjaw'],
     map: { x: 0.5, row: 1 },
@@ -275,8 +262,7 @@ export const OPPONENTS: Opponent[] = [
     blurb: 'Hive champion. Drill horn, shear jaws, glass wings. Farmable boss.',
     arena: 'hive',
     aggression: 0.9,
-    build: bug('Queen Vexa', ['.MhM.', 'rBVBr', 'GBOBG', '.gog.']),
-    moves: ['mandible-crusher', 'carapace-lock'],
+    build: bug('Queen Vexa', ['.MhM.', 'cBVBc', 'GBOBG', '.gog.']),
     boss: true,
     guaranteed: [part('wings-glass'), part('mand-shear')],
     lootTable: [
@@ -285,7 +271,7 @@ export const OPPONENTS: Opponent[] = [
       { reward: part('horn-drill'), weight: 8 },
       { reward: part('sting-lance'), weight: 6 },
       { reward: part('wings-glass'), weight: 8 },
-      { reward: move('mandible-crusher'), weight: 4 },
+      { reward: part('mand-shear'), weight: 4 },
     ],
     unlockedBy: ['gravelgrub', 'arcfly', 'bloodgnat'],
     map: { x: 0.5, row: 2 },
@@ -298,9 +284,8 @@ export const OPPONENTS: Opponent[] = [
     blurb: 'Two-on-two. The scrapyard twins never fight alone. Bring a second bug from your garage (or borrow Snapclaw).',
     arena: 'foundry',
     aggression: 0.75,
-    build: bug('Rivet', ['.PHP.', 'cBOBc', '.sKs.', '.s.s.']),
-    moves: ['carapace-lock'],
-    team: [{ build: bug('Ratchet', ['.MHM.', '.sBs.', '.oKo.', '.s.s.']), moves: ['mandible-crusher'], aggression: 0.85 }],
+    build: bug('Rivet', ['.PHP.', 'XBOBX', '.sKs.', '.s.s.']),
+    team: [{ build: bug('Ratchet', ['.MHM.', '.sBs.', '.oKo.', '.s.s.']), aggression: 0.95 }],
     allies: ['snapclaw'],
     boss: false,
     guaranteed: [part('legs-crawler'), part('legs-crawler'), part('thorax-chitin')],
@@ -313,11 +298,10 @@ export const OPPONENTS: Opponent[] = [
     name: 'Glimmer',
     blurb: 'Now you see it. Then you really don’t, until its jaws are already shut.',
     arena: 'pond',
-    aggression: 0.8,
-    build: bug('Glimmer', ['.MVM.', 'iBOBi', 'gKoKg', '.g.g.']),
-    moves: ['ghost-shell', 'mandible-crusher'],
+    aggression: 0.9,
+    build: bug('Glimmer', ['.MVM.', 'iBOBi', 'sKoKs', '.s.s.']),
     boss: false,
-    guaranteed: [move('ghost-shell'), part('armor-mirage')],
+    guaranteed: [part('armor-mirage')],
     lootTable: [...tierTable('epic'), { reward: part('armor-mirage'), weight: 20 }],
     unlockedBy: ['twins'],
     map: { x: 0.27, row: 1 },
@@ -327,9 +311,8 @@ export const OPPONENTS: Opponent[] = [
     name: 'Nullshade',
     blurb: 'Optional. An assassin nobody has seen twice. Cloak, laser, and a very short fight.',
     arena: 'foundry',
-    aggression: 0.85,
-    build: bug('Nullshade', ['pMzMp', 'iBVBi', 'gOKOg', '.g.g.']),
-    moves: ['ghost-shell', 'sunder-beam', 'mandible-crusher'],
+    aggression: 0.9,
+    build: bug('Nullshade', ['pMzMp', 'iBVBi', 'sOKOs', '.s.s.']),
     boss: true,
     optional: true,
     guaranteed: [part('sting-lance'), part('armor-mirage'), part('head-visor')],
@@ -342,11 +325,10 @@ export const OPPONENTS: Opponent[] = [
     name: 'Lenswing',
     blurb: 'Hovers out of reach and carves you up with light.',
     arena: 'pit',
-    aggression: 0.45,
+    aggression: 0.6,
     build: bug('Lenswing', ['.zVz.', 'RBOBR', 'GcAcG', '.o.o.']),
-    moves: ['sunder-beam', 'gale-flap', 'carapace-lock'],
     boss: false,
-    guaranteed: [move('sunder-beam'), part('sting-laser'), part('sensor-radar')],
+    guaranteed: [part('sting-laser'), part('sensor-radar')],
     lootTable: [...tierTable('epic'), { reward: part('sting-laser'), weight: 18 }, { reward: part('sensor-radar'), weight: 14 }],
     unlockedBy: ['twins'],
     map: { x: 0.73, row: 1 },
@@ -358,9 +340,8 @@ export const OPPONENTS: Opponent[] = [
     arena: 'pit',
     aggression: 0.6,
     build: bug('Barbtail', ['.jHj.', '.TOT.', 'lBKBl', 'lokol']),
-    moves: ['skewer', 'carapace-lock'],
     boss: false,
-    guaranteed: [move('skewer'), part('sting-tail'), part('pinc-grip'), part('pinc-grip')],
+    guaranteed: [part('sting-tail'), part('pinc-grip'), part('pinc-grip')],
     lootTable: [...tierTable('epic'), { reward: part('sting-tail'), weight: 20 }, { reward: part('pinc-grip'), weight: 25 }],
     unlockedBy: ['twins'],
     map: { x: 0.5, row: 1 },
@@ -372,8 +353,7 @@ export const OPPONENTS: Opponent[] = [
     arena: 'foundry',
     aggression: 0.85,
     build: bug('Burrowbane', ['.qVq.', 'sBOBs', '.KKK.', '.s.s.']),
-    moves: ['burrow-strike'],
-    team: [{ build: bug('Grubjaw', ['.MHM.', 'cBOBc', '.sKs.', '.s.s.']), moves: ['mandible-crusher', 'skitter-dash'], aggression: 0.9 }],
+    team: [{ build: bug('Grubjaw', ['.MHM.', 'cBOBc', '.sKs.', '.s.s.']), aggression: 0.9 }],
     allies: ['silkjaw'],
     boss: false,
     guaranteed: [part('abdomen-tank'), part('core-fusion')],
@@ -388,10 +368,9 @@ export const OPPONENTS: Opponent[] = [
     arena: 'hive',
     aggression: 0.95,
     build: bug('Hive Warden', ['.PHP.', 'cBOBc', '.sKs.', '.s.s.']),
-    moves: ['carapace-lock'],
     team: [
-      { build: bug('Stingwing', ['.n.n.', '.eVe.', '.GBG.', '.oOo.', '..A..']), moves: ['venom-barrage'], aggression: 0.4 },
-      { build: bug('Shellback', ['.MHM.', 'XBOBX', 'sKoKs', '.s.s.']), moves: ['mandible-crusher', 'carapace-lock'], aggression: 0.9 },
+      { build: bug('Stingwing', ['.n.n.', '.eVe.', '.GBG.', '.oOo.', '..A..']), aggression: 0.6 },
+      { build: bug('Shellback', ['.MHM.', 'XBOBX', 'sKoKs', '.s.s.']), aggression: 0.9 },
     ],
     allies: ['ironback', 'arcfly'],
     boss: true,
@@ -407,10 +386,9 @@ export const OPPONENTS: Opponent[] = [
     arena: 'hive',
     aggression: 0.95,
     build: bug('Empress Kalyx', ['.MzM.', 'cBVBc', 'GBOBG', 'vKOKv', '.vSv.']),
-    moves: ['sunder-beam', 'web-snare', 'mandible-crusher', 'carapace-lock'],
     team: [
-      { build: bug('Royal Guard', ['.PHP.', 'XBOBX', 'sKoKs', '.s.s.']), moves: ['carapace-lock'], aggression: 0.9 },
-      { build: bug('Royal Lancer', ['.MDM.', '.sHs.', 'cBOBc', '.oKo.']), moves: ['mandible-crusher'], aggression: 0.9 },
+      { build: bug('Royal Guard', ['.PHP.', 'XBOBX', 'sKoKs', '.s.s.']), aggression: 0.9 },
+      { build: bug('Royal Lancer', ['.MDM.', '.sHs.', 'cBOBc', '.oKo.']), aggression: 0.9 },
     ],
     allies: ['glimmer', 'lenswing'],
     boss: true,
@@ -438,9 +416,9 @@ export function lineup(o: Opponent): { allies: Teammate[]; enemies: Teammate[] }
   return {
     allies: (o.allies ?? []).map((id) => {
       const a = getOpponent(id);
-      return { build: a.build, moves: a.moves, aggression: a.aggression };
+      return { build: a.build, aggression: a.aggression };
     }),
-    enemies: [{ build: o.build, moves: o.moves, aggression: o.aggression }, ...(o.team ?? [])],
+    enemies: [{ build: o.build, aggression: o.aggression }, ...(o.team ?? [])],
   };
 }
 
@@ -462,7 +440,7 @@ export function alliesFor(o: Opponent, squad: Teammate[]): { allies: Teammate[];
       ...mine,
       ...borrowed.map((id) => {
         const a = getOpponent(id);
-        return { build: a.build, moves: a.moves, aggression: a.aggression };
+        return { build: a.build, aggression: a.aggression };
       }),
     ],
     borrowed,
@@ -537,8 +515,6 @@ export function isUnlocked(o: Opponent, cleared: string[], stars: Record<string,
   return pathOpen(o, cleared) && (starGate(o, stars)?.met ?? true);
 }
 
-/** Moves every new player owns, and what's equipped at the start. */
-export const STARTER_MOVES: MoveId[] = ['mandible-crusher'];
 
 /** Parts every new player owns. */
 export const STARTER_INVENTORY: Record<string, number> = {

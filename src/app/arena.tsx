@@ -79,7 +79,8 @@ function BugHud({ bug, color, align }: { bug: HudBug; color: string; align: 'lef
           return (
             <View key={m.id} style={[styles.moveChip, { borderColor: def.color, opacity: m.cd > 0 ? 0.4 : 1 }, m.ready && { backgroundColor: def.color }]}>
               <Text style={styles.moveChipText}>
-                {def.name.split(' ')[0]} {def.cost}
+                {def.ultimate ? '★ ' : ''}
+                {def.name.split(' ')[0]}
               </Text>
             </View>
           );
@@ -114,10 +115,10 @@ export default function Arena() {
     const squad = game.squad
       .filter((i) => bugReady(game.inventory, game.bugs, i, game.active))
       .map((i) => game.bugs[i])
-      .map((b) => ({ build: { name: b.name, placements: b.placements }, moves: b.equipped, aggression: 0.7 }));
+      .map((b) => ({ build: { name: b.name, placements: b.placements }, aggression: 0.7 }));
     const { allies } = alliesFor(opponent, squad);
     const { enemies } = lineup(opponent);
-    return createTeamSim([{ build: game.build, moves: game.equipped }, ...allies], enemies, opponent.arena, (Math.random() * 2 ** 31) | 0);
+    return createTeamSim([{ build: game.build }, ...allies], enemies, opponent.arena, (Math.random() * 2 ** 31) | 0);
   });
   useMusic(opponent.boss ? 'boss' : 'battle', true);
   const [view, setView] = useState(() => hud(sim));

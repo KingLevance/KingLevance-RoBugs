@@ -6,7 +6,7 @@
  * (x right, y "down"/toward the player's start); the 3D renderer lifts it.
  */
 import { computeStats, connectedKeys, pkey, resolve, type Build, type BugStats, type Layer } from './build';
-import { getMove, meetsRequirement, MOVES, PROC, ULT_SECONDS, type MoveId } from './moves';
+import { getMove, MOVES, movesOf, PROC, procChance, ULT_LULL, ULT_SECONDS, type MoveId } from './moves';
 import type { ArenaId } from './opponents';
 import type { Category, PartDef, PartTag } from './parts';
 
@@ -75,8 +75,14 @@ export type Bug = {
   stamina: number;
   /** Grounded until stamina refills to this fraction (after running out). */
   grounded: boolean;
+  /** Moves its attached parts carry (recomputed when parts break off). */
   moves: MoveId[];
+  /** How many attached parts carry each move (more carriers = higher proc chance). */
+  carriers: Partial<Record<MoveId, number>>;
   moveCd: Partial<Record<MoveId, number>>;
+  /** Seconds until it next rolls for a move proc, and until it may cast another move at all. */
+  moveRoll: number;
+  moveLock: number;
   proc: number;
   /** Seconds of Carapace Lock left. */
   shield: number;
@@ -182,6 +188,8 @@ export type Sim = {
   /** Append-only; renderers keep their own read cursor. */
   events: SimEvent[];
   ult: Ult | null;
+  /** Seconds before anyone may fire another ultimate. */
+  ultLull: number;
   hitstop: number;
   shake: number;
   flash: number;
@@ -189,7 +197,8 @@ export type Sim = {
   rng: number;
 };
 
-export type Fighter = { build: Build; moves: MoveId[]; aggression?: number };
+/** A bug going into a fight. Its moves come from its parts. */
+export type Fighter = { build: Build; aggression?: number };
 
 /** Desired movement direction in world space; magnitude (0..1) is throttle. */
 export type Input = {
@@ -375,8 +384,11 @@ function makeBug(index: number, team: 0 | 1, fighter: Fighter, pos: Vec, heading
     maxHp: parts.reduce((a, p) => a + p.hp, 0),
     dead: false,
     hazardTimer: 0,
-    moves: fighter.moves,
+    moves: [],
+    carriers: {},
     moveCd: {},
+    moveRoll: 0.5,
+    moveLock: 0,
     proc: 0,
     shield: 0,
     invuln: 0,
@@ -499,6 +511,7 @@ export function createTeamSim(allies: Fighter[], enemies: Fighter[], arena: Aren
     log: [],
     events: [],
     ult: null,
+    ultLull: 0,
     hitstop: 0,
     shake: 0,
     flash: 0,
@@ -511,6 +524,10 @@ function refresh(bug: Bug) {
   const alive = bug.parts.filter((p) => p.alive);
   bug.stats = computeStats(alive.map((p) => ({ x: p.x, y: p.y, z: p.z, part: p.part })));
   bug.radius = alive.reduce((m, p) => Math.max(m, Math.hypot(p.lx, p.ly)), 0) + CELL * 0.5;
+  // Moves live on parts: lose the part, lose the move.
+  const carried = movesOf(alive.map((p) => p.part));
+  bug.moves = carried.map((m) => m.id);
+  bug.carriers = Object.fromEntries(carried.map((m) => [m.id, m.carriers]));
   const hasCore = alive.some((p) => p.part.category === 'core');
   const hasThorax = alive.some((p) => p.part.category === 'thorax');
   // Out of the fight: no power, no body, or nothing left to fight with (disarmed).
@@ -580,7 +597,7 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
   if (!p.alive || !canBeHurt(sim, bug)) return 0;
   if (bug.cloak > 0) bug.cloak = Math.min(bug.cloak, 0.4); // a hit flushes it out of hiding
   dmg *= DAMAGE_SCALE * overdrive(sim.time) * (0.8 + rand(sim) * 0.4) * (crit ? CRIT.mult : 1);
-  if (bug.shield > 0) dmg *= 0.3;
+  if (bug.shield > 0) dmg *= 0.45;
   p.hp -= dmg;
   p.flash = 0.15;
   bug.recentDamage += dmg;
@@ -819,11 +836,12 @@ function damageNear(sim: Sim, bug: Bug, at: Vec, dmg: number, attacker: Bug | nu
 
 // ── Signature moves ─────────────────────────────────────────────────
 
+/** Off cooldown, still carried, and (ultimates) charged up with no other cutscene running. */
 function moveReady(sim: Sim, bug: Bug, id: MoveId): boolean {
   const m = getMove(id);
-  if ((bug.moveCd[id] ?? 0) > 0 || bug.proc < m.cost) return false;
-  if (m.ultimate && sim.ult) return false;
-  return meetsRequirement(m, bug.parts.filter((p) => p.alive).map((p) => p.part));
+  if ((bug.moveCd[id] ?? 0) > 0 || !bug.moves.includes(id)) return false;
+  if (m.ultimate && (sim.ult || sim.ultLull > 0 || bug.proc < m.cost)) return false;
+  return true;
 }
 
 /** Does this move make sense right now? */
@@ -1018,7 +1036,7 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
       break;
     }
     case 'carapace-lock':
-      bug.shield = 4;
+      bug.shield = 3;
       break;
     case 'skitter-dash': {
       // Sidestep away from danger: pick the side facing away from the foe.
@@ -1125,12 +1143,21 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
   }
 }
 
-function tryMoves(sim: Sim, bug: Bug) {
+/**
+ * Twice a second, each move that's ready and fits the moment rolls its proc chance
+ * (higher with more carriers). At most one move goes off per roll, then a short lockout.
+ */
+function tryMoves(sim: Sim, bug: Bug, dt: number) {
+  bug.moveLock = Math.max(0, bug.moveLock - dt);
+  bug.moveRoll -= dt;
+  if (bug.moveRoll > 0 || bug.moveLock > 0) return;
+  bug.moveRoll = 0.5;
   for (const id of bug.moves) {
-    if (moveReady(sim, bug, id) && judge(sim, bug, id)) {
-      castMove(sim, bug, id);
-      return;
-    }
+    if (!moveReady(sim, bug, id) || !judge(sim, bug, id)) continue;
+    if (rand(sim) >= procChance(id, bug.carriers[id] ?? 1)) continue;
+    castMove(sim, bug, id);
+    bug.moveLock = 1.2;
+    return;
   }
 }
 
@@ -1309,7 +1336,7 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
       // A shot in the air can be sidestepped too, if it's read in time (light is too fast).
       if (!w.beam && flight > 0.2) considerDodge(sim, enemy, wp, flight, 0.75);
     }
-    tryMoves(sim, bug);
+    tryMoves(sim, bug, dt);
   }
 
   bug.pos.x += bug.vel.x * dt;
@@ -1475,6 +1502,7 @@ export function step(sim: Sim, dt: number, inputs: Input[]) {
     if (sim.ult.t >= sim.ult.dur) {
       const { id, caster } = sim.ult;
       sim.ult = null;
+      sim.ultLull = ULT_LULL;
       resolveMove(sim, sim.bugs[caster], id);
       sim.events.push({ type: 'ult-release', bug: caster, move: id });
       sim.hitstop = 0.12;
@@ -1490,6 +1518,7 @@ export function step(sim: Sim, dt: number, inputs: Input[]) {
   }
 
   sim.time += dt;
+  sim.ultLull = Math.max(0, sim.ultLull - dt);
   for (let i = 0; i < sim.bugs.length; i++) stepBug(sim, i, inputs[i] ?? { x: 0, y: 0 }, dt);
   collideBugs(sim);
   stepStompers(sim, dt);

@@ -10,7 +10,8 @@ import { RewardChip } from '@/components/reward-chip';
 import { Button, Label, Pill } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { bugProblems, bugReady } from '@/game/build';
-import { getMove } from '@/game/moves';
+import { getMove, movesOf } from '@/game/moves';
+import { getPart } from '@/game/parts';
 import {
   alliesFor,
   allySlots,
@@ -150,6 +151,8 @@ export default function Campaign() {
   const gateBlocks = !selUnlocked && pathOpen(sel, game.cleared) && selGate && !selGate.met;
   const firstClear = !game.cleared.includes(sel.id);
   const size = fightSize(sel);
+  /** The moves the opponent's own parts carry. */
+  const selMoves = movesOf(sel.build.placements.map((p) => getPart(p.partId)));
   const totalStars = OPPONENTS.reduce((a, o) => a + (game.stars[o.id] ?? 0), 0);
   const best = game.stars[sel.id] ?? 0;
   // Team fights: your squad bugs (valid ones, in order), then borrowed opponents for any gaps.
@@ -157,7 +160,7 @@ export default function Campaign() {
   const readySquad = game.squad.filter((i) => bugReady(game.inventory, game.bugs, i, game.active));
   const { borrowed } = alliesFor(
     sel,
-    readySquad.map((i) => ({ build: game.bugs[i], moves: game.bugs[i].equipped, aggression: 0.7 })),
+    readySquad.map((i) => ({ build: game.bugs[i], aggression: 0.7 })),
   );
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   // Open the map on the selected fight.
@@ -363,9 +366,9 @@ export default function Campaign() {
             ))}
           </View>
         )}
-        {selUnlocked && sel.moves.length > 0 && (
-          <Text style={styles.dim} numberOfLines={1}>
-            Moves: {sel.moves.map((m) => getMove(m).name).join(', ')}
+        {selUnlocked && selMoves.length > 0 && (
+          <Text style={styles.dim} numberOfLines={2}>
+            Moves (from its parts): {selMoves.map((m) => getMove(m.id).name).join(', ')}
           </Text>
         )}
         {selUnlocked && (

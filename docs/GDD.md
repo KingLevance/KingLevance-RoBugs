@@ -16,8 +16,8 @@ RoBugs is an original 3D mobile game. You collect robotic bug parts, snap them o
 | Garage feedback | The selected part gets a bright amber outline, a bobbing arrow and a soft glow while the rest of the bug dims; a SELECTED chip on the editor names it with Remove / ✕. A status bar pinned under the 3D editor always shows what the bug STILL NEEDS (red) or ✓ READY TO FIGHT with a Fight button (green). |
 | Readability | Rarity is shown in the UI only (coloured frame, 1–4 pips and a printed label on bin tiles), never on the 3D models. Part chips use renders of the real 3D models. In fights, teams are marked subtly: a thin faint ring under each bug and a small pointer over the player's. |
 | Main mode | **Single-player campaign**: a map of opponents with guaranteed first-clear drops and farmable bosses. |
-| Signature moves | Equippable, unlockable moves that **auto-proc** and play a short cutscene. See §6. |
-| Controls | **Fights are autonomous.** Your bug's AI plays to its build: melee charges, ranged kites, hurt bugs circle. The player's skill is in building and choosing moves. A 1×/2× speed toggle is available while watching. |
+| Signature moves | **Carried by parts** (owner's call, Nov 2026): a part with a ★ move gives its bug that move while the part is attached and intact. Moves **auto-proc** on a chance roll; ultimates play a short cutscene. See §6. |
+| Controls | **Fights are autonomous.** Your bug's AI plays to its build: melee charges, ranged kites, hurt bugs circle. The player's skill is in building, and the build decides the moves. A 1×/2× speed toggle is available while watching. |
 | Garage | **3D editor.** The bug is shown exactly as it looks in the arena. Drag empty space to spin the view; Angle/Top/Side/Front buttons jump to preset views (eye-level views zoom to the bug). Drag a part to move it (swaps if the slot is taken), drag it off the grid to remove it, and tap a part in the bin to auto-attach it to a sensible slot. |
 | Teaching | The garage explains itself. Each part kind has a plain-language label (thorax = "middle body", abdomen = "tail body"), a "what it does" and a "where it goes" line (`src/game/guide.ts`). Selecting a part lights up its best slots in green (`rankSlots`). A checklist shows what the bug still needs. The bin is grouped into Body / Movement / Weapons / Power & defense. **Auto-build** assembles a legal, mirrored bug from the player's best parts. |
 | Hit feedback | Every hit emits a sim event. The renderer reacts: the struck part pops, the victim flinches away and the attacker follows through, sparks fly (blue if shielded, orange for heavy hits), and a part breaking gets a shockwave, a burst in its colour, a beat of hit-stop and a camera shake. Floating damage numbers and "X BROKEN!" callouts are drawn as an overlay (gold for damage you deal, red for damage you take). |
@@ -29,14 +29,14 @@ RoBugs is an original 3D mobile game. You collect robotic bug parts, snap them o
 ## 1. Core loop
 
 ```
-Garage (build + equip moves) → Campaign map → 3D Arena (1v1 vs AI) → Rewards (stars, guaranteed + rolled) → Garage …
+Garage (build; moves come with the parts) → Campaign map → 3D Arena (1v1 vs AI) → Rewards (stars, guaranteed + rolled) → Garage …
 
 The results screen has pinned buttons: after a loss **↻ Try again** (straight back into the same fight) or Garage; after a win **Continue ▸** (back to the map with the next unbeaten fight selected: the next main-path stop, else any open one) or **↻ Replay** (same fight again, for stars or loot). Garage and the campaign map are one tap away either way.
 ```
 
 1. **Build** — place parts on a 5×7 grid. Your layout sets weight, speed, handling, armor and attacks.
-2. **Fight** — after a 3-2-1-FIGHT! countdown, which starts once the arena has drawn its first frames (the bugs hold still while the camera swoops down from a high orbit), watch your bug fight on its own; its AI plays to the build. Weapons fire on their own when an enemy part is in their cone and reach. Basic actions fill your **proc meter**, and equipped signature moves fire on their own when they make sense. Parts get knocked off one by one.
-3. **Earn** — first clears give guaranteed parts and moves. Bosses can be re-fought for rolls on their loot table. A loss still gives one common salvage part.
+2. **Fight** — after a 3-2-1-FIGHT! countdown, which starts once the arena has drawn its first frames (the bugs hold still while the camera swoops down from a high orbit), watch your bug fight on its own; its AI plays to the build. Weapons fire on their own when an enemy part is in their cone and reach. Basic actions fill your **proc meter** (which charges ultimates), and the signature moves your parts carry proc on their own when they make sense. Parts get knocked off one by one.
+3. **Earn** — first clears give guaranteed parts. Bosses can be re-fought for rolls on their loot table. A loss still gives one common salvage part.
 
 ## 2. Parts
 
@@ -117,13 +117,27 @@ Outdoor arenas swap the stadium (walls, crowd, floodlights) for open ground. The
 
 ## 6. Signature moves
 
-Moves are unlocked like parts (from drops) and **equipped** in the Garage. There are **2 slots**.
+**Moves live on parts** (`PartDef.move` in `parts.ts`). There's nothing to learn or equip: fit a part that carries a move (marked **★** in the bin and in the part details) and the bug has that move. Break the part off in a fight and the move goes with it. A bug has every move its intact parts carry, so big builds can have 4–6 moves.
 
-**Auto-proc.** The player never presses a button. A bug fires an equipped move when all of these are true:
-1. the move is off cooldown,
-2. the bug has enough **proc points** (PP) for it,
-3. the bug still has the parts the move needs (e.g. *Mandible Crusher* needs living mandibles; break them off and the move is dead), and
-4. the move's **judgement** says now is a good time (target in reach and in front, heavy damage just taken, etc.).
+| Move | Carried by |
+|---|---|
+| Mandible Crusher ★ | Gnasher Jaws, Shearfang Jaws |
+| Venom Barrage ★ | Dart Stinger, Arc Lance Stinger |
+| Sunder Beam ★ | Prism Cutter |
+| Carapace Lock | Lacquer Plate, Bastion Plate |
+| Skitter Dash | Piston Striders |
+| Web Snare | Silk Spinneret |
+| Burrow Strike | Mole Diggers |
+| Ghost Shell | Mirage Plate |
+| Static Burst | Tesla Prongs |
+| Overclock | Ember Core |
+| Gale Flap | Foil Wings |
+| Blood Siphon | Siphon Proboscis |
+| Skewer | Barbed Tail |
+
+**Auto-proc** (`tryMoves` in `sim.ts`). The player never presses a button. Every 0.5 s a bug rolls for each move whose **judgement** says now is a good time (target in reach and in front, heavy damage just taken, etc.) and that is off cooldown. The chance is the move's base `chance` (35%; ultimates and Carapace Lock 50%), and **each extra part carrying the same move adds a quarter of that** (35% → 44% → 52%), capped at 75%, so two jaws that carry Mandible Crusher fire it more often. After any move fires the bug can't fire another for 1.2 s.
+
+**Ultimates** (Mandible Crusher, Venom Barrage, Sunder Beam) also need a full enough **proc meter** (their PP cost) and, so cutscenes don't pile up, can't fire within **10 s** of any ultimate in the match (`ULT_LULL`). Other moves cost no PP, only their cooldown. *(Assumption: chances, the stacking bonus and the 10 s lull are first-pass numbers; a fight has about 2–3 cutscenes and 10–15 other moves.)*
 
 **Proc points** (one constants table, `PROC` in `src/game/moves.ts`, max 100, reset every match):
 
@@ -146,33 +160,33 @@ Moves are unlocked like parts (from drops) and **equipped** in the Garage. There
 - **Choreography (renderer only, `ArenaRenderer.poseCine` / `releaseFx`):** each move has its own charge-up and payoff, followed by a 0.8 s follow-through that keeps the cinematic camera and plays the impact in brief slow motion (`timeScale`, which only paces the screen's sim loop, so the sim stays deterministic).
   - **Mandible Crusher:** drops low with jaws spread wide, draws back shuddering while red energy streams into the jaws, then lunges (speed streaks) and the jaws slam shut: red and white bite flash, double shockwave and sparks. Camera: low front three-quarter pushing in, then cuts to a side shot framing both bugs for the bite.
   - **Venom Barrage:** swings its stinger round onto the target during the wind-up (whichever way the stinger is mounted; the sim snaps to that heading on release and fires a tight fan that leads the target), plants wide and pulses venom into a growing orb at the stinger (creeping back with each pulse); on release, a muzzle flash, recoil kick and seven glowing darts with tails. Camera: over the shoulder, looking down the barrel at the target.
-  - **Carapace Lock:** hunkers down, tucks its legs and spins a full turn while blue plates stream in and a faceted shell closes around it; the shell then holds (pulsing) for as long as the shield lasts. Camera: circles the bug.
   - **Skitter Dash** (not an ultimate): a puff of dust and green speed streaks.
 - **Focus:** the background fades into fog around the caster. *(A true depth-of-field blur pass is a TODO.)*
 - **UI (`UltBanner`):** letterbox bars (~13% of screen height each), and the move name slams in from the right on a skewed stripe in the move's colour, drifts, then flies out left. The HUD hides while it plays.
 - **Charge VFX:** a ring at the caster's feet in the move's colour and sparks streaming into the weapon (or onto the shell).
 
 **Quick moves** (no cutscene; they fire in real time):
+- **Carapace Lock** (Lacquer or Bastion Plate): fires when the bug is getting hammered. A blue flash and shell close around it: 55% less damage for 3 s (16 s cooldown). It used to be an ultimate, but as a free move on common armor it fired too often for a cutscene and was too strong at 70% for 4 s.
 - **Web Snare** (Silk Spinneret): a silk glob. A webbed bug moves at 35% speed, turns slowly and can't fly for 3.5 s. Bugs with Weaver Legs shrug most of it off.
 - **Burrow Strike** (Mole Diggers): the bug digs under the floor for up to 1.5 s (untouchable; a dirt mound shows where it is), tunnels at its target and erupts beneath it: 3 hits from below (slung-under parts first, then legs) and the target is tossed into the air. Flyers can climb out of reach; fast bugs can outrun it.
 - **Ghost Shell** (Mirage Plate): invisible for 4.5 s. Enemies hunt its last-seen spot and can't target it unless it's touching them; its first melee hit out of hiding is a guaranteed crit; taking a hit flushes it out. Your own bug shows as a ghost, enemies all but vanish.
 - **Static Burst** (Tesla Prongs): enemies close by are stunned 1.3 s and lose 15 proc.
-- **Overclock** (2 cores): 5 s of +35% speed and +50% attack rate.
+- **Overclock** (Ember Core): 5 s of +35% speed and +50% attack rate.
 - **Blood Siphon** (Siphon Proboscis): latches on for 2.4 s, draining 9 damage every 0.3 s from the nearest enemy part while in reach and pouring all of it back into its own most-damaged parts. The AI won't break off mid-drink.
 - **Gale Flap** (wings): hurls nearby enemies back (lighter ones further) and drains flyers' wing stamina so they drop.
 
 **Scorpion kit** (won from Barbtail in the Deep Hive):
-- **Barbed Tail** (stinger slot, melee): arcs over the bug's own body, so it's mounted at the back. Very long reach (76), 22 damage, slow (1.3 s). Unlocks **Skewer**.
+- **Barbed Tail** (stinger slot, melee): arcs over the bug's own body, so it's mounted at the back. Very long reach (76), 22 damage, slow (1.3 s). Carries **Skewer**.
 - **Gripper Claws** (pincers): 15 damage; a hit **pins** the victim, so it can't dodge for 1.5 s. Sets up the tail.
-- **Skewer** (move, 45 PP, 12 s): the tail whips over the top into the enemy's thorax (22 damage, ignoring the armor around it) and staggers it at once.
+- **Skewer** (move, 12 s cooldown): the tail whips over the top into the enemy's thorax (22 damage, ignoring the armor around it) and staggers it at once.
 
 **Vampiric weapons:** the Siphon Proboscis (a jaw-slot mosquito needle) heals its bug for 60% of the damage each hit deals, most-damaged parts first (broken parts stay broken). Heals show as red droplets flowing from the victim and green **+n** numbers.
 
 **Sunder Beam** (Prism Cutter) is the fourth ultimate: the bug swings its lens onto the target and fires a beam that hits up to 5 parts in a line (piercing).
 
-Moves name the hardware they need with `requires: { category?, tag?, count, label }`; signature parts carry a `tag` (`silk`, `dig`, `cloak`, `laser`, `shock`, `venom`, `spider`).
+Signature parts still carry a `tag` (`silk`, `dig`, `cloak`, `laser`, `shock`, `venom`, `spider`) for their passive effects.
 
-Starting moves: **Mandible Crusher** (mandibles; heavy multi-part bite), **Venom Barrage** (stinger; fan of darts), **Carapace Lock** (armor; 4 s damage shield), **Skitter Dash** (legs; small, non-ultimate side-dodge).
+The garage lists the bug's moves (proc chance and which parts carry each). Opponents get their moves the same way, from their parts, so the campaign sheet shows the moves an opponent's build carries. Older saves keep their learned moves list and equipped slots in storage, but both are ignored.
 
 ## 7. AI
 
@@ -205,7 +219,7 @@ The campaign (`src/game/opponents.ts`) is a scrolling map of 19 stops in three z
 | **The Undergrowth** | Silkjaw (webs) → Gravelgrub (burrows) / Arcfly (static, gale) / Bloodgnat (vampire) → **Queen Vexa** (boss). Optional: **Mother Lattice**. |
 | **The Deep Hive** | Rivet & Ratchet (2v2) → Glimmer (cloak) / Barbtail (scorpion) / Lenswing (laser) → The Tunnel Kings (2v2) → **The Hive Guard** (3v3 boss) → **Empress Kalyx** (3v3 finale, farmable). Optional: **Nullshade**. |
 
-**Your garage holds up to 6 bugs** (`SaveData.bugs`), each with its own build, name and equipped moves. Tabs at the top of the garage switch between them; ＋ adds an empty one, ⧉ copies the current one, and 🗑 scraps it (after a confirm). The active bug is the one you edit and lead into battle. **Parts sit on one bug at a time** (owner's call): a bug can only use what you own minus what your other bugs are using. The parts bin shows what's free (and how many are on other bugs); Auto-build, ⧉ copy and loading a saved build only use spare parts and say how many they had to leave off. Saves from before this rule keep their bugs untouched: any bug using a part another bug also uses is flagged ("Hex Plate is on Sprocket"), shows red, and can't join the squad until one of them gives the part up. Your **lead** (the bug you're editing) has first claim on shared parts, so it is never blocked by another bug; the garage warns it about the overlap and suggests Auto-build. On the campaign sheet, the squad picker shows the lead plus your other bugs; a blocked bug says why and tapping it opens the garage on it. Old single-bug saves migrate automatically. In the garage, **↶ Undo** steps back through part and move edits (40 steps, per bug, cleared on switching bugs), and **💾 Save** stores the current parts and moves as a named *saved build* (up to 12, `SaveData.saved`), which can be loaded onto any bug from the Saved builds list (loading is undoable).
+**Your garage holds up to 6 bugs** (`SaveData.bugs`), each with its own build and name. Tabs at the top of the garage switch between them; ＋ adds an empty one, ⧉ copies the current one, and 🗑 scraps it (after a confirm). The active bug is the one you edit and lead into battle. **Parts sit on one bug at a time** (owner's call): a bug can only use what you own minus what your other bugs are using. The parts bin shows what's free (and how many are on other bugs); Auto-build, ⧉ copy and loading a saved build only use spare parts and say how many they had to leave off. Saves from before this rule keep their bugs untouched: any bug using a part another bug also uses is flagged ("Hex Plate is on Sprocket"), shows red, and can't join the squad until one of them gives the part up. Your **lead** (the bug you're editing) has first claim on shared parts, so it is never blocked by another bug; the garage warns it about the overlap and suggests Auto-build. On the campaign sheet, the squad picker shows the lead plus your other bugs; a blocked bug says why and tapping it opens the garage on it. Old single-bug saves migrate automatically. In the garage, **↶ Undo** steps back through part edits (40 steps, per bug, cleared on switching bugs), and **💾 Save** stores the current parts as a named *saved build* (up to 12, `SaveData.saved`), which can be loaded onto any bug from the Saved builds list (loading is undoable).
 
 **Team fights:** an opponent can bring a `team` of extra bugs. Your side is your lead bug plus your **squad**: other garage bugs you tap on the campaign sheet (up to 2, only finished builds). Any slot you can't fill is covered by a beaten opponent from `allies`, shown as **borrowed**. The sim handles 1–3 bugs a side (`createTeamSim`): each bug's AI picks the nearest enemy and sticks with it until it's down or another is much closer; a side loses when all its bugs are disabled; on time, the side with more total integrity wins. The HUD shows allies and extra enemies as small health bars. *(Assumption: allies are campaign partners, not extra bugs the player builds. See Open decisions.)*
 
@@ -214,8 +228,8 @@ The campaign (`src/game/opponents.ts`) is a scrolling map of 19 stops in three z
 **Balance check:** `npm test` plays the whole campaign in order with an auto-built player bug that picks up each stop's rewards. Current win rates for that auto-player: early stops 60–100%, bosses about 50–65%, optional bosses 30–45%, the finale 43%.
 
 Each opponent has:
-- `guaranteed: Reward[]` — given **once**, on first clear (parts or moves).
-- `lootTable: { reward, weight }[]` — **weighted rolls, repeatable.** Normal opponents roll 2 times per win. **Bosses** (`boss: true`) roll 3 times per win and can be farmed; their tables include their **signature parts and moves** at low weight.
+- `guaranteed: Reward[]` — given **once**, on first clear (parts).
+- `lootTable: { reward, weight }[]` — **weighted rolls, repeatable.** Normal opponents roll 2 times per win. **Bosses** (`boss: true`) roll 3 times per win and can be farmed; their tables include their **signature parts** at low weight.
 - A loss gives one common salvage part. **Forfeiting gives nothing.**
 
 **Stars** (`src/game/stars.ts`): every win is rated 1–3 stars, one per challenge met:
@@ -232,7 +246,7 @@ The best rating per stop is saved (`SaveData.stars`) and shown under each node o
 
 The first-clear reward stays fixed whatever the rating. Old saves count each cleared stop as 1 star. `npm test` reports the star spread per stop: the auto-player currently earns 3 stars on roughly half its wins. *(Assumption: challenge thresholds and loot scaling are first-pass numbers.)*
 
-A `Reward` is `{ kind: 'part' | 'move', id }`.
+A `Reward` is `{ kind: 'part', id }` (moves are no longer rewards: they come with parts).
 
 Saves are stored on the device (SQLite key-value store on native, localStorage on web).
 
@@ -270,7 +284,7 @@ All audio is original and synthesized in code by `scripts/make-audio.mjs` (oscil
 3. **Grid size and shape.** Currently 5×7. Should it grow with progression?
 4. **Economy.** Should there be scrap or currency to craft or upgrade parts? Duplicates currently just stack.
 5. **Monetisation.** None, premium, or cosmetic-only? (No pay-to-win is assumed.)
-6. **Move slots.** 2 for now. Should more unlock through the campaign?
+6. ~~Move slots~~ Decided: no slots; parts carry their moves.
 8. ~~Team fight allies~~ Decided: your own garage bugs (borrowed opponents fill any gaps).
 9. ~~Shared parts~~ Decided: parts sit on one bug at a time.
 7. **Balance.** First-pass numbers. Fights now end in knockouts (about 25–35 s, bosses 35–50 s) rather than on time.

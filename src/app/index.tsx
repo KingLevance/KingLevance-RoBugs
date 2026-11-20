@@ -10,11 +10,13 @@ import { Button, Label, Panel, Pill } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { bugProblems } from '@/game/build';
 import { ARENA_NAMES, fightSize, getOpponent, OPPONENTS } from '@/game/opponents';
+import { movesOf } from '@/game/moves';
+import { getPart } from '@/game/parts';
 import { useGame } from '@/state/game-store';
 
 const STEPS: [string, string, string][] = [
   ['🔧', 'Build', 'Snap parts onto your bug in the Garage.'],
-  ['⚡', 'Equip', 'Pick up to two signature moves.'],
+  ['⚡', 'Moves', 'Some parts carry a signature move (★). Fit them to use it.'],
   ['🏟', 'Watch', 'It fights on its own. Smash parts off to win.'],
 ];
 
@@ -53,7 +55,7 @@ export default function Hub() {
               <Stat value={`${game.wins}`} label="WINS" color={Colors.good} />
               <Stat value={`${game.losses}`} label="LOSSES" color={Colors.bad} />
               <Stat value={`${totalParts}`} label="PARTS" color={Colors.accent} />
-              <Stat value={`${game.moves.length}`} label="MOVES" color="#7FB3FF" />
+              <Stat value={`${movesOf(game.build.placements.map((p) => getPart(p.partId))).length}`} label="MOVES" color="#7FB3FF" />
             </View>
           </View>
         </Pressable>
@@ -84,7 +86,7 @@ export default function Hub() {
         </Panel>
 
         <View style={styles.tiles}>
-          <Tile icon={PART_ICONS['pinc-vise']} title="Garage" sub="Build & equip" onPress={() => router.push('/garage')} />
+          <Tile icon={PART_ICONS['pinc-vise']} title="Garage" sub="Build your bug" onPress={() => router.push('/garage')} />
           <Tile
             icon={BUG_PORTRAITS[OPPONENTS[OPPONENTS.length - 1].id]}
             title="Campaign"

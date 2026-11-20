@@ -1,8 +1,7 @@
 import { createContext, use, useCallback, useMemo, useState, type ReactNode } from 'react';
 
 import { availableFor, fitToParts, type Build, type Placement } from '@/game/build';
-import { MOVE_SLOTS, type MoveId } from '@/game/moves';
-import { getOpponent, OPPONENTS, STARTER_BUILD, STARTER_INVENTORY, STARTER_MOVES } from '@/game/opponents';
+import { getOpponent, OPPONENTS, STARTER_BUILD, STARTER_INVENTORY } from '@/game/opponents';
 import { rollMatchRewards, type MatchRewards } from '@/game/rewards';
 import { rateWin, type StarCheck } from '@/game/stars';
 
@@ -23,8 +22,11 @@ export type LastResult = {
   prevBest: number;
 };
 
-/** One bug in your garage: its build and the moves it has equipped. */
-export type SavedBug = Build & { equipped: MoveId[] };
+/**
+ * One bug in your garage (its moves come from its parts). `equipped` is left over
+ * from older saves, when moves were learned and slotted; it's ignored.
+ */
+export type SavedBug = Build & { equipped?: string[] };
 
 /** Most bugs you can keep in the garage. */
 export const MAX_BUGS = 6;
@@ -39,15 +41,15 @@ export type SaveData = {
   active: number;
   /** Indices of the bugs that join you in team fights, in order. */
   squad: number[];
-  /** Signature moves owned. */
-  moves: MoveId[];
+  /** Left over from older saves (moves used to be learned): ignored now that moves live on parts. */
+  moves?: string[];
   wins: number;
   losses: number;
   /** Opponent ids beaten at least once. */
   cleared: string[];
   /** Best stars earned on each opponent (1–3). */
   stars: Record<string, number>;
-  /** Saved build configurations (parts + equipped moves) to load onto any bug. */
+  /** Saved build configurations to load onto any bug. */
   saved: SavedBug[];
   /** Opponent selected on the campaign map. */
   selected: string;
@@ -56,10 +58,9 @@ export type SaveData = {
 
 const FRESH: SaveData = {
   inventory: STARTER_INVENTORY,
-  bugs: [{ ...STARTER_BUILD, equipped: STARTER_MOVES.slice(0, MOVE_SLOTS) }],
+  bugs: [{ ...STARTER_BUILD }],
   active: 0,
   squad: [],
-  moves: STARTER_MOVES,
   wins: 0,
   losses: 0,
   cleared: [],
@@ -73,9 +74,9 @@ function load(): SaveData {
   const raw = loadString(SAVE_KEY);
   if (!raw) return FRESH;
   try {
-    const saved = JSON.parse(raw) as Partial<SaveData> & { build?: Build; equipped?: MoveId[] };
+    const saved = JSON.parse(raw) as Partial<SaveData> & { build?: Build; equipped?: string[] };
     // Older saves had a single `build` + `equipped`: that becomes your first bug.
-    const bugs = saved.bugs?.length ? saved.bugs : saved.build ? [{ ...saved.build, equipped: saved.equipped ?? [] }] : FRESH.bugs;
+    const bugs = saved.bugs?.length ? saved.bugs : saved.build ? [{ ...saved.build }] : FRESH.bugs;
     const { build: _b, equipped: _e, ...rest } = saved;
     const active = Math.min(Math.max(0, rest.active ?? 0), bugs.length - 1);
     // Clears from before stars existed count as 1 star.
@@ -94,13 +95,10 @@ function newName(bugs: SavedBug[]) {
 type GameStore = SaveData & {
   /** The active bug's build (the one in the garage and leading into battle). */
   build: Build;
-  /** The active bug's equipped moves, in slot order (max MOVE_SLOTS). */
-  equipped: MoveId[];
   setPlacements: (placements: Placement[]) => void;
   setBugName: (name: string) => void;
-  toggleEquip: (id: MoveId) => void;
-  /** Replace the active bug's parts and moves at once (undo, loading a saved build). */
-  setLoadout: (placements: Placement[], equipped: MoveId[]) => void;
+  /** Replace the active bug's parts at once (undo, loading a saved build). */
+  setLoadout: (placements: Placement[]) => void;
   /** Save the active bug's configuration under a name. Returns false if the list is full. */
   saveBuild: (name: string) => boolean;
   deleteSaved: (index: number) => void;
@@ -141,15 +139,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
       const rewards = rollMatchRewards(opp, won, firstClear, forfeited, Math.random, rating.stars, rating.stars >= 3 && prevBest < 3);
       update((d) => {
         const inventory = { ...d.inventory };
-        const moves = [...d.moves];
         for (const r of [...rewards.guaranteed, ...rewards.rolled, ...rewards.bonus]) {
           if (r.kind === 'part') inventory[r.id] = (inventory[r.id] ?? 0) + 1;
-          else if (!moves.includes(r.id as MoveId)) moves.push(r.id as MoveId);
         }
         return {
           ...d,
           inventory,
-          moves,
           wins: d.wins + (won ? 1 : 0),
           losses: d.losses + (winner === 1 ? 1 : 0),
           cleared: won && !d.cleared.includes(opponentId) ? [...d.cleared, opponentId] : d.cleared,
@@ -169,25 +164,18 @@ export function GameProvider({ children }: { children: ReactNode }) {
     return {
       ...data,
       build: { name: bug.name, placements: bug.placements },
-      equipped: bug.equipped,
       setPlacements: (placements) => edit((b) => ({ ...b, placements })),
       setBugName: (name) => edit((b) => ({ ...b, name })),
-      setLoadout: (placements, equipped) => edit((b) => ({ ...b, placements, equipped })),
+      setLoadout: (placements) => edit((b) => ({ ...b, placements })),
       saveBuild: (name) => {
         if ((data.saved ?? []).length >= MAX_SAVED) return false;
         update((d) => {
           const b = d.bugs[d.active];
-          return { ...d, saved: [...(d.saved ?? []), { name, placements: [...b.placements], equipped: [...b.equipped] }] };
+          return { ...d, saved: [...(d.saved ?? []), { name, placements: [...b.placements] }] };
         });
         return true;
       },
       deleteSaved: (index) => update((d) => ({ ...d, saved: (d.saved ?? []).filter((_, i) => i !== index) })),
-      toggleEquip: (id) =>
-        edit((b) => {
-          if (b.equipped.includes(id)) return { ...b, equipped: b.equipped.filter((m) => m !== id) };
-          if (b.equipped.length >= MOVE_SLOTS) return { ...b, equipped: [...b.equipped.slice(1), id] };
-          return { ...b, equipped: [...b.equipped, id] };
-        }),
       selectBug: (index) =>
         update((d) => (index < 0 || index >= d.bugs.length ? d : { ...d, active: index, squad: d.squad.filter((i) => i !== index) })),
       addBug: (copyOf) => {
@@ -197,8 +185,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
           // A copy only gets the parts you still have spare (parts sit on one bug at a time).
           const spare = availableFor(d.inventory, [...d.bugs, { placements: [] }], d.bugs.length);
           const fresh: SavedBug = src
-            ? { ...src, name: `${src.name} II`.slice(0, 18), placements: fitToParts(src.placements, spare).kept, equipped: [...src.equipped] }
-            : { name: newName(d.bugs), placements: [], equipped: [] };
+            ? { ...src, name: `${src.name} II`.slice(0, 18), placements: fitToParts(src.placements, spare).kept }
+            : { name: newName(d.bugs), placements: [] };
           return { ...d, bugs: [...d.bugs, fresh], active: d.bugs.length };
         });
         return true;

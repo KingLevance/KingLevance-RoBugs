@@ -6,9 +6,9 @@
  */
 import { computeStats, resolve, validateBuild, type Build } from '../src/game/build';
 import { autoBuild } from '../src/game/editor';
-import { getMove, meetsRequirement, MOVE_SLOTS, type MoveId } from '../src/game/moves';
-import { fightSize, lineup, OPPONENTS, ZONES, zoneStars, STARTER_BUILD, STARTER_INVENTORY, STARTER_MOVES, type Opponent } from '../src/game/opponents';
+import { fightSize, lineup, OPPONENTS, ZONES, zoneStars, STARTER_BUILD, STARTER_INVENTORY, type Opponent } from '../src/game/opponents';
 import { getPart } from '../src/game/parts';
+import { movesOf } from '../src/game/moves';
 import { rollMatchRewards } from '../src/game/rewards';
 import { rateWin } from '../src/game/stars';
 import { aiInput, createTeamSim, step, STEP, teamHp, type Fighter } from '../src/game/sim';
@@ -61,16 +61,7 @@ function run(opp: Opponent, player: Fighter, seed: number) {
   };
 }
 
-/** The moves an auto-player would equip: the priciest ones its build can actually use. */
-function pickMoves(owned: MoveId[], build: Build): MoveId[] {
-  const parts = build.placements.map((p) => getPart(p.partId));
-  return owned
-    .filter((id) => meetsRequirement(getMove(id), parts))
-    .sort((a, b) => getMove(b).cost - getMove(a).cost)
-    .slice(0, MOVE_SLOTS);
-}
-
-const starter: Fighter = { build: STARTER_BUILD, moves: STARTER_MOVES };
+const starter: Fighter = { build: STARTER_BUILD };
 const finale = OPPONENTS[OPPONENTS.length - 1];
 const a = run(finale, starter, 1234);
 const b = run(finale, starter, 1234);
@@ -89,7 +80,6 @@ const rng = () => {
 
 const N = 30;
 const inventory: Record<string, number> = { ...STARTER_INVENTORY };
-const owned: MoveId[] = [...STARTER_MOVES];
 let selfWalls = 0;
 const best: Record<string, number> = {};
 /** Average stars per win (a typical single clear). */
@@ -102,7 +92,7 @@ console.log('\nCampaign run (auto-built player bug, gaining each stop\'s rewards
 for (const opp of OPPONENTS) {
   const build: Build = { name: 'Player', placements: autoBuild(inventory) };
   const errs = validateBuild(build.placements);
-  const player: Fighter = { build, moves: pickMoves(owned, build) };
+  const player: Fighter = { build };
   let w = 0;
   let l = 0;
   let t = 0;
@@ -144,7 +134,7 @@ for (const opp of OPPONENTS) {
     `moves/match ${(casts / N).toFixed(1)}`,
     `crits ${((crits / Math.max(1, hits)) * 100).toFixed(0)}%`,
     `| hits ${(hits / N).toFixed(0)} miss ${(feel.whiff / N).toFixed(0)} dodge ${(feel.dodged / N).toFixed(1)} ctr ${(feel.counters / N).toFixed(1)} clash ${(feel.clash / N).toFixed(1)} stag ${(feel.stagger / N).toFixed(1)} t/o ${feel.timeout}`,
-    `| player hp ${s.totalHp} dps ${s.dps.toFixed(0)} [${player.moves.join(', ')}]`,
+    `| player hp ${s.totalHp} dps ${s.dps.toFixed(0)} [${movesOf(build.placements.map((p) => getPart(p.partId))).map((m) => m.id + (m.carriers > 1 ? '×' + m.carriers : '')).join(', ')}]`,
     errs.length ? `PLAYER BUILD INVALID: ${errs[0]}` : '',
   );
   // Clear it: guaranteed drops plus the rolls from a couple of wins.
@@ -152,7 +142,6 @@ for (const opp of OPPONENTS) {
     const rewards = rollMatchRewards(opp, true, first, false, rng);
     for (const r of [...rewards.guaranteed, ...rewards.rolled, ...rewards.bonus]) {
       if (r.kind === 'part') inventory[r.id] = (inventory[r.id] ?? 0) + 1;
-      else if (!owned.includes(r.id as MoveId)) owned.push(r.id as MoveId);
     }
   }
 }

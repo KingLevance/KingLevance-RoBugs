@@ -35,7 +35,7 @@ import {
 } from '@/game/build';
 import { autoBuild, autoPlace, dropLayer, flipLayer, movePart, partAt, rankSlots, removeAt, rotatePart, sameSlot, type Slot } from '@/game/editor';
 import { GROUPS, GUIDE } from '@/game/guide';
-import { getMove, meetsRequirement, MOVE_SLOTS, type MoveId } from '@/game/moves';
+import { getMove, movesOf, procChance } from '@/game/moves';
 import { getPart, PARTS, RARITY_COLOR, type Category, type PartDef } from '@/game/parts';
 import { CRIT, dodgeCooldown, maxPoise, reflex } from '@/game/sim';
 import { GarageRenderer, type Cell, type ViewName } from '@/render/garage-scene';
@@ -78,6 +78,12 @@ function PartDetails({ part, onRemove }: { part: PartDef; onRemove: () => void }
         <Text style={styles.guideKey}>WHAT IT DOES  </Text>
         {g.does}
       </Text>
+      {part.move && (
+        <Text style={styles.guideLine}>
+          <Text style={[styles.guideKey, { color: getMove(part.move).color }]}>★ CARRIES {getMove(part.move).name.toUpperCase()}  </Text>
+          {getMove(part.move).description}
+        </Text>
+      )}
       <Text style={styles.guideLine}>
         <Text style={[styles.guideKey, { color: Colors.good }]}>WHERE IT GOES  </Text>
         {g.where} Green tiles on the grid show good spots.
@@ -137,11 +143,11 @@ type Touch = {
 };
 
 const UNDO_STEPS = 40;
-type Snapshot = { placements: Placement[]; equipped: MoveId[] };
+type Snapshot = { placements: Placement[] };
 /** Same parts (in any order) and the same moves. */
-function sameLoadout(b: Snapshot, placements: Placement[], equipped: MoveId[]) {
+function sameLoadout(b: Snapshot, placements: Placement[]) {
   const key = (ps: Placement[]) => ps.map((p) => `${p.partId}@${p.x},${p.y},${p.z ?? 0},${p.r ?? 0}`).sort().join('|');
-  return key(b.placements) === key(placements) && [...b.equipped].sort().join() === [...equipped].sort().join();
+  return key(b.placements) === key(placements);
 }
 
 export default function Garage() {
@@ -166,7 +172,7 @@ export default function Garage() {
   const undoStack = history.bug === game.active ? history.stack : [];
   /** Remember the current parts + moves so the next change can be undone. */
   const remember = () =>
-    setHistory({ bug: game.active, stack: [...undoStack, { placements, equipped: game.equipped }].slice(-UNDO_STEPS) });
+    setHistory({ bug: game.active, stack: [...undoStack, { placements }].slice(-UNDO_STEPS) });
   const forgetHistory = () => setHistory({ bug: -1, stack: [] });
   /** Apply an edit to the build with a click: snap on, pop off, or turn. */
   const edit = (next: Placement[]) => {
@@ -175,16 +181,12 @@ export default function Garage() {
     sfx(next.length < placements.length ? 'unsnap' : 'snap', { rate: next.length === placements.length ? 1.25 : 1 });
     game.setPlacements(next);
   };
-  const toggleMove = (id: MoveId) => {
-    remember();
-    game.toggleEquip(id);
-  };
   const undo = () => {
     const last = undoStack[undoStack.length - 1];
     if (!last) return;
     setHistory({ bug: game.active, stack: undoStack.slice(0, -1) });
     sfx('unsnap', { rate: 0.85 });
-    game.setLoadout(last.placements, last.equipped);
+    game.setLoadout(last.placements);
     setSelected(null);
     setToast(undoStack.length > 1 ? `Undone · ${undoStack.length - 1} more step${undoStack.length > 2 ? 's' : ''} back` : 'Undone');
   };
@@ -197,7 +199,7 @@ export default function Garage() {
     const taken = new Set(game.saved.map((b) => b.name));
     let name = base;
     for (let k = 2; taken.has(name); k++) name = `${base} ${k}`;
-    if (!game.saved.some((b) => sameLoadout(b, placements, game.equipped)) && !game.saveBuild(name)) {
+    if (!game.saved.some((b) => sameLoadout(b, placements)) && !game.saveBuild(name)) {
       setToast(`Saved builds are full (${MAX_SAVED}). Remove one below first.`);
       return;
     }
@@ -211,12 +213,14 @@ export default function Garage() {
     sfx('snap', { gap: 0 });
     // Only parts this bug can have: anything your other bugs are using stays on them.
     const { kept, dropped } = fitToParts(b.placements, availableFor(game.inventory, game.bugs, game.active));
-    game.setLoadout(kept, b.equipped.filter((m) => game.moves.includes(m)));
+    game.setLoadout(kept);
     setSelected(null);
     setConfirmSaved(null);
     setToast(dropped ? `Loaded "${b.name}" minus ${dropped} part${dropped > 1 ? 's' : ''} your other bugs are using` : `Loaded "${b.name}" · ↶ to go back`);
   };
   const used = usage(placements);
+  /** The moves this bug's parts carry. */
+  const bugMoves = movesOf(placements.map((p) => getPart(p.partId)));
   /** Parts this bug may use: what you own minus what your other bugs use. */
   const avail = availableFor(game.inventory, game.bugs, game.active);
   const short = shortParts(game.inventory, game.bugs, game.active);
@@ -700,6 +704,11 @@ export default function Garage() {
                         {part.name}
                       </Text>
                       <Text style={[styles.binRarity, { color: RARITY_COLOR[part.rarity] }]}>{part.rarity.toUpperCase()}</Text>
+                      {part.move && (
+                        <Text style={[styles.binMove, { color: getMove(part.move).color }]} numberOfLines={1}>
+                          ★ {getMove(part.move).name}
+                        </Text>
+                      )}
                       {onOthers > 0 && <Text style={styles.binOther}>{onOthers} on other bugs</Text>}
                     </Pressable>
                   );
@@ -709,33 +718,35 @@ export default function Garage() {
           );
         })}
 
-        <Text style={styles.section}>
-          SIGNATURE MOVES · {game.equipped.length}/{MOVE_SLOTS} EQUIPPED
+        <Text style={styles.section}>SIGNATURE MOVES · {bugMoves.length} ON THIS BUG</Text>
+        <Text style={styles.dim}>
+          Moves live on parts: attach a part marked ★ and your bug has its move. In a fight each move rolls a chance to go off when the moment is
+          right; more parts carrying the same move, more often. Lose the part, lose the move.
         </Text>
         <View style={{ gap: Spacing.sm }}>
-          {game.moves.map((id) => {
+          {bugMoves.map(({ id, carriers }) => {
             const m = getMove(id);
-            const on = game.equipped.includes(id);
-            const hasParts = meetsRequirement(m, placements.map((p) => getPart(p.partId)));
+            const from = [...new Set(placements.map((p) => getPart(p.partId)).filter((p) => p.move === id).map((p) => p.name))];
             return (
-              <Pressable
-                key={id}
-                onPress={() => toggleMove(id)}
-                style={[styles.moveRow, on && { borderColor: m.color, backgroundColor: Colors.panelHi }]}>
-                <View style={[styles.moveDot, { backgroundColor: on ? m.color : Colors.bg, borderColor: m.color }]} />
+              <View key={id} style={[styles.moveRow, { borderColor: m.color, backgroundColor: Colors.panelHi }]}>
+                <View style={[styles.moveDot, { backgroundColor: m.color, borderColor: m.color }]} />
                 <View style={{ flex: 1, gap: 2 }}>
                   <Text style={[styles.partName, { color: m.color, fontSize: 15 }]}>
                     {m.name}{' '}
                     <Text style={styles.dim}>
-                      · {m.cost} PP · {m.cooldown}s cd{m.ultimate ? ' · ultimate' : ''}
+                      · {Math.round(procChance(id, carriers) * 100)}% proc · {m.cooldown}s cd{m.ultimate ? ` · ultimate (${m.cost} charge)` : ''}
                     </Text>
                   </Text>
                   <Text style={styles.dim}>{m.description}</Text>
-                  {on && !hasParts && <Text style={styles.error}>⚠ Your build needs {m.requires.label} for this move to fire.</Text>}
+                  <Text style={[styles.dim, { color: Colors.text }]}>
+                    ★ From {from.join(', ')}
+                    {carriers > 1 ? ` (×${carriers})` : ''}
+                  </Text>
                 </View>
-              </Pressable>
+              </View>
             );
           })}
+          {bugMoves.length === 0 && <Text style={styles.dim}>No moves yet. Parts marked ★ in the bin carry one.</Text>}
         </View>
 
         <View style={{ gap: Spacing.sm }}>
@@ -750,7 +761,7 @@ export default function Garage() {
           ) : (
             game.saved.map((b, i) => {
               const ok = validateBuild(b.placements).length === 0;
-              const current = sameLoadout(b, placements, game.equipped);
+              const current = sameLoadout(b, placements);
               return (
                 <View key={`${b.name}-${i}`} style={[styles.savedRow, current && { borderColor: Colors.accent }]}>
                   <Pressable onPress={() => loadSaved(i)} style={{ flex: 1, gap: 2 }}>
@@ -759,7 +770,7 @@ export default function Garage() {
                       {current ? <Text style={{ color: Colors.accent }}> · on this bug</Text> : null}
                     </Text>
                     <Text style={styles.dim} numberOfLines={1}>
-                      {b.placements.length} parts · {b.equipped.map((m) => getMove(m).name).join(', ') || 'no moves'}
+                      {b.placements.length} parts · {movesOf(b.placements.map((p) => getPart(p.partId))).map((m) => getMove(m.id).name).join(', ') || 'no moves'}
                       {ok ? '' : ' · unfinished'}
                     </Text>
                   </Pressable>
@@ -898,6 +909,7 @@ const styles = StyleSheet.create({
   },
   toolBtnText: { color: Colors.text, fontSize: 20, lineHeight: 24 },
   toolBtnLabel: { color: Colors.textDim, fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+  binMove: { fontSize: 10, fontWeight: '900' },
   binOther: { color: Colors.textDim, fontSize: 10, fontWeight: '700' },
   savedRow: {
     flexDirection: 'row',
