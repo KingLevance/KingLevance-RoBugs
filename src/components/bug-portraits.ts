@@ -22,4 +22,12 @@ export const BUG_PORTRAITS: Record<string, ImageSourcePropType> = {
   tunnelkings: require('@/assets/bugs/tunnelkings.png'),
   hiveguard: require('@/assets/bugs/hiveguard.png'),
   kalyx: require('@/assets/bugs/kalyx.png'),
+  sparkcrown: require('@/assets/bugs/sparkcrown.png'),
+  hopjack: require('@/assets/bugs/hopjack.png'),
+  smogmaw: require('@/assets/bugs/smogmaw.png'),
+  mirrorback: require('@/assets/bugs/mirrorback.png'),
+  lodewing: require('@/assets/bugs/lodewing.png'),
+  thornhide: require('@/assets/bugs/thornhide.png'),
+  anvils: require('@/assets/bugs/anvils.png'),
+  aurix: require('@/assets/bugs/aurix.png'),
 };

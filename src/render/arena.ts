@@ -8,6 +8,8 @@
  *   hive     The Hive Ring:  honeycomb floor in amber and gold, wax walls
  *   meadow   The Meadow:     outdoors on a sunny lawn; pebble edging, giant grass and flowers, mud patches
  *   pond     Moonlit Pond:   a mossy flagstone bank at night; reeds, lily pads, fireflies, a pool of water
+ *   mesa     Thunder Mesa:   a cracked sandstone plateau in a dusk thunderstorm; boulders, hoodoo spires,
+ *                            rain, distant buttes, and lightning rods that call bolts down onto their circles
  *
  * Reads sim state; never writes it.
  */
@@ -36,13 +38,15 @@ type Theme = {
   accent: { color: number; intensity: number } | null;
   floor: () => { map: THREE.DataTexture; emissive?: THREE.DataTexture };
   /** Outdoor arenas swap the stadium (walls, stands, crowd, floodlights) for open ground. */
-  outdoor?: 'meadow' | 'pond';
+  outdoor?: 'meadow' | 'pond' | 'mesa';
   /** Extra sky/ground light (daylight, moonlight). */
   ambient?: { sky: number; ground: number; intensity: number };
   /** Colours of the "acid" pools (water at the pond). */
   pool?: { surface: number; emissive: number; bubble: number; steam: number; rim: number };
   /** Drifting particles: dust, pollen, fireflies. */
   motes?: { color: number; size: number; glow: boolean };
+  /** Colours of the mud patches (default: brown mud). */
+  mud?: { outer: number; inner: number; clod: number; blob: number };
 };
 
 // ── Procedural textures ─────────────────────────────────────────────
@@ -212,6 +216,120 @@ function flagstones(): (x: number, y: number, c: THREE.Color) => void {
   };
 }
 
+/**
+ * Cracked sandstone: wind-worn slabs in red-brown and ochre with faint strata,
+ * split by dark cracks, a few hairline fractures and rain-darkened patches.
+ * Tiles seamlessly at `size` (the slab sites wrap).
+ */
+function sandstone(size = TEX): (x: number, y: number, c: THREE.Color) => void {
+  const G = 64;
+  const n = size / G;
+  const wrap = (i: number) => ((i % n) + n) % n;
+  const site = (i: number, j: number) => ({
+    x: (i + 0.12 + hash(wrap(i) + 7, wrap(j)) * 0.76) * G,
+    y: (j + 0.12 + hash(wrap(j), wrap(i) + 19) * 0.76) * G,
+  });
+  return (x, y, c) => {
+    const gi = Math.floor(x / G);
+    const gj = Math.floor(y / G);
+    let d1 = Infinity;
+    let d2 = Infinity;
+    let id = 0;
+    for (let i = gi - 1; i <= gi + 1; i++)
+      for (let j = gj - 1; j <= gj + 1; j++) {
+        const p = site(i, j);
+        const d = Math.hypot(x - p.x, y - p.y);
+        if (d < d1) {
+          d2 = d1;
+          d1 = d;
+          id = wrap(i) * 57 + wrap(j) * 131;
+        } else if (d < d2) d2 = d;
+      }
+    const edge = d2 - d1;
+    // Slab colour (red-brown ↔ ochre) with soft strata bands running across it.
+    mix(c, 0x9a5a40, 0xc29a6c, hash(id, 3) * 0.75 + noise(x / 40, y / 40) * 0.35);
+    const band = Math.sin((y + x * 0.25 + noise(x / 30, y / 30) * 40 + hash(id, 9) * 50) / 7);
+    c.offsetHSL(0, 0, band * 0.025 + (noise(x / 4, y / 4) - 0.5) * 0.07);
+    // Rain-darkened patches.
+    if (noise(x / 55 + 9, y / 55) > 0.66) c.offsetHSL(-0.01, -0.08, -0.06);
+    // Hairline fractures across the slabs.
+    if (Math.abs(noise(x / 26 + id, y / 26) - 0.5) < 0.012) c.offsetHSL(0, 0, -0.12);
+    // Cracks between slabs, with a worn darker lip.
+    if (edge < 1.3) c.set(0x3a2219);
+    else if (edge < 3.5) c.offsetHSL(0, -0.05, -0.08 * (1 - (edge - 1.3) / 2.2));
+    // Pale pebbles here and there.
+    const cell = 14;
+    const fx = Math.floor(x / cell);
+    const fy = Math.floor(y / cell);
+    if (hash(wrap(fx) + 3, fy) > 0.93) {
+      const d = Math.hypot(x - (fx * cell + 3 + hash(fx, fy + 5) * (cell - 6)), y - (fy * cell + 3 + hash(fx + 5, fy) * (cell - 6)));
+      if (d < 1.8) c.set(0xd8c0a0).offsetHSL(0, 0, -d * 0.06);
+    }
+  };
+}
+
+/** Horizontal rock strata for the cliff faces (u runs round, v runs up). */
+function strata(): (x: number, y: number, c: THREE.Color) => void {
+  const cols = [0x8a4a30, 0xb57444, 0x9c5a38, 0xc99a62, 0x7a4030, 0xa8683e];
+  return (x, y, c) => {
+    const v = y + noise(x / 12, 3) * 10;
+    c.set(cols[Math.floor(v / 21) % cols.length]);
+    c.offsetHSL(0, 0, (noise(x / 5, y / 3) - 0.5) * 0.1);
+    if (Math.abs(noise(x / 9, y / 30 + 4) - 0.5) < 0.02) c.offsetHSL(0, 0, -0.1); // vertical fissures
+  };
+}
+
+/** Grey value 0..1 stored as-is (paint() converts sRGB → linear, so pre-convert). */
+const grey = (c: THREE.Color, v: number) => c.setScalar(Math.max(0, Math.min(1, v))).convertLinearToSRGB();
+
+/** Strike-circle marking (used additively): a solid rim, a dashed inner ring and a centre target. */
+function boltTarget(): (x: number, y: number, c: THREE.Color) => void {
+  const S = 256;
+  return (x, y, c) => {
+    const dx = (x + 0.5) / (S / 2) - 1;
+    const dy = (y + 0.5) / (S / 2) - 1;
+    const r = Math.hypot(dx, dy);
+    const a = Math.atan2(dy, dx);
+    let v = 0;
+    if (r > 0.9 && r < 0.995) v = 1; // rim
+    else if (r > 0.86 && r <= 0.9) v = 0.35;
+    // Dashed inner ring (12 dashes).
+    if (Math.abs(r - 0.7) < 0.022 && (((a / (Math.PI * 2) + 1) * 12) % 1) < 0.6) v = Math.max(v, 0.6);
+    // Centre target.
+    if (Math.abs(r - 0.2) < 0.025) v = Math.max(v, 0.6);
+    if (r < 0.06) v = Math.max(v, 0.8);
+    grey(c, v);
+  };
+}
+
+/** A burn mark (alpha): dark centre with branching streaks, like a lightning scar. */
+function scorchMark(): (x: number, y: number, c: THREE.Color) => void {
+  const S = 128;
+  return (x, y, c) => {
+    const dx = (x + 0.5) / (S / 2) - 1;
+    const dy = (y + 0.5) / (S / 2) - 1;
+    const r = Math.hypot(dx, dy);
+    if (r >= 1) return void grey(c, 0);
+    const a = Math.atan2(dy, dx);
+    let v = Math.max(0, 1 - r / 0.45) * (1 + noise(dx * 6 + 4, dy * 6) * 0.4);
+    for (let k = 0; k < 9; k++) {
+      const ray = (k / 9) * Math.PI * 2 + hash(k, 2) * 0.5 + (noise(r * 5, k * 3.1) - 0.5) * 0.9;
+      let d = Math.abs(a - ray);
+      d = Math.min(d, Math.PI * 2 - d) * r;
+      const reach = 0.55 + hash(k, 4) * 0.4;
+      if (r < reach) v = Math.max(v, Math.exp(-Math.pow(d / (0.05 * (1 - r / reach) + 0.008), 2)) * (1 - r / reach) * 1.2);
+    }
+    grey(c, v);
+  };
+}
+
+/** Faceted (flat-shaded) copy of a geometry: rock looks chiselled under the toon ramp. */
+function facet(geo: THREE.BufferGeometry) {
+  const g = geo.toNonIndexed();
+  g.computeVertexNormals();
+  return g;
+}
+
 /** Diagonal hazard stripes. */
 function stripes(a: number, b: number, size = 128) {
   return paint((x, y, c) => c.set(((x + y) % 64) < 32 ? a : b).offsetHSL(0, 0, (noise(x / 8, y / 8) - 0.5) * 0.06), size);
@@ -311,6 +429,24 @@ const THEMES: Record<ArenaId, Theme> = {
     pool: { surface: 0x4aa3ff, emissive: 0x1f6fc0, bubble: 0xe0f4ff, steam: 0xcfe6ff, rim: 0x6b7a62 },
     motes: { color: 0xd8ff6a, size: 0.16, glow: true },
   },
+  mesa: {
+    sky: [0x12142a, 0x6b4c72],
+    fog: 0x3c3450,
+    wallA: 0x9fe6ff,
+    wallB: 0x2a2433,
+    rail: 0x6b7280,
+    trim: 0x9fe6ff,
+    plinth: 0x6e3c28,
+    stands: [0x6e3c28, 0x6e3c28],
+    pylonLight: 0xbfe6ff,
+    spike: 0xd9d4c7,
+    accent: { color: 0x9fc4ff, intensity: 3 },
+    floor: () => ({ map: paint(sandstone()) }),
+    outdoor: 'mesa',
+    ambient: { sky: 0x8090d0, ground: 0x5a3020, intensity: 0.45 },
+    motes: { color: 0xd9b48a, size: 0.08, glow: false },
+    mud: { outer: 0x6a6266, inner: 0x4a454c, clod: 0x857d80, blob: 0x5a5458 },
+  },
 };
 
 // ── Dressing ────────────────────────────────────────────────────────
@@ -338,6 +474,39 @@ type Press = {
 /** Where the press head waits between slams: above the camera's view. */
 const PRESS_HIGH = 26;
 
+/** A bundle of glowing segments drawn as a jagged bolt (outer glow + white core, instanced). */
+type Zap = { glow: THREE.InstancedMesh; core: THREE.InstancedMesh; glowMat: THREE.MeshBasicMaterial; coreMat: THREE.MeshBasicMaterial; n: number };
+/** A lightning rod on the rim of its strike circle. */
+type Rod = {
+  idx: number;
+  /** Strike circle centre and radius (world units). */
+  x: number;
+  z: number;
+  r: number;
+  tip: THREE.Vector3;
+  prevT: number;
+  ring: THREE.MeshBasicMaterial;
+  fill: THREE.MeshBasicMaterial;
+  coil: THREE.MeshToonMaterial;
+  studs: THREE.MeshBasicMaterial;
+  tipGlow: THREE.Mesh;
+  /** Rings that converge on the centre while it charges. */
+  ripples: THREE.Mesh[];
+  zap: Zap;
+  /** Seconds left on the strike's bolt, and until its shape re-rolls (flicker). */
+  life: number;
+  reroll: number;
+  scorch: THREE.Mesh;
+  hot: THREE.Mesh;
+  scorchLife: number;
+};
+const BOLT_LIFE = 0.42;
+const SCORCH_LIFE = 1.3;
+const ZAP_SEGS = 40;
+/** Storm-cloud colour at Thunder Mesa (lit up by lightning). */
+const STORM = 0x4a4462;
+const UP = new THREE.Vector3(0, 1, 0);
+
 export class ArenaDressing {
   private theme: Theme;
   private vats: Vat[] = [];
@@ -347,6 +516,20 @@ export class ArenaDressing {
   private clouds: THREE.Group[] = [];
   private lilies: THREE.Mesh[] = [];
   private presses: Press[] = [];
+  private rods: Rod[] = [];
+  private zapGeo: { glow: THREE.BufferGeometry; core: THREE.BufferGeometry } | null = null;
+  private boltLight: THREE.PointLight | null = null;
+  private boltFlash = 0;
+  private skyMat: THREE.MeshBasicMaterial | null = null;
+  private stormMat: THREE.MeshBasicMaterial | null = null;
+  private farZap: Zap | null = null;
+  private stormClouds: THREE.Group | null = null;
+  private farLife = 0;
+  private nextFar = 2.5;
+  private rain: THREE.LineSegments[] = [];
+  private tv = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  private tq = new THREE.Quaternion();
+  private ts = new THREE.Vector3();
   private seamMat: THREE.MeshToonMaterial | null = null;
   private pylonLights: THREE.MeshBasicMaterial[] = [];
   private beams: { mesh: THREE.Mesh; from: THREE.Vector3; phase: number }[] = [];
@@ -368,14 +551,21 @@ export class ArenaDressing {
 
     this.buildSky();
     this.buildFloor();
-    if (T.outdoor) this.buildOutdoors(T.outdoor);
+    if (T.outdoor === 'mesa') this.buildMesa();
+    else if (T.outdoor) this.buildOutdoors(T.outdoor);
     else {
       this.buildWalls(sim.spikedWalls);
       this.buildStadium();
     }
     this.buildLights();
     sim.hazards.forEach((h, idx) =>
-      h.kind === 'acid' ? this.buildVat(h.x, h.y, h.r) : h.kind === 'mud' ? this.buildMud(h.x, h.y, h.r) : this.buildPress(h.x, h.y, h.r, idx),
+      h.kind === 'acid'
+        ? this.buildVat(h.x, h.y, h.r)
+        : h.kind === 'mud'
+          ? this.buildMud(h.x, h.y, h.r)
+          : h.kind === 'bolt'
+            ? this.buildRod(h.x, h.y, h.r, h.t, idx)
+            : this.buildPress(h.x, h.y, h.r, idx),
     );
 
     // Drifting motes: dust in the floodlights, pollen in the sun, fireflies at night.
@@ -420,9 +610,12 @@ export class ArenaDressing {
       colors.push(c.r, c.g, c.b);
     }
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    const sky = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
+    this.skyMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false });
+    const sky = new THREE.Mesh(geo, this.skyMat);
     sky.renderOrder = -10;
     this.scene.add(sky);
+    // Past the camera's far plane the sky dome gets clipped (wide intro shots): fill with the horizon, not black.
+    this.scene.background = new THREE.Color(horizon);
   }
 
   private buildFloor() {
@@ -903,6 +1096,535 @@ export class ArenaDressing {
     }
   }
 
+  /**
+   * Thunder Mesa's surroundings: the arena sits on a sandstone plateau whose
+   * edge drops away as a striped cliff. Boulders mark the arena edge, hoodoo
+   * spires stand beyond, distant buttes sit in the haze below, storm clouds
+   * hang overhead (lit by far-off lightning) and a light rain falls.
+   */
+  private buildMesa() {
+    const c = new THREE.Color();
+    // Plateau top: a ragged disc of sandstone with a cliff skirt dropping into the haze.
+    const R = 36;
+    const segs = 30;
+    const edge = (i: number) => R * (0.9 + hash(i % segs, 71) * 0.16);
+    const topGeo = new THREE.CircleGeometry(R, segs);
+    const tp = topGeo.getAttribute('position');
+    for (let i = 1; i < tp.count; i++) {
+      const k = edge(i - 1) / R;
+      tp.setXY(i, tp.getX(i) * k, tp.getY(i) * k);
+    }
+    const groundTex = paint(sandstone(256), 256);
+    groundTex.repeat.set(4.5, 4.5);
+    const top = new THREE.Mesh(topGeo, toonMaterial(0xd2bcae, { map: groundTex }));
+    top.rotation.x = -Math.PI / 2;
+    top.position.y = -0.06;
+    this.scene.add(top);
+    const cliffGeo = new THREE.CylinderGeometry(R, R * 1.25, 40, segs, 3, true);
+    const cp = cliffGeo.getAttribute('position');
+    for (let i = 0; i < cp.count; i++) {
+      // Match the ragged rim (vertex i of each ring sits at segment i % (segs + 1)); rougher lower down.
+      const seg = i % (segs + 1);
+      const ring = Math.floor(i / (segs + 1));
+      const a = Math.atan2(cp.getZ(i), cp.getX(i));
+      // The disc is laid flat with rotation.x = −π/2, so its vertex angle θ sits at world angle −θ.
+      const k = edge((((Math.round((-a / (Math.PI * 2)) * segs) % segs) + segs) % segs)) / R;
+      const rough = 1 + (hash(seg, ring + 80) - 0.5) * 0.08 * ring;
+      cp.setX(i, cp.getX(i) * k * rough);
+      cp.setZ(i, cp.getZ(i) * k * rough);
+    }
+    const cliffTex = paint(strata(), 128);
+    cliffTex.repeat.set(10, 3);
+    const cliff = new THREE.Mesh(cliffGeo, toonMaterial(0xffffff, { map: cliffTex }));
+    cliff.position.y = -20.06;
+    this.scene.add(cliff);
+
+    // Boulders along the arena edge (the sim's walls).
+    const rock = new THREE.IcosahedronGeometry(0.75, 0);
+    const rockMat = toonMaterial(0xffffff);
+    const perSide = 15;
+    const boulders = new THREE.InstancedMesh(rock, rockMat, perSide * 4 + 4 + 70);
+    const rockCols = [0x9c5a3a, 0xb67c4c, 0x7e4632, 0x8c6a5c, 0xa86a42];
+    let k = 0;
+    const place = (x: number, z: number, i: number, size: number, y = 0.22) => {
+      const s = new THREE.Vector3(1 + hash(i, 1) * 0.5, 0.75 + hash(i, 2) * 0.45, 0.85 + hash(i, 3) * 0.4).multiplyScalar(size);
+      this.m.compose(
+        new THREE.Vector3(x, s.y * y, z),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler((hash(i, 5) - 0.5) * 0.5, hash(i, 4) * 6, (hash(i, 6) - 0.5) * 0.5)),
+        s,
+      );
+      boulders.setMatrixAt(k, this.m);
+      boulders.setColorAt(k, c.set(rockCols[i % rockCols.length]));
+      k++;
+    };
+    const off = HALF + 0.6;
+    for (let i = 0; i < perSide; i++) {
+      const a = -HALF + (i + 0.5) * (SIZE / perSide);
+      place(a, -off, i, 1);
+      place(a, off, i + 50, 1);
+      place(-off, a, i + 100, 1);
+      place(off, a, i + 150, 1);
+    }
+    for (const [sx, sz] of [
+      [-1, -1],
+      [1, -1],
+      [-1, 1],
+      [1, 1],
+    ])
+      place(sx * off, sz * off, 200 + k, 1.5);
+    // Rubble scattered over the plateau outside the arena.
+    for (let i = 0; i < 70; i++) {
+      const ang = hash(i, 81) * Math.PI * 2;
+      const reach = HALF + 1.8 + hash(i, 82) * 13;
+      const sq = Math.max(Math.abs(Math.cos(ang)), Math.abs(Math.sin(ang)));
+      place((Math.cos(ang) / sq) * reach, (Math.sin(ang) / sq) * reach, 300 + i, 0.25 + hash(i, 83) * 0.7, 0.1);
+    }
+    boulders.count = k;
+    boulders.instanceMatrix.needsUpdate = true;
+    if (boulders.instanceColor) boulders.instanceColor.needsUpdate = true;
+    this.scene.add(boulders);
+
+    // Hoodoos: lumpy banded rock spires with a wider cap stone, in a band beyond the edge.
+    const spires = 24;
+    const chunks = new THREE.InstancedMesh(rock, rockMat, spires * 5);
+    const bands = [0xa0583a, 0xc68c54, 0x8a4a32, 0xbf8a5e];
+    let d = 0;
+    for (let i = 0; i < spires; i++) {
+      const ang = (i / spires) * Math.PI * 2 + hash(i, 91) * 0.2;
+      const far = hash(i, 92);
+      const reach = HALF + 3 + far * 11;
+      const sq = Math.max(Math.abs(Math.cos(ang)), Math.abs(Math.sin(ang)));
+      const x = (Math.cos(ang) / sq) * reach;
+      const z = (Math.sin(ang) / sq) * reach;
+      const rad = 1.1 + hash(i, 93) * 1.0;
+      const h = 3 + far * 6 + hash(i, 94) * 3;
+      const lean = new THREE.Vector3((hash(i, 95) - 0.5) * 0.25, 0, (hash(i, 97) - 0.5) * 0.25);
+      // Base, waist, neck (stacked lumps), then the flat cap stone.
+      const parts: [number, number][] = [
+        [rad, h * 0.34],
+        [rad * 0.8, h * 0.3],
+        [rad * 0.62, h * 0.26],
+        [rad * 0.48, h * 0.2],
+        [rad * 1.05, 0.5],
+      ];
+      let y = 0;
+      parts.forEach(([pr, ph], j) => {
+        const cap = j === parts.length - 1;
+        const pos = new THREE.Vector3(x, y + ph * (cap ? 0.6 : 0.55), z).addScaledVector(lean, y);
+        const sc = new THREE.Vector3(pr * (0.95 + hash(i, j + 98) * 0.2), ph * (cap ? 0.9 : 0.85), pr * (0.95 + hash(j, i + 99) * 0.2)).multiplyScalar(1.3);
+        this.m.compose(pos, new THREE.Quaternion().setFromEuler(new THREE.Euler(0, hash(i + j, 100) * 6, 0)), sc);
+        chunks.setMatrixAt(d, this.m);
+        chunks.setColorAt(d, c.set(bands[(i + j) % bands.length]));
+        d++;
+        y += ph;
+      });
+    }
+    chunks.instanceMatrix.needsUpdate = true;
+    if (chunks.instanceColor) chunks.instanceColor.needsUpdate = true;
+    this.scene.add(chunks);
+
+    // Distant buttes, below the plateau's rim, fading into the haze.
+    const butteMat = toonMaterial(0x6a3c34);
+    for (let i = 0; i < 11; i++) {
+      const a = (i / 11) * Math.PI * 2 + hash(i, 101) * 0.4;
+      const r = 70 + hash(i, 102) * 55;
+      const w = 7 + hash(i, 103) * 12;
+      const h = 30 + hash(i, 104) * 14;
+      const butte = new THREE.Mesh(facet(new THREE.CylinderGeometry(w, w * 1.35, h, 7)), butteMat);
+      butte.position.set(Math.cos(a) * r, -h / 2 - 3 - hash(i, 105) * 10, Math.sin(a) * r);
+      butte.rotation.y = hash(i, 106) * 3;
+      this.scene.add(butte);
+    }
+
+    // Storm clouds: dark heavy banks ringing the sky (they light up with far-off lightning).
+    this.stormMat = new THREE.MeshBasicMaterial({ color: STORM, fog: false });
+    // One instanced ring of puffs (a single draw call); it turns slowly.
+    const banks = 10;
+    const puffs = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 10, 8), this.stormMat, banks * 5);
+    const bank = new THREE.Object3D();
+    const puffObj = new THREE.Object3D();
+    bank.add(puffObj);
+    for (let i = 0; i < banks; i++) {
+      const a = (i / banks) * Math.PI * 2 + hash(i, 115) * 0.3;
+      const r = 110 + hash(i, 113) * 35;
+      bank.position.set(Math.cos(a) * r, 34 + hash(i, 114) * 14, Math.sin(a) * r);
+      bank.lookAt(0, bank.position.y, 0);
+      for (let j = 0; j < 5; j++) {
+        const s = 4 + hash(i, j + 110) * 4;
+        puffObj.scale.set(s * 1.4, s * 0.5, s);
+        puffObj.position.set((j - 2) * 5.5, hash(j, i + 111) * 2.5, (hash(i + j, 112) - 0.5) * 5);
+        bank.updateMatrixWorld(true);
+        puffs.setMatrixAt(i * 5 + j, puffObj.matrixWorld);
+      }
+    }
+    puffs.instanceMatrix.needsUpdate = true;
+    puffs.frustumCulled = false;
+    const sky = new THREE.Group();
+    sky.add(puffs);
+    this.scene.add(sky);
+    this.stormClouds = sky;
+    this.farZap = this.makeZap(0x9fb8ff, 24, false);
+
+    // Light rain: two stacked tiles of streaks scrolling down (1 px lines; cheap).
+    const drops = 420;
+    const H = 26;
+    const rp = new Float32Array(drops * 6);
+    for (let i = 0; i < drops; i++) {
+      const x = (hash(i, 121) - 0.5) * 70;
+      const z = (hash(i, 122) - 0.5) * 70;
+      const y = hash(i, 123) * H;
+      const len = 0.5 + hash(i, 124) * 0.5;
+      rp.set([x, y, z, x + len * 0.12, y + len, z + len * 0.04], i * 6);
+    }
+    const rg = new THREE.BufferGeometry();
+    rg.setAttribute('position', new THREE.BufferAttribute(rp, 3));
+    const rainMat = new THREE.LineBasicMaterial({ color: 0xb8c8ec, transparent: true, opacity: 0.32, depthWrite: false });
+    for (let i = 0; i < 2; i++) {
+      const l = new THREE.LineSegments(rg, rainMat);
+      l.frustumCulled = false;
+      l.userData.h = H;
+      this.scene.add(l);
+      this.rain.push(l);
+    }
+  }
+
+  /** An instanced bolt (glow + core segments) with its own fade. */
+  private makeZap(color: number, max: number, fog: boolean): Zap {
+    if (!this.zapGeo) {
+      this.zapGeo = {
+        glow: new THREE.CylinderGeometry(1, 1, 1, 5, 1, true),
+        core: new THREE.CylinderGeometry(0.32, 0.32, 1, 4, 1, true),
+      };
+    }
+    const mat = (col: number) =>
+      new THREE.MeshBasicMaterial({ color: col, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog });
+    const glowMat = mat(color);
+    const coreMat = mat(0xffffff);
+    const glow = new THREE.InstancedMesh(this.zapGeo.glow, glowMat, max);
+    const core = new THREE.InstancedMesh(this.zapGeo.core, coreMat, max);
+    for (const m of [glow, core]) {
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      m.frustumCulled = false;
+      m.count = 0;
+      m.visible = false;
+      m.renderOrder = 5;
+      this.scene.add(m);
+    }
+    return { glow, core, glowMat, coreMat, n: 0 };
+  }
+
+  /** Append a jagged path of segments to a zap. `lift` bows it upward in the middle (arcs). */
+  private zapPath(z: Zap, from: THREE.Vector3, to: THREE.Vector3, segs: number, jitter: number, w: number, lift = 0) {
+    const [prev, p, mid] = this.tv;
+    prev.copy(from);
+    for (let i = 1; i <= segs; i++) {
+      const f = i / segs;
+      p.copy(from).lerp(to, f);
+      if (i < segs) {
+        const j = jitter * Math.sqrt(Math.sin(f * Math.PI));
+        p.x += (Math.random() - 0.5) * 2 * j;
+        p.y += (Math.random() - 0.5) * j + Math.sin(f * Math.PI) * lift;
+        p.z += (Math.random() - 0.5) * 2 * j;
+      }
+      if (z.n < z.glow.instanceMatrix.count) {
+        mid.subVectors(p, prev);
+        const len = mid.length();
+        this.tq.setFromUnitVectors(UP, mid.normalize());
+        mid.addVectors(p, prev).multiplyScalar(0.5);
+        this.m.compose(mid, this.tq, this.ts.set(w, len + w * 0.8, w));
+        z.glow.setMatrixAt(z.n, this.m);
+        z.core.setMatrixAt(z.n, this.m);
+        z.n++;
+      }
+      prev.copy(p);
+    }
+  }
+
+  private zapCommit(z: Zap) {
+    z.glow.count = z.core.count = z.n;
+    z.glow.visible = z.core.visible = z.n > 0;
+    z.glow.instanceMatrix.needsUpdate = z.core.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
+   * A lightning rod: a stone footing on the rim of its strike circle, a steel
+   * mast wound with copper coils, ceramic insulators and a glowing tip. The
+   * circle is marked with a faint rim, a zigzag band and grounding studs; it
+   * charges up and crackles through the warning, then the bolt comes down on
+   * the rod and arcs out across the circle, leaving a scorch mark.
+   */
+  private buildRod(sx: number, sy: number, rr: number, t0: number, idx: number) {
+    const r = rr / CELL;
+    const p = toWorld(sx, sy);
+    // Stand the rod just outside the circle, on the side away from the arena centre.
+    const out = new THREE.Vector3(p.x, 0, p.z);
+    if (out.lengthSq() < 1e-4) out.set(0, 0, -1);
+    out.normalize();
+    const base = p.clone().addScaledVector(out, r + 0.75);
+
+    const stone = toonMaterial(0x7a6a62);
+    const footing = toonMesh(facet(new THREE.CylinderGeometry(0.55, 0.78, 0.6, 6)), stone, 0.04);
+    footing.position.copy(base).setY(0.3);
+    const block = toonMesh(facet(new THREE.CylinderGeometry(0.36, 0.48, 0.5, 6)), stone, 0.04);
+    block.position.copy(base).setY(0.85);
+    const H = 4.6;
+    const mast = toonMesh(new THREE.CylinderGeometry(0.1, 0.15, H - 1.1, 6), toonMaterial(0x59616c), 0.05);
+    mast.position.copy(base).setY(1.1 + (H - 1.1) / 2);
+    // A copper coil wound round the mast (one helix tube).
+    const coil = toonMaterial(0xc8743a);
+    const turns = 5;
+    const helix = new THREE.CatmullRomCurve3(
+      Array.from({ length: turns * 8 + 1 }, (_, i) => {
+        const a = (i / 8) * Math.PI * 2;
+        return new THREE.Vector3(Math.cos(a) * 0.26, (i / (turns * 8)) * 1.3, Math.sin(a) * 0.26);
+      }),
+    );
+    const coilMesh = new THREE.Mesh(new THREE.TubeGeometry(helix, turns * 10, 0.065, 5), coil);
+    coilMesh.position.copy(base).setY(1.5);
+    // A stack of porcelain insulator sheds above it (one lathe).
+    const shed: THREE.Vector2[] = [new THREE.Vector2(0.001, 0)];
+    for (let i = 0; i < 3; i++) shed.push(new THREE.Vector2(0.12, i * 0.17), new THREE.Vector2(0.26, i * 0.17 + 0.04), new THREE.Vector2(0.12, i * 0.17 + 0.1));
+    shed.push(new THREE.Vector2(0.12, 0.5), new THREE.Vector2(0.001, 0.5));
+    const insulator = new THREE.Mesh(new THREE.LatheGeometry(shed, 10), toonMaterial(0xeae4d6));
+    insulator.position.copy(base).setY(3.0);
+    const parts: THREE.Object3D[] = [footing, block, mast, coilMesh, insulator];
+    const spike = toonMesh(new THREE.ConeGeometry(0.14, 0.5, 6), toonMaterial(0xc8743a), 0.05);
+    spike.position.copy(base).setY(H + 0.2);
+    parts.push(spike);
+    const tip = base.clone().setY(H + 0.48);
+    const tipGlow = new THREE.Mesh(
+      new THREE.SphereGeometry(0.26, 10, 8),
+      new THREE.MeshBasicMaterial({ color: 0xbff4ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }),
+    );
+    tipGlow.position.copy(tip);
+    parts.push(tipGlow);
+    this.scene.add(...parts);
+
+    // Strike circle: additive marking (rim, zigzag band, centre) and a fill that flares up.
+    const ring = new THREE.MeshBasicMaterial({
+      color: 0x5fd8ff,
+      map: paint(boltTarget(), 256),
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const mark = new THREE.Mesh(new THREE.CircleGeometry(r, 40), ring);
+    mark.rotation.x = -Math.PI / 2;
+    mark.position.set(p.x, 0.03, p.z);
+    const fill = new THREE.MeshBasicMaterial({ color: 0x7fd8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(r * 1.05, 32), fill);
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.set(p.x, 0.035, p.z);
+    // Charge ripples: thin rings sweeping in from the rim during the warning.
+    const rippleGeo = new THREE.RingGeometry(r * 0.94, r, 40);
+    const ripples = [0, 1].map(() => {
+      const m = new THREE.Mesh(
+        rippleGeo,
+        new THREE.MeshBasicMaterial({ color: 0x9fe8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
+      );
+      m.rotation.x = -Math.PI / 2;
+      m.position.set(p.x, 0.04, p.z);
+      m.visible = false;
+      this.scene.add(m);
+      return m;
+    });
+    // Grounding studs round the rim.
+    const studs = new THREE.MeshBasicMaterial({ color: 0x2a4450 });
+    const studMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.16, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), studs, 8);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+      studMesh.setMatrixAt(i, this.m.makeTranslation(p.x + Math.cos(a) * (r + 0.3), 0.02, p.z + Math.sin(a) * (r + 0.3)));
+    }
+    studMesh.instanceMatrix.needsUpdate = true;
+    // Scorch mark (dark, alpha-masked) with a hot glow on top while fresh.
+    const scorchTex = paint(scorchMark(), 128);
+    const scorch = new THREE.Mesh(
+      new THREE.CircleGeometry(r * 1.1, 24),
+      new THREE.MeshBasicMaterial({ color: 0x140c0a, alphaMap: scorchTex, transparent: true, opacity: 0, depthWrite: false }),
+    );
+    scorch.rotation.x = -Math.PI / 2;
+    scorch.position.set(p.x, 0.04, p.z);
+    scorch.visible = false;
+    const hot = new THREE.Mesh(
+      scorch.geometry,
+      new THREE.MeshBasicMaterial({ color: 0x9fe8ff, map: scorchTex, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
+    );
+    hot.rotation.x = -Math.PI / 2;
+    hot.position.set(p.x, 0.045, p.z);
+    hot.visible = false;
+    this.scene.add(mark, disc, studMesh, scorch, hot);
+
+    if (!this.boltLight) {
+      this.boltLight = new THREE.PointLight(0xb8d8ff, 0, 34, 1.4);
+      this.scene.add(this.boltLight);
+    }
+    this.rods.push({
+      idx,
+      x: p.x,
+      z: p.z,
+      r,
+      tip,
+      prevT: t0,
+      ring,
+      fill,
+      coil,
+      studs,
+      tipGlow,
+      ripples,
+      zap: this.makeZap(0x3f9cff, ZAP_SEGS, true),
+      life: 0,
+      reroll: 0,
+      scorch,
+      hot,
+      scorchLife: 0,
+    });
+  }
+
+  /** Lay out a fresh strike: sky → rod tip, a twig or two, then arcs from the tip into the circle. */
+  private shapeStrike(rod: Rod) {
+    const z = rod.zap;
+    z.n = 0;
+    const sky = new THREE.Vector3(rod.tip.x + (Math.random() - 0.5) * 8, 40, rod.tip.z + (Math.random() - 0.5) * 8);
+    // Main channel: long crooked strides up high, tighter zigzags near the rod.
+    const knee = rod.tip.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3, 9, (Math.random() - 0.5) * 3));
+    this.zapPath(z, sky, knee, 8, 3, 0.26);
+    this.zapPath(z, knee, rod.tip, 7, 1.3, 0.22);
+    // Forks off the main channel.
+    for (let i = 0; i < 2; i++) {
+      const from = sky.clone().lerp(rod.tip, 0.35 + Math.random() * 0.4);
+      from.x += (Math.random() - 0.5) * 1.5;
+      const to = from.clone().add(new THREE.Vector3((Math.random() - 0.5) * 9, -3 - Math.random() * 4, (Math.random() - 0.5) * 9));
+      this.zapPath(z, from, to, 4, 1, 0.08);
+    }
+    // Arcs from the tip down into the circle: centre and two spots inside it.
+    const targets = [new THREE.Vector3(rod.x, 0.05, rod.z)];
+    for (let i = 0; i < 2; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = rod.r * (0.45 + Math.random() * 0.45);
+      targets.push(new THREE.Vector3(rod.x + Math.cos(a) * d, 0.05, rod.z + Math.sin(a) * d));
+    }
+    targets.forEach((to, i) => this.zapPath(z, rod.tip, to, 7, 0.9, i === 0 ? 0.16 : 0.11, 0.6));
+    this.zapCommit(z);
+  }
+
+  private updateMesa(sim: Sim, t: number, dt: number) {
+    for (const rod of this.rods) {
+      const h = sim.hazards[rod.idx];
+      if (h.kind !== 'bolt') continue;
+      if (h.t < rod.prevT) {
+        // Strike!
+        rod.life = BOLT_LIFE;
+        rod.reroll = 0;
+        rod.scorchLife = SCORCH_LIFE;
+        rod.scorch.rotation.z = rod.hot.rotation.z = Math.random() * Math.PI * 2;
+        this.boltFlash = 1;
+        this.boltLight?.position.set(rod.x, 3, rod.z);
+      }
+      rod.prevT = h.t;
+      const warn = stompWarning(h);
+      const k = warn ? THREE.MathUtils.clamp((h.t - (h.period - 1.2)) / 1.2, 0, 1) : 0;
+      const flick = 0.5 + Math.random() * 0.5;
+      const after = rod.life > 0 ? rod.life / BOLT_LIFE : 0;
+
+      rod.ring.opacity = 0.24 + Math.sin(t * 1.5 + rod.idx) * 0.05 + k * (0.3 + 0.45 * flick) + after;
+      rod.ring.color.set(0x5fd8ff).lerp(new THREE.Color(0xffffff), Math.max(k * k, after));
+      rod.fill.opacity = k * k * 0.22 * flick + after * 0.55;
+      rod.coil.emissive.setRGB(0.2, 0.75, 1).multiplyScalar(k * (0.4 + 0.8 * flick) + after * 1.5);
+      rod.tipGlow.scale.setScalar(1 + k * 0.9 * flick + after * 1.6);
+      (rod.tipGlow.material as THREE.MeshBasicMaterial).opacity = 0.5 + k * 0.4 * flick;
+      rod.ripples.forEach((m, i) => {
+        // Sweep inward, faster as the strike nears.
+        const f = (h.t * (1 + k * 1.5) + i * 0.5) % 1;
+        m.visible = k > 0;
+        m.scale.setScalar(1 - f * 0.85);
+        (m.material as THREE.MeshBasicMaterial).opacity = k * (0.35 + 0.4 * flick) * Math.sin(f * Math.PI);
+      });
+      const blink = warn && Math.sin(t * (14 + k * 30)) > 0;
+      rod.studs.color.set(blink || after > 0 ? 0xaef4ff : 0x2a4450);
+
+      // The bolt itself (re-shaped a few times so it flickers), or crackles at the tip while it charges.
+      const z = rod.zap;
+      if (rod.life > 0) {
+        rod.life -= dt;
+        rod.reroll -= dt;
+        if (rod.reroll <= 0) {
+          this.shapeStrike(rod);
+          rod.reroll = 0.07;
+        }
+        const f = Math.max(0, rod.life / BOLT_LIFE);
+        const on = Math.pow(f, 0.6) * (Math.random() < 0.2 ? 0.45 : 1);
+        z.glowMat.opacity = on * 0.75;
+        z.coreMat.opacity = on;
+      } else if (k > 0.25 && Math.random() < 0.35 + k * 0.5) {
+        z.n = 0;
+        for (let i = 0; i < 1 + Math.floor(k * 2.5); i++) {
+          const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8 - 0.5, Math.random() - 0.5).normalize();
+          this.zapPath(z, rod.tip, rod.tip.clone().addScaledVector(dir, 0.5 + k * 1.3), 3, 0.25, 0.05);
+        }
+        this.zapCommit(z);
+        z.glowMat.opacity = 0.7;
+        z.coreMat.opacity = 0.9;
+      } else if (z.n > 0) {
+        z.n = 0;
+        this.zapCommit(z);
+      }
+
+      // Scorch: flashes hot, then a dark burn that fades out.
+      if (rod.scorchLife > 0) {
+        rod.scorchLife -= dt;
+        const f = Math.max(0, rod.scorchLife / SCORCH_LIFE);
+        (rod.scorch.material as THREE.MeshBasicMaterial).opacity = Math.min(1, f * 2) * 0.95;
+        (rod.hot.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (f - 0.55) / 0.45);
+        rod.scorch.visible = rod.hot.visible = f > 0;
+      }
+    }
+
+    // The strike's flash of light, and the sky/clouds lighting up with it.
+    this.boltFlash = Math.max(0, this.boltFlash - dt / 0.45);
+    if (this.boltLight) this.boltLight.intensity = 130 * this.boltFlash * this.boltFlash;
+
+    if (this.theme.outdoor !== 'mesa') return;
+    // Far-off lightning now and then, somewhere on the horizon.
+    let sheet = this.boltFlash * 0.8;
+    this.nextFar -= dt;
+    const fz = this.farZap;
+    if (fz) {
+      if (this.nextFar <= 0) {
+        this.nextFar = 2.5 + Math.random() * 5;
+        this.farLife = 0.3;
+        const a = Math.random() * Math.PI * 2;
+        const r = 95 + Math.random() * 35;
+        const from = new THREE.Vector3(Math.cos(a) * r, 46, Math.sin(a) * r);
+        const to = from.clone().add(new THREE.Vector3((Math.random() - 0.5) * 20, -60, (Math.random() - 0.5) * 20));
+        fz.n = 0;
+        this.zapPath(fz, from, to, 10, 5, 0.5);
+        this.zapPath(fz, from.clone().lerp(to, 0.4), to.clone().add(new THREE.Vector3(14, 10, 4)), 4, 3, 0.3);
+        this.zapCommit(fz);
+      }
+      if (this.farLife > 0) {
+        this.farLife -= dt;
+        const on = this.farLife > 0 ? (Math.random() < 0.3 ? 0.3 : 1) * Math.min(1, this.farLife / 0.15) : 0;
+        fz.glowMat.opacity = on * 0.6;
+        fz.coreMat.opacity = on;
+        sheet = Math.max(sheet, on * 0.45);
+        if (this.farLife <= 0) {
+          fz.n = 0;
+          this.zapCommit(fz);
+        }
+      }
+    }
+    this.skyMat?.color.setScalar(1 + sheet * 0.9);
+    this.stormMat?.color.set(STORM).lerp(new THREE.Color(0xb0b4e8), sheet);
+
+    if (this.stormClouds) this.stormClouds.rotation.y = t * 0.004;
+    // Rain falls (two stacked tiles scrolling down, wrapping).
+    for (const [i, l] of this.rain.entries()) {
+      const H = l.userData.h as number;
+      l.position.y = -((t * 22) % H) + i * H;
+    }
+  }
+
   /** A mud puddle: an uneven brown patch with a wet sheen and slow bubbles. */
   private buildMud(sx: number, sy: number, rr: number) {
     const r = rr / CELL;
@@ -915,10 +1637,11 @@ export class ArenaDressing {
       const k = 1 + (hash(i, seed) - 0.5) * 0.12 + Math.sin(a * 3 + seed) * 0.07;
       pos.setXY(i, pos.getX(i) * k, pos.getY(i) * k);
     }
-    const outer = new THREE.Mesh(geo, toonMaterial(0x6b4a2c));
+    const col = this.theme.mud ?? { outer: 0x6b4a2c, inner: 0x4a321d, clod: 0x5a3d24, blob: 0x6b4630 };
+    const outer = new THREE.Mesh(geo, toonMaterial(col.outer));
     outer.rotation.x = -Math.PI / 2;
     outer.position.copy(p).setY(0.012);
-    const inner = new THREE.Mesh(geo.clone().scale(0.72, 0.72, 1), toonMaterial(0x4a321d));
+    const inner = new THREE.Mesh(geo.clone().scale(0.72, 0.72, 1), toonMaterial(col.inner));
     inner.rotation.x = -Math.PI / 2;
     inner.position.copy(p).setY(0.018);
     const sheen = new THREE.Mesh(
@@ -930,7 +1653,7 @@ export class ArenaDressing {
     sheen.position.copy(p).add(new THREE.Vector3(-r * 0.2, 0.024, -r * 0.25));
     this.scene.add(outer, inner, sheen);
     // Clods of dirt splashed round the edge.
-    const clodMat = toonMaterial(0x5a3d24);
+    const clodMat = toonMaterial(col.clod);
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2 + hash(i, seed) * 0.5;
       const clod = new THREE.Mesh(new THREE.SphereGeometry(0.16 + hash(seed, i) * 0.14, 7, 5), clodMat);
@@ -938,7 +1661,7 @@ export class ArenaDressing {
       clod.position.copy(p).add(new THREE.Vector3(Math.cos(a) * r * 1.05, 0.04, Math.sin(a) * r * 1.05));
       this.scene.add(clod);
     }
-    const blobs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.16, 8, 6), toonMaterial(0x6b4630), 6);
+    const blobs = new THREE.InstancedMesh(new THREE.SphereGeometry(0.16, 8, 6), toonMaterial(col.blob), 6);
     blobs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.scene.add(blobs);
     this.muds.push({ blobs, x: p.x, z: p.z, r, seed });
@@ -1080,5 +1803,6 @@ export class ArenaDressing {
       this.crowd.instanceMatrix.needsUpdate = true;
     }
     this.updateOutdoors(t);
+    this.updateMesa(sim, t, dt);
   }
 }

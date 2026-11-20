@@ -30,7 +30,21 @@ export type MoveId =
   | 'overclock'
   | 'gale-flap'
   | 'skewer'
-  | 'blood-siphon';
+  | 'blood-siphon'
+  | 'chain-spark'
+  | 'pounce'
+  | 'thorn-bloom'
+  | 'ink-cloud'
+  | 'rally-pulse'
+  | 'magnet-pull'
+  | 'hornet-swarm'
+  | 'quake-stomp'
+  | 'dive-bomb'
+  | 'mirror-ward'
+  | 'anchor-grip'
+  | 'ram-charge'
+  | 'vise-lock'
+  | 'mark-prey';
 
 export type MoveDef = {
   id: MoveId;
@@ -188,6 +202,160 @@ export const MOVES: readonly MoveDef[] = [
     color: '#E8323F',
     cost: 0,
     cooldown: 11,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'hornet-swarm',
+    name: 'Hornet Swarm',
+    description: 'Opens the hive: a swarm of tiny drones streams out, chases the enemy down and stings it all over.',
+    rarity: 'epic',
+    color: '#FFC23F',
+    cost: 60,
+    cooldown: 12,
+    ultimate: true,
+    chance: 0.5,
+  },
+  {
+    id: 'quake-stomp',
+    name: 'Quake Stomp',
+    description: 'Rears up and slams the ground: a shockwave hits every grounded enemy nearby, stuns it and drains its charge.',
+    rarity: 'rare',
+    color: '#D9813B',
+    cost: 55,
+    cooldown: 11,
+    ultimate: true,
+    chance: 0.5,
+  },
+  {
+    id: 'chain-spark',
+    name: 'Chain Spark',
+    description: 'A bolt leaps from the crown to an enemy part, then jumps on to three more, across every enemy in reach.',
+    rarity: 'rare',
+    color: '#7DF9FF',
+    cost: 0,
+    cooldown: 9,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'pounce',
+    name: 'Pounce',
+    description: 'Crouches and springs through the air onto the enemy: a heavy landing on its nearest parts that knocks it off balance.',
+    rarity: 'uncommon',
+    color: '#FFB13D',
+    cost: 0,
+    cooldown: 9,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'thorn-bloom',
+    name: 'Thorn Bloom',
+    description: 'The plate bristles and fires a ring of thorns in every direction. Best when surrounded.',
+    rarity: 'uncommon',
+    color: '#8BD450',
+    cost: 0,
+    cooldown: 10,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'ink-cloud',
+    name: 'Ink Cloud',
+    description: 'Puffs out a cloud of black smog. Enemies caught in it are blinded for 3 seconds: half their strikes and shots go wide.',
+    rarity: 'uncommon',
+    color: '#8A84A8',
+    cost: 0,
+    cooldown: 12,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'rally-pulse',
+    name: 'Rally Pulse',
+    description: 'A repair pulse: patches up your damaged parts, and your allies nearby.',
+    rarity: 'uncommon',
+    color: '#FFD23F',
+    cost: 0,
+    cooldown: 14,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'magnet-pull',
+    name: 'Magnet Pull',
+    description: 'The core flares and yanks the enemy straight to you, and it can\'t dodge for a moment. Kiters hate it.',
+    rarity: 'rare',
+    color: '#AEB8FF',
+    cost: 0,
+    cooldown: 11,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'dive-bomb',
+    name: 'Dive Bomb',
+    description: 'Climbs, then dives onto the enemy from above: hard hits to its top parts, and flyers get knocked out of the air.',
+    rarity: 'rare',
+    color: '#9AD8FF',
+    cost: 0,
+    cooldown: 10,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'mirror-ward',
+    name: 'Mirror Ward',
+    description: 'A mirrored field for 3 seconds: darts, bolts and webs bounce straight back at whoever shot them.',
+    rarity: 'rare',
+    color: '#DDEFFF',
+    cost: 0,
+    cooldown: 13,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'anchor-grip',
+    name: 'Anchor Grip',
+    description: 'Hooks dig into the floor: for 3 seconds it can\'t be knocked back or staggered, and its strikes hit 20% harder.',
+    rarity: 'uncommon',
+    color: '#9AA7BD',
+    cost: 0,
+    cooldown: 12,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'ram-charge',
+    name: 'Ram Charge',
+    description: 'Lowers its head and charges: a burst of speed straight at the enemy. Horns hit far harder at speed.',
+    rarity: 'common',
+    color: '#F0E2B8',
+    cost: 0,
+    cooldown: 7,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'vise-lock',
+    name: 'Vise Lock',
+    description: 'Clamps onto the nearest enemy part and holds on: the enemy is pinned for a moment while the claws squeeze.',
+    rarity: 'uncommon',
+    color: '#FF6B5A',
+    cost: 0,
+    cooldown: 12,
+    ultimate: false,
+    chance: 0.35,
+  },
+  {
+    id: 'mark-prey',
+    name: 'Mark Prey',
+    description: 'Picks out a weak point: the next three hits on that enemy are critical.',
+    rarity: 'uncommon',
+    color: '#FF8FD8',
+    cost: 0,
+    cooldown: 12,
     ultimate: false,
     chance: 0.35,
   },

@@ -53,6 +53,16 @@ export function playFightEvent(e: SimEvent, sim: Sim) {
     case 'heal':
       if (e.amount >= 2) sfx('heal', { gap: 300, volume: 0.7 });
       break;
+    case 'bolt':
+      sfx('bolt', { gap: 250, rate: vary(0.1) });
+      break;
+    case 'reflect':
+      sfx('reflect', { gap: 60, rate: vary(0.2) });
+      break;
+    case 'land':
+      sfx('land', { gap: 120, rate: vary() });
+      break;
+    // ('arc' needs nothing extra: Chain Spark / Magnet Pull already play their move sound.)
   }
 }
 
@@ -60,6 +70,11 @@ const FIGHT_SFX: SfxId[] = ['count', 'fight', 'hit_light', 'hit_heavy', 'hit_cri
 
 /** Warm up the common fight sounds plus the moves in play. */
 export function preloadFight(sim: Sim) {
-  const moves = sim.bugs.flatMap((b) => b.moves.map((m) => MOVE_SFX[m]));
-  preloadSfx([...FIGHT_SFX, ...moves]);
+  const ids = sim.bugs.flatMap((b) => b.moves);
+  const moves = ids.map((m) => MOVE_SFX[m]);
+  const extra: SfxId[] = [];
+  if (ids.includes('pounce') || ids.includes('dive-bomb')) extra.push('land');
+  if (ids.includes('mirror-ward')) extra.push('reflect');
+  if (sim.hazards.some((h) => h.kind === 'bolt')) extra.push('bolt');
+  preloadSfx([...FIGHT_SFX, ...moves, ...extra]);
 }

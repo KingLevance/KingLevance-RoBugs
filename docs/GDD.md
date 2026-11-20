@@ -13,12 +13,12 @@ RoBugs is an original 3D mobile game. You collect robotic bug parts, snap them o
 | Joint physics | Parts hang off their neighbours through damped springs (`src/render/flex.ts`, cosmetic only, so the sim stays deterministic). Wing and sensor mounts are the exception: they're bolted on nearly rigid, so the bug lifts with its wings (only the membranes beat) and antennae don't wobble off the head (only the stalks sway). Parts lag and bounce when the bug accelerates, turns, flies, is hit, or is lifted by a move; the sway ripples out to the tips (legs, wings, antennae), and struts stretch to follow. On top of that the body has a **bendy spine** (`src/render/spine.ts`): each row of parts is a segment joined by a springy joint. On turns the rear segments lag and swing out while the front leads a little; walking adds a side-to-side sway and an up-and-down ripple that travels from head to tail; flying adds a slow swim; and hits knock the nearest joint so the whole body wobbles (crits harder). |
 | UI style | Chunky "workshop" look: Lilita One display font for titles, buttons and numbers; raised buttons with a lip that presses down; rounded panels with a lit top edge. The hub shows your bug turning on a lit pedestal (live 3D), a next-fight card with the opponent's portrait, and Garage/Campaign tiles. The campaign map uses rendered opponent portraits as nodes (black silhouettes while locked, a ✓ when beaten, a crown on bosses). Results open with a pop-in VICTORY/DEFEAT title over the opponent's portrait. |
 | Part models | Rounded toon shapes with outlines and a soft rim light, all built from primitives and small procedural textures. Legs have an armoured upper segment and a knee that folds as the foot lifts (and tucks up in flight). Wings have veined, gradient membranes; foil wings are beetle wing cases that lift open so the membranes can beat. Heads blink or sweep a visor scanner; vents, fluids and cores glow. |
-| Garage feedback | The selected part gets a bright amber outline, a bobbing arrow and a soft glow while the rest of the bug dims; a SELECTED chip on the editor names it with Remove / ✕. A status bar pinned under the 3D editor always shows what the bug STILL NEEDS (red) or ✓ READY TO FIGHT with a Fight button (green). |
+| Garage feedback | The selected part gets a bright amber outline, a bobbing arrow and a soft glow while the rest of the bug dims, and the drawer turns into an **inspector** for it (its ★ move, what it does, where it goes, stats, and Rotate / Flip / Move / Add another / Remove). A status bar pinned under the 3D editor always shows what the bug NEEDS (red chips; tapping one filters the parts bin to what fixes it) or ✓ READY with its move count and a Fight button (green). Placed parts pop in with a ring burst. |
 | Readability | Rarity is shown in the UI only (coloured frame, 1–4 pips and a printed label on bin tiles), never on the 3D models. Part chips use renders of the real 3D models. In fights, teams are marked subtly: a thin faint ring under each bug and a small pointer over the player's. |
 | Main mode | **Single-player campaign**: a map of opponents with guaranteed first-clear drops and farmable bosses. |
 | Signature moves | **Carried by parts** (owner's call, Nov 2026): a part with a ★ move gives its bug that move while the part is attached and intact. Moves **auto-proc** on a chance roll; ultimates play a short cutscene. See §6. |
 | Controls | **Fights are autonomous.** Your bug's AI plays to its build: melee charges, ranged kites, hurt bugs circle. The player's skill is in building, and the build decides the moves. A 1×/2× speed toggle is available while watching. |
-| Garage | **3D editor.** The bug is shown exactly as it looks in the arena. Drag empty space to spin the view; Angle/Top/Side/Front buttons jump to preset views (eye-level views zoom to the bug). Drag a part to move it (swaps if the slot is taken), drag it off the grid to remove it, and tap a part in the bin to auto-attach it to a sensible slot. |
+| Garage | **Full-screen 3D editor** (rewritten Nov 2026 because the old one was a long scroll and placing parts felt clunky). Header: back, bug tabs (tap the current one, or ⋯, for rename / Auto-build / Save / Copy / Clear / Scrap). The editor has ↶ Undo / ↷ Redo, a 👁 view toggle (Angle/Top/Side/Front) and power/weight mini meters. Below it a drawer with **Parts / Moves / Stats / Saved** tabs. **Placing a part:** tap a card in the parts drawer to pick it up: every spot it can go glows (brightest = best fit, `candidateSlots` in `editor.ts`) and a see-through preview sits in the best one; tap a spot, drag the preview, or press ✓ Best spot. **Press and hold** a card to drag it straight onto the bug. Parts on the bug: tap to select, drag to move (swaps if taken; the spots it can go glow), drag off the grid to remove, or use Move in the inspector. Drag empty space to spin the view. |
 | Teaching | The garage explains itself. Each part kind has a plain-language label (thorax = "middle body", abdomen = "tail body"), a "what it does" and a "where it goes" line (`src/game/guide.ts`). Selecting a part lights up its best slots in green (`rankSlots`). A checklist shows what the bug still needs. The bin is grouped into Body / Movement / Weapons / Power & defense. **Auto-build** assembles a legal, mirrored bug from the player's best parts. |
 | Hit feedback | Every hit emits a sim event. The renderer reacts: the struck part pops, the victim flinches away and the attacker follows through, sparks fly (blue if shielded, orange for heavy hits), and a part breaking gets a shockwave, a burst in its colour, a beat of hit-stop and a camera shake. Floating damage numbers and "X BROKEN!" callouts are drawn as an overlay (gold for damage you deal, red for damage you take). |
 | Flight | Bugs whose wing lift is high enough for their weight fly (`BugStats.maxAlt`, up to ~3 cells). Flyers cruise high (over acid and out of reach of ground jaws), dive to the enemy's height to strike, and climb out. **Wing stamina** (2–5 s depending on lift) forces them to land and recover, which is the window to punish them. Losing wings mid-air means falling, and a hard landing does crash damage to the underside and legs. Melee reach and darts are 3D; bugs at different heights don't collide. |
@@ -112,6 +112,7 @@ Typical boss fight (balance script): ~110 hits, 30 misses, 10 dodges, 7 counters
 | **The Hive Ring** | Two stompers out of sync, central acid, spiked walls |
 | **The Meadow** (outdoors, day) | Three **mud** patches: no damage, but grounded bugs wade through at half speed (flyers skim over). Soft stone edging, no spikes. Giant grass, flowers, butterflies, clouds. |
 | **Moonlit Pond** (outdoors, night) | A central pool of water that shorts out robot parts (works like acid), two muddy banks, soft edges. Mossy flagstones, reeds, lily pads, fireflies, moon and stars. |
+| **Thunder Mesa** (outdoors, storm) | Three **lightning rods** (`kind: 'bolt'`) that take turns: each glows and flickers for 1.2 s, then a bolt strikes everything in its circle (flyers too: 2 parts take 16 each, and they're stunned 0.7 s). A grey scree patch (mud). A sandstone plateau in a thunderstorm: boulders, rock spires, rain, distant lightning. The rod stands just outside its circle so it never hides the fight. |
 
 Outdoor arenas swap the stadium (walls, crowd, floodlights) for open ground. The AI skirts mud lightly but doesn't flee it, and only shoves enemies into hazards that hurt. The Undergrowth is mostly outdoors: Needlewisp, Silkjaw, Mother Lattice and Gravelgrub fight in the Meadow; Arcfly, Bloodgnat and Glimmer at the Pond.
 
@@ -134,10 +135,40 @@ Outdoor arenas swap the stadium (walls, crowd, floodlights) for open ground. The
 | Gale Flap | Foil Wings |
 | Blood Siphon | Siphon Proboscis |
 | Skewer | Barbed Tail |
+| Hornet Swarm ★ | Hive Abdomen |
+| Quake Stomp ★ | Anvil Thorax |
+| Chain Spark | Coil Crown |
+| Mirror Ward | Mirror Crown |
+| Pounce | Spring Hoppers |
+| Dive Bomb | Razor Wings, Glasswing Rotors |
+| Thorn Bloom | Thornback Plate |
+| Ink Cloud | Smog Bladder |
+| Rally Pulse | Beacon Antenna |
+| Magnet Pull | Lodestone Core |
+| Ram Charge | Gavel Horn, Bumper Horn, Auger Horn |
+| Vise Lock | Clamp Pincers, Hydra-Vise Pincers |
+| Anchor Grip | Grapple Crawlers |
+| Mark Prey | Needle Gun, Prism Visor, Echo Array |
 
+Skitter Dash is also carried by Spindle Legs. Since the Storm Peaks expansion (Nov 2026) the catalog has **48 parts** and **27 moves** (5 ultimates); 33 parts carry a move. Plain parts left without one on purpose: Scout Dome, Octo-Eye Head, both basic thoraxes, Coil and Ballast Abdomens, Weaver Legs, Gripper Claws, Hex Plate, Glowcell Core and Feeler Antennae.
+
+**Storm Peaks moves:**
+- **Hornet Swarm** (ultimate, 60 PP): 12 homing drones pour out of the hive and chase the nearest enemy (7 each).
+- **Quake Stomp** (ultimate, 55 PP): every grounded enemy within ~170 takes 15 to 3 parts (legs first), is stunned 1.1 s, loses 15 charge and is shoved away.
+- **Chain Spark:** a bolt from the crown to the nearest enemy part (12), then jumps to up to 3 more parts within reach, across enemies (9 each).
+- **Pounce:** a 0.45 s leap that lands on the 2 nearest parts (15 each), shoves, and wears down poise. **Dive Bomb** (flyers only): the same from above, hitting top-stacked parts first (18 each) and knocking flyers out of the air.
+- **Thorn Bloom:** a ring of 14 thorns (8 each) in every direction.
+- **Ink Cloud:** enemies nearby are blinded for 3 s: half their strikes whiff and half their shots go wide.
+- **Rally Pulse:** heals 35 across your damaged parts and 25 to allies nearby.
+- **Magnet Pull:** yanks the enemy most of the way to you (pulls flyers down) and stops it dodging for 1.2 s. The answer to kiting snipers.
+- **Mirror Ward:** 3 s in which darts, bolts, webs and thorns bounce back at the shooter (drones are swatted).
+- **Anchor Grip:** 3 s with no knockback, no poise loss and +20% strike damage.
+- **Ram Charge:** a burst of speed straight at the enemy; horns come round for the impact. Ram damage from closing speed is capped (240) so a charge can't one-shot.
+- **Vise Lock:** the claws clamp the nearest part: the enemy is stunned 0.6 s and takes two squeezes.
+- **Mark Prey:** the next 3 hits on that enemy within 7 s are sure crits.
 **Auto-proc** (`tryMoves` in `sim.ts`). The player never presses a button. Every 0.5 s a bug rolls for each move whose **judgement** says now is a good time (target in reach and in front, heavy damage just taken, etc.) and that is off cooldown. The chance is the move's base `chance` (35%; ultimates and Carapace Lock 50%), and **each extra part carrying the same move adds a quarter of that** (35% → 44% → 52%), capped at 75%, so two jaws that carry Mandible Crusher fire it more often. After any move fires the bug can't fire another for 1.2 s.
 
-**Ultimates** (Mandible Crusher, Venom Barrage, Sunder Beam) also need a full enough **proc meter** (their PP cost) and, so cutscenes don't pile up, can't fire within **10 s** of any ultimate in the match (`ULT_LULL`). Other moves cost no PP, only their cooldown. *(Assumption: chances, the stacking bonus and the 10 s lull are first-pass numbers; a fight has about 2–3 cutscenes and 10–15 other moves.)*
+**Ultimates** (Mandible Crusher, Venom Barrage, Sunder Beam, Hornet Swarm, Quake Stomp) also need a full enough **proc meter** (their PP cost) and, so cutscenes don't pile up, can't fire within **10 s** of any ultimate in the match (`ULT_LULL`). Other moves cost no PP, only their cooldown. *(Assumption: chances, the stacking bonus and the 10 s lull are first-pass numbers; a fight has about 2–3 cutscenes and 10–15 other moves.)*
 
 **Proc points** (one constants table, `PROC` in `src/game/moves.ts`, max 100, reset every match):
 
@@ -211,13 +242,14 @@ Measured with `scripts/simulate.ts` and an ad-hoc behaviour probe: about 5–7 c
 
 ## 8. Campaign and loot
 
-The campaign (`src/game/opponents.ts`) is a scrolling map of 19 stops in three zones. A stop unlocks when any of its `unlockedBy` stops is cleared (and, for a zone's first stop, the star gate is met; see Stars below).
+The campaign (`src/game/opponents.ts`) is a scrolling map of 27 stops in four zones. A stop unlocks when any of its `unlockedBy` stops is cleared (and, for a zone's first stop, the star gate is met; see Stars below).
 
 | Zone | Stops |
 |---|---|
 | **The Scrapyard** | Rustmite → Needlewisp / Snapclaw → **Ironback** (boss). Optional: **Old Scrapjaw** (teaches Overclock). |
 | **The Undergrowth** | Silkjaw (webs) → Gravelgrub (burrows) / Arcfly (static, gale) / Bloodgnat (vampire) → **Queen Vexa** (boss). Optional: **Mother Lattice**. |
-| **The Deep Hive** | Rivet & Ratchet (2v2) → Glimmer (cloak) / Barbtail (scorpion) / Lenswing (laser) → The Tunnel Kings (2v2) → **The Hive Guard** (3v3 boss) → **Empress Kalyx** (3v3 finale, farmable). Optional: **Nullshade**. |
+| **The Deep Hive** | Rivet & Ratchet (2v2) → Glimmer (cloak) / Barbtail (scorpion) / Lenswing (laser) → The Tunnel Kings (2v2) → **The Hive Guard** (3v3 boss) → **Empress Kalyx** (3v3, farmable). Optional: **Nullshade**. |
+| **The Storm Peaks** | Sparkcrown (chain spark) → Hopjack (pounce, ram) / Smogmaw (ink) → Lodewing (magnet, dive) / Thornhide (thorns, vise) → The Anvil Pair (2v2: quake + rally) → **Tempest Queen Aurix** (3v3 finale, hornet swarm, farmable). Optional: **Old Mirrorback** (mirror ward, thorns, magnet). Mostly on Thunder Mesa. The new parts (tag `storm`) only drop here. |
 
 **Your garage holds up to 6 bugs** (`SaveData.bugs`), each with its own build and name. Tabs at the top of the garage switch between them; ＋ adds an empty one, ⧉ copies the current one, and 🗑 scraps it (after a confirm). The active bug is the one you edit and lead into battle. **Parts sit on one bug at a time** (owner's call): a bug can only use what you own minus what your other bugs are using. The parts bin shows what's free (and how many are on other bugs); Auto-build, ⧉ copy and loading a saved build only use spare parts and say how many they had to leave off. Saves from before this rule keep their bugs untouched: any bug using a part another bug also uses is flagged ("Hex Plate is on Sprocket"), shows red, and can't join the squad until one of them gives the part up. Your **lead** (the bug you're editing) has first claim on shared parts, so it is never blocked by another bug; the garage warns it about the overlap and suggests Auto-build. On the campaign sheet, the squad picker shows the lead plus your other bugs; a blocked bug says why and tapping it opens the garage on it. Old single-bug saves migrate automatically. In the garage, **↶ Undo** steps back through part edits (40 steps, per bug, cleared on switching bugs), and **💾 Save** stores the current parts as a named *saved build* (up to 12, `SaveData.saved`), which can be loaded onto any bug from the Saved builds list (loading is undoable).
 
@@ -225,7 +257,7 @@ The campaign (`src/game/opponents.ts`) is a scrolling map of 19 stops in three z
 
 **Optional bosses** (`optional: true`) sit off the main path, are harder than the stops around them, and pay out signature parts.
 
-**Balance check:** `npm test` plays the whole campaign in order with an auto-built player bug that picks up each stop's rewards. Current win rates for that auto-player (Nov 2026, after the moves-on-parts retune): the first two stops 70–100%, other regular stops 50–87% (each zone opens a little easier than it ends), bosses 57–67%, optional bosses 33–50%, the finale 43%. Rear-mounted ranged weapons on a kiting bug are very strong for the AI (a Lenswing with a rear stinger won 29 of 30), so opponents avoid them for now.
+**Balance check:** `npm test` plays the whole campaign in order with an auto-built player bug that picks up each stop's rewards. Win rates for that auto-player after the Storm Peaks expansion (Nov 2026): the first two stops 67–100%, other regular stops 50–97%, bosses 47–63%, optional bosses 37–50%, Empress Kalyx 33%, the Storm Peaks finale (Aurix) 37%. Storm Peaks fights are short (10–20 s): late-game bugs hit hard, and the auto-builder's bugs often lose a connecting part and fall apart. New-move tuning notes: Vise Lock was too strong as a 1.2 s stun (now 0.6 s), and Ram Charge made horns one-shot until ram damage was capped. Rear-mounted ranged weapons on a kiting bug are very strong for the AI, so opponents avoid them (Magnet Pull is now the counter). *(Assumption: first-pass numbers.)*
 
 Each opponent has:
 - `guaranteed: Reward[]` — given **once**, on first clear (parts).
@@ -242,7 +274,7 @@ The best rating per stop is saved (`SaveData.stars`) and shown under each node o
 - A 3-star win adds one extra roll.
 - The **first** 3-star win on a stop adds a one-off bonus roll that is always rare or better.
 
-**Zone star gates** (`ZONES` in `opponents.ts`): the first stop of each zone also needs enough stars earned in the zone before it: **9 of 15** from the Scrapyard to enter the Undergrowth, and **12 of 18** from the Undergrowth to enter the Deep Hive. Optional bosses count toward these totals. The map shows each zone's progress (★ have/need) on its header and on the gated node, and the fight sheet explains what's missing. A stop you've already beaten never locks again, so older saves keep their progress. For the auto-player, one clear of each main-path stop lands at about the gate (Scrapyard ≈ 9.6, Undergrowth ≈ 10.7), so a sloppy run means replaying for stars or beating the optional boss. *(Assumption: gate sizes are first-pass numbers.)*
+**Zone star gates** (`ZONES` in `opponents.ts`): the first stop of each zone also needs enough stars earned in the zone before it: **9 of 15** from the Scrapyard to enter the Undergrowth, **12 of 18** from the Undergrowth to enter the Deep Hive, and **15 of 24** from the Deep Hive to enter the Storm Peaks. Optional bosses count toward these totals. The map shows each zone's progress (★ have/need) on its header and on the gated node, and the fight sheet explains what's missing. A stop you've already beaten never locks again, so older saves keep their progress. For the auto-player, one clear of each main-path stop lands at about the gate (Scrapyard ≈ 9.6, Undergrowth ≈ 10.7), so a sloppy run means replaying for stars or beating the optional boss. *(Assumption: gate sizes are first-pass numbers.)*
 
 The first-clear reward stays fixed whatever the rating. Old saves count each cleared stop as 1 star. `npm test` reports the star spread per stop: the auto-player currently earns 3 stars on roughly half its wins. *(Assumption: challenge thresholds and loot scaling are first-pass numbers.)*
 

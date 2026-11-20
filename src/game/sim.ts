@@ -101,6 +101,19 @@ export type Bug = {
   /** Seconds of Blood Siphon left (latched on, draining). */
   siphon: number;
   siphonTick: number;
+  /** Seconds left blinded by Ink Cloud: half its strikes and shots go wide. */
+  blind: number;
+  /** Seconds of Mirror Ward left: shots bounce back at the shooter. */
+  ward: number;
+  /** Seconds of Anchor Grip left: no knockback or stagger, strikes hit harder. */
+  anchor: number;
+  /** Mark Prey: hits on this bug left that are sure to crit, and seconds before the mark fades. */
+  marked: number;
+  markedT: number;
+  /** Seconds left in a Pounce / Dive Bomb leap, what kind, and at whom. */
+  leap: number;
+  leapKind: 'pounce' | 'dive' | null;
+  leapAt: number;
   /** Exponentially decaying recent damage taken, for move judgement. */
   recentDamage: number;
   // ── Footwork (see FIGHT) ──
@@ -137,10 +150,25 @@ export type Hazard =
   | { kind: 'acid'; x: number; y: number; r: number }
   /** Mud: no damage, but bugs on the ground wade through it at half speed. */
   | { kind: 'mud'; x: number; y: number; r: number }
-  | { kind: 'stomper'; x: number; y: number; r: number; period: number; t: number };
+  | { kind: 'stomper'; x: number; y: number; r: number; period: number; t: number }
+  /** Lightning rod: warns (like a stomper), then a bolt strikes everything in its circle, flyers included, and stuns it. */
+  | { kind: 'bolt'; x: number; y: number; r: number; period: number; t: number };
 
 /** `z`/`vz`: altitude and climb rate, so darts can be shot up at flyers (or down from them). */
-export type Projectile = { x: number; y: number; z: number; vx: number; vy: number; vz: number; damage: number; owner: number; ttl: number; big: boolean; kind?: 'web' | 'laser' };
+export type Projectile = {
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  damage: number;
+  owner: number;
+  ttl: number;
+  big: boolean;
+  /** web: snares · laser: a bolt of light · drone: a homing Hornet Swarm drone · thorn: Thorn Bloom spike. */
+  kind?: 'web' | 'laser' | 'drone' | 'thorn';
+};
 /** `h`: altitude (world px). */
 export type Effect = { x: number; y: number; h: number; ttl: number; color: string; size: number };
 
@@ -166,7 +194,15 @@ export type SimEvent =
   /** A burrowed bug bursts out of the floor. */
   | { type: 'erupt'; bug: number; x: number; y: number }
   /** A bug healed (vampiric hits, Blood Siphon). `from` is the bug it drank from. */
-  | { type: 'heal'; bug: number; from: number; x: number; y: number; h: number; amount: number };
+  | { type: 'heal'; bug: number; from: number; x: number; y: number; h: number; amount: number }
+  /** A lightning rod struck. */
+  | { type: 'bolt'; x: number; y: number; r: number }
+  /** An arc of energy through these points (Chain Spark, Magnet Pull). */
+  | { type: 'arc'; bug: number; move: MoveId; points: { x: number; y: number; h: number }[] }
+  /** A shot bounced off a Mirror Ward. */
+  | { type: 'reflect'; bug: number; x: number; y: number; h: number }
+  /** A Pounce or Dive Bomb lands. */
+  | { type: 'land'; bug: number; move: MoveId; x: number; y: number; h: number };
 
 export type Ult = { id: MoveId; caster: number; t: number; dur: number };
 
@@ -340,7 +376,7 @@ export function hpFraction(bug: Bug) {
 }
 
 export function stompWarning(h: Hazard) {
-  return h.kind === 'stomper' && h.t > h.period - STOMP_WARN;
+  return (h.kind === 'stomper' || h.kind === 'bolt') && h.t > h.period - STOMP_WARN;
 }
 
 function aliveCount(bug: Bug, c: Category) {
@@ -399,6 +435,14 @@ function makeBug(index: number, team: 0 | 1, fighter: Fighter, pos: Vec, heading
     burrow: 0,
     siphon: 0,
     siphonTick: 0,
+    blind: 0,
+    ward: 0,
+    anchor: 0,
+    marked: 0,
+    markedT: 0,
+    leap: 0,
+    leapKind: null,
+    leapAt: -1,
     recentDamage: 0,
     dodgeCd: 1,
     dash: 0,
@@ -470,6 +514,17 @@ function arenaHazards(arena: ArenaId): { hazards: Hazard[]; spikedWalls: boolean
           { kind: 'mud', x: at(165), y: at(200), r: 62 },
           { kind: 'mud', x: at(435), y: at(400), r: 62 },
           { kind: 'mud', x: at(420), y: at(130), r: 38 },
+        ],
+      };
+    case 'mesa':
+      // A bare plateau in a thunderstorm: three lightning rods take turns striking, with a scree patch.
+      return {
+        spikedWalls: false,
+        hazards: [
+          { kind: 'bolt', x: at(160), y: at(170), r: 64, period: 6, t: 0 },
+          { kind: 'bolt', x: at(440), y: at(250), r: 64, period: 6, t: 2 },
+          { kind: 'bolt', x: at(250), y: at(450), r: 64, period: 6, t: 4 },
+          { kind: 'mud', x: at(470), y: at(480), r: 46 },
         ],
       };
     case 'pond':
@@ -603,7 +658,7 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
   bug.recentDamage += dmg;
   bug.sinceHit = 0;
   // Poise wears down under punishment; when it breaks the bug reels (see stepBug).
-  if (bug.steady <= 0 && bug.shield <= 0 && bug.stagger <= 0) bug.poise -= dmg * (crit ? 1.3 : 1);
+  if (bug.steady <= 0 && bug.shield <= 0 && bug.stagger <= 0 && bug.anchor <= 0) bug.poise -= dmg * (crit ? 1.3 : 1);
   gainProc(bug, (dmg / 5) * PROC.damageTakenPer5);
   if (p.part.category === 'armor') gainProc(bug, PROC.armorAbsorb);
   if (attacker) gainProc(attacker, PROC.hitLanded + (crit ? PROC.crit : 0));
@@ -656,6 +711,13 @@ function damagePart(sim: Sim, bug: Bug, p: SimPart, dmg: number, attacker: Bug |
   return dmg;
 }
 
+/** Mark Prey: a marked bug takes a sure crit (and the mark wears down by one). */
+function markCrit(victim: Bug) {
+  if (victim.marked <= 0) return false;
+  victim.marked--;
+  return true;
+}
+
 // ── Footwork: dodges, lunges, clashes, staggers ─────────────────────
 
 function cancelSwings(bug: Bug, cooldown: number) {
@@ -668,7 +730,7 @@ function cancelSwings(bug: Bug, cooldown: number) {
 
 /** Shove `bug` along `dir` (unit) at `speed`, scaled by how light it is. A locked carapace barely budges. */
 function knock(bug: Bug, dir: Vec, speed: number) {
-  if (bug.dead || bug.burrow > 0) return;
+  if (bug.dead || bug.burrow > 0 || bug.anchor > 0) return;
   const k = speed * shove(bug.stats) * (bug.shield > 0 ? 0.2 : 1);
   bug.vel.x += dir.x * k;
   bug.vel.y += dir.y * k;
@@ -676,7 +738,7 @@ function knock(bug: Bug, dir: Vec, speed: number) {
 
 function canDodge(sim: Sim, bug: Bug) {
   if (bug.dead || sim.ult || bug.dodgeCd > 0 || bug.react >= 0 || bug.dash > 0) return false;
-  if (bug.stun > 0 || bug.stagger > 0 || bug.open > 0 || bug.burrow > 0 || bug.siphon > 0 || bug.shield > 0) return false;
+  if (bug.stun > 0 || bug.stagger > 0 || bug.open > 0 || bug.burrow > 0 || bug.siphon > 0 || bug.shield > 0 || bug.leap > 0) return false;
   // Tangled in silk (spider legs pick their way through).
   if (bug.webbed > 0 && !bug.parts.some((p) => p.alive && p.part.tag === 'spider')) return false;
   return reflex(bug.stats) > 0;
@@ -754,6 +816,8 @@ function resolveSwing(sim: Sim, bug: Bug, p: SimPart) {
   };
   const slipped = enemy.evade > 0 || enemy.dashed < 0.5;
   if (enemy.burrow > 0 || enemy.evade > 0) return miss(slipped);
+  // Blinded by ink: half its strikes go wide.
+  if (bug.blind > 0 && rand(sim) < 0.5) return miss(false);
   const target = nearestPart(enemy, wp, true);
   if (!target) return;
   // (A little extra reach: the lunge carries the strike forward.)
@@ -789,16 +853,17 @@ function resolveSwing(sim: Sim, bug: Bug, p: SimPart) {
     return;
   }
 
-  let dmg = w.damage;
+  let dmg = w.damage * (bug.anchor > 0 ? 1.2 : 1);
   if (w.ramBonus) {
     const closing = (bug.vel.x - enemy.vel.x) * Math.cos(toward) + (bug.vel.y - enemy.vel.y) * Math.sin(toward);
-    dmg += Math.max(0, closing) * w.ramBonus;
+    // (Capped, so a charge or a shove can't turn a horn into a one-hit kill.)
+    dmg += Math.min(240, Math.max(0, closing)) * w.ramBonus;
   }
   // Striking gives away a cloaked bug, but the ambush always crits. So does punishing a miss.
   const ambush = bug.cloak > 0;
   if (ambush) bug.cloak = 0;
   const counter = enemy.open > 0;
-  const crit = rand(sim) < critChance(bug, enemy, wp) || ambush || counter;
+  const crit = rand(sim) < critChance(bug, enemy, wp) || ambush || counter || markCrit(enemy);
   const dealt = damagePart(sim, enemy, strikeTarget(sim, enemy, wp, bug.alt > enemy.alt + 15) ?? target.p, dmg, bug, crit, counter);
   if (dealt > 0) {
     const n = unit({ x: enemy.pos.x - bug.pos.x, y: enemy.pos.y - bug.pos.y });
@@ -904,11 +969,44 @@ function judge(sim: Sim, bug: Bug, id: MoveId): boolean {
     case 'blood-siphon':
       // Latch on once hurt enough for it to matter.
       return bug.siphon <= 0 && dist < bug.radius + foe.radius + 30 && hpFraction(bug) < 0.85 && Math.abs(foe.alt - bug.alt) < 30;
+    case 'hornet-swarm':
+      return dist < 320;
+    case 'quake-stomp':
+      return bug.alt < 10 && near(150) && foe.alt < 20;
+    case 'chain-spark':
+      return dist < bug.radius + foe.radius + 150 && Math.abs(foe.alt - bug.alt) < 60;
+    case 'pounce':
+      return bug.alt < 6 && bug.webbed <= 0 && foe.alt < 30 && dist > 80 && dist < 270;
+    case 'thorn-bloom':
+      return near(150) && (bug.recentDamage > 8 || foesOf(sim, bug).filter((e) => Math.hypot(e.pos.x - bug.pos.x, e.pos.y - bug.pos.y) < 170).length > 1 || dist < 90);
+    case 'ink-cloud':
+      return foe.blind <= 0 && dist < 125 + foe.radius * 0.5 && foe.parts.some((p) => p.alive && p.part.weapon);
+    case 'rally-pulse':
+      return hpFraction(bug) < 0.75 || sim.bugs.some((a) => a !== bug && a.team === bug.team && !a.dead && hpFraction(a) < 0.6 && Math.hypot(a.pos.x - bug.pos.x, a.pos.y - bug.pos.y) < 220);
+    case 'magnet-pull':
+      // Drag in something that's keeping its distance.
+      return dist > 120 && dist < 340 && Math.abs(foe.alt - bug.alt) < 80;
+    case 'dive-bomb':
+      return bug.stats.maxAlt > 0 && !bug.grounded && bug.webbed <= 0 && dist > 60 && dist < 280;
+    case 'mirror-ward':
+      return bug.ward <= 0 && sim.projectiles.some((pr) => sim.bugs[pr.owner].team !== bug.team && Math.hypot(pr.x - bug.pos.x, pr.y - bug.pos.y) < 170);
+    case 'anchor-grip':
+      return bug.anchor <= 0 && dist < bug.radius + foe.radius + 40;
+    case 'ram-charge':
+      return bug.alt < 6 && dist > 90 && dist < 280 && facing < 0.5;
+    case 'vise-lock':
+      return foe.stun <= 0 && bug.parts.some((p) => {
+        if (!p.alive || p.part.category !== 'pincers') return false;
+        const n = nearestPart(foe, partWorld(bug, p), true);
+        return !!n && n.d < (p.part.weapon?.range ?? 40) + 20 && Math.abs(angleDiff(facingAngle(bug, p), Math.atan2(n.w.y - partWorld(bug, p).y, n.w.x - partWorld(bug, p).x))) < 1.1 && Math.abs(foe.alt - bug.alt) < 30;
+      });
+    case 'mark-prey':
+      return foe.marked <= 0 && dist < 260;
   }
 }
 
 /** Moves that need to see their target. */
-const AIMED: MoveId[] = ['mandible-crusher', 'venom-barrage', 'web-snare', 'burrow-strike', 'sunder-beam'];
+const AIMED: MoveId[] = ['mandible-crusher', 'venom-barrage', 'web-snare', 'burrow-strike', 'sunder-beam', 'chain-spark', 'pounce', 'magnet-pull', 'dive-bomb', 'mark-prey', 'ram-charge'];
 
 /** Heading that points `bug`'s part tagged `tag` (whichever way it's mounted) at `foe`. */
 export function aimHeading(bug: Bug, foe: Bug, tag: PartTag) {
@@ -1140,7 +1238,221 @@ function resolveMove(sim: Sim, bug: Bug, id: MoveId) {
       }
       gainProc(bug, PROC.dodge);
       break;
+    case 'hornet-swarm': {
+      // Drones pour out of the hive (or the body) and home in on the enemy.
+      const hive = bug.parts.find((p) => p.alive && p.part.move === 'hornet-swarm');
+      const from = hive ? partWorld(bug, hive) : bug.pos;
+      for (let k = 0; k < 12; k++) {
+        const a = bug.heading + Math.PI + (k - 5.5) * 0.32;
+        const sp = 150 + (k % 3) * 25;
+        sim.projectiles.push({ x: from.x, y: from.y, z: bug.alt + 10 + (k % 4) * 4, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: 0, damage: 7, owner: bug.index, ttl: 3.2 + (k % 4) * 0.15, big: true, kind: 'drone' });
+      }
+      break;
+    }
+    case 'quake-stomp': {
+      sim.effects.push({ x: bug.pos.x, y: bug.pos.y, h: 0, ttl: 0.5, color: '#D9813B', size: 340 });
+      sim.shake = Math.max(sim.shake, 0.7);
+      for (const e of foesOf(sim, bug)) {
+        const d = Math.hypot(e.pos.x - bug.pos.x, e.pos.y - bug.pos.y);
+        if (e.burrow > 0 || e.alt > 20 || d > 170 + e.radius * 0.5) continue;
+        e.parts
+          .filter((p) => p.alive && !shielded(e, p))
+          .map((p) => ({ p, low: p.part.category === 'legs' ? 0 : 1, d: Math.hypot(partWorld(e, p).x - bug.pos.x, partWorld(e, p).y - bug.pos.y) }))
+          .sort((a, b) => a.low - b.low || a.d - b.d)
+          .slice(0, 3)
+          .forEach(({ p }) => damagePart(sim, e, p, 15, bug));
+        if (!e.dead && canBeHurt(sim, e)) {
+          e.stun = Math.max(e.stun, 1.1);
+          e.proc = Math.max(0, e.proc - 15);
+          knock(e, unit({ x: e.pos.x - bug.pos.x, y: e.pos.y - bug.pos.y }), 140);
+        }
+      }
+      break;
+    }
+    case 'chain-spark': {
+      // From the crown to the nearest enemy part, then on to the nearest part not yet hit (any enemy) within a jump.
+      const crown = bug.parts.find((p) => p.alive && p.part.move === 'chain-spark');
+      const start = crown ? partWorld(bug, crown) : bug.pos;
+      const points = [{ x: start.x, y: start.y, h: bug.alt + 14 }];
+      const hit = new Set<SimPart>();
+      let at: Vec = start;
+      for (let k = 0; k < 4; k++) {
+        let best: { e: Bug; p: SimPart; w: Vec; d: number } | null = null;
+        for (const e of foesOf(sim, bug)) {
+          if (e.burrow > 0) continue;
+          for (const p of e.parts) {
+            if (!p.alive || hit.has(p) || shielded(e, p)) continue;
+            const w = partWorld(e, p);
+            const d = Math.hypot(w.x - at.x, w.y - at.y);
+            if (d < (k === 0 ? 220 : 95) && (!best || d < best.d)) best = { e, p, w, d };
+          }
+        }
+        if (!best) break;
+        hit.add(best.p);
+        points.push({ x: best.w.x, y: best.w.y, h: best.e.alt + 8 });
+        damagePart(sim, best.e, best.p, k === 0 ? 12 : 9, bug);
+        at = best.w;
+      }
+      if (points.length > 1) sim.events.push({ type: 'arc', bug: bug.index, move: id, points });
+      break;
+    }
+    case 'pounce':
+    case 'dive-bomb': {
+      // Spring at the enemy: land just short of its middle.
+      const dx = foe.pos.x - bug.pos.x;
+      const dy = foe.pos.y - bug.pos.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const t = id === 'pounce' ? 0.45 : 0.5;
+      const go = Math.max(0, d - (bug.radius + foe.radius) * 0.55);
+      bug.leap = t;
+      bug.leapKind = id === 'pounce' ? 'pounce' : 'dive';
+      bug.leapAt = foe.index;
+      bug.dashVel = { x: (dx / d) * (go / t), y: (dy / d) * (go / t) };
+      bug.heading = Math.atan2(dy, dx);
+      if (id === 'pounce') {
+        bug.alt = Math.max(bug.alt, 2);
+        bug.vAlt = 95; // (gravity brings it down just as the leap ends)
+      }
+      cancelSwings(bug, 0.2);
+      break;
+    }
+    case 'thorn-bloom': {
+      const plate = bug.parts.find((p) => p.alive && p.part.move === 'thorn-bloom');
+      const from = plate ? partWorld(bug, plate) : bug.pos;
+      for (let k = 0; k < 14; k++) {
+        const a = (k / 14) * Math.PI * 2 + bug.heading;
+        sim.projectiles.push({ x: from.x, y: from.y, z: bug.alt + 6, vx: Math.cos(a) * 330, vy: Math.sin(a) * 330, vz: 0, damage: 8, owner: bug.index, ttl: 0.55, big: true, kind: 'thorn' });
+      }
+      break;
+    }
+    case 'ink-cloud':
+      sim.effects.push({ x: bug.pos.x, y: bug.pos.y, h: bug.alt, ttl: 1.2, color: '#4A4560', size: 280 });
+      for (const e of foesOf(sim, bug)) {
+        if (e.burrow > 0 || Math.hypot(e.pos.x - bug.pos.x, e.pos.y - bug.pos.y) > 140 + e.radius * 0.5) continue;
+        e.blind = 3;
+      }
+      break;
+    case 'rally-pulse':
+      heal(sim, bug, 35, bug);
+      for (const a of sim.bugs) {
+        if (a === bug || a.team !== bug.team || a.dead || Math.hypot(a.pos.x - bug.pos.x, a.pos.y - bug.pos.y) > 240) continue;
+        heal(sim, a, 25, bug);
+      }
+      sim.effects.push({ x: bug.pos.x, y: bug.pos.y, h: bug.alt, ttl: 0.5, color: '#FFD23F', size: 260 });
+      break;
+    case 'magnet-pull': {
+      if (foe.burrow > 0 || foe.dead) break;
+      const core = bug.parts.find((p) => p.alive && p.part.move === 'magnet-pull');
+      const from = core ? partWorld(bug, core) : bug.pos;
+      const dx = bug.pos.x - foe.pos.x;
+      const dy = bug.pos.y - foe.pos.y;
+      const d = Math.hypot(dx, dy) || 1;
+      // Yanked across most of the gap (anchored bugs hold fast).
+      const pull = foe.anchor > 0 ? 0 : Math.min(560, (d - (bug.radius + foe.radius) * 0.8) * 2.6);
+      foe.vel.x = (dx / d) * pull;
+      foe.vel.y = (dy / d) * pull;
+      foe.dodgeCd = Math.max(foe.dodgeCd, 1.2);
+      foe.react = -1;
+      foe.dash = 0;
+      if (foe.alt > 6) {
+        foe.vAlt = -160;
+        foe.stamina = Math.min(foe.stamina, 0.3);
+      }
+      sim.events.push({ type: 'arc', bug: bug.index, move: id, points: [{ x: from.x, y: from.y, h: bug.alt + 8 }, { x: foe.pos.x, y: foe.pos.y, h: foe.alt + 8 }] });
+      break;
+    }
+    case 'mirror-ward':
+      bug.ward = 3;
+      break;
+    case 'anchor-grip':
+      bug.anchor = 3;
+      bug.vel.x *= 0.2;
+      bug.vel.y *= 0.2;
+      break;
+    case 'ram-charge': {
+      const dx = foe.pos.x - bug.pos.x;
+      const dy = foe.pos.y - bug.pos.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const sp = Math.max(Math.hypot(bug.vel.x, bug.vel.y), Math.min(300, bug.stats.topSpeed * 1.6 + 80));
+      bug.heading = Math.atan2(dy, dx);
+      bug.vel.x = (dx / d) * sp;
+      bug.vel.y = (dy / d) * sp;
+      // Horns come round for the impact.
+      for (const p of bug.parts) if (p.alive && p.part.weapon?.ramBonus) p.cooldown = 0;
+      break;
+    }
+    case 'vise-lock': {
+      if (!canBeHurt(sim, foe)) break;
+      const claws = bug.parts.filter((p) => p.alive && p.part.category === 'pincers');
+      const near = nearestPart(foe, claws.length ? partWorld(bug, claws[0]) : bug.pos, true);
+      if (!near) break;
+      for (const c of claws) c.struck = 0;
+      foe.stun = Math.max(foe.stun, 0.6);
+      foe.react = -1;
+      damagePart(sim, foe, near.p, 8 * Math.sqrt(claws.length || 1), bug);
+      if (near.p.alive) damagePart(sim, foe, near.p, 6 * Math.sqrt(claws.length || 1), bug);
+      break;
+    }
+    case 'mark-prey':
+      foe.marked = 3;
+      foe.markedT = 7;
+      sim.log.push(`${foe.name} is marked!`);
+      break;
   }
+}
+
+/** A Pounce or Dive Bomb comes down: hits what it lands on. */
+function land(sim: Sim, bug: Bug) {
+  const kind = bug.leapKind;
+  const foe = sim.bugs[bug.leapAt];
+  bug.leap = 0;
+  bug.leapKind = null;
+  bug.vel.x *= 0.25;
+  bug.vel.y *= 0.25;
+  const move: MoveId = kind === 'dive' ? 'dive-bomb' : 'pounce';
+  sim.events.push({ type: 'land', bug: bug.index, move, x: bug.pos.x, y: bug.pos.y, h: bug.alt });
+  sim.shake = Math.max(sim.shake, 0.35);
+  if (!foe || foe.dead || foe.burrow > 0 || !canBeHurt(sim, foe)) return;
+  const d = Math.hypot(foe.pos.x - bug.pos.x, foe.pos.y - bug.pos.y);
+  if (d > bug.radius + foe.radius + 25) return; // it got away
+  // A dive comes down on the top parts; a pounce on whatever's nearest.
+  const targets = foe.parts
+    .filter((p) => p.alive && !shielded(foe, p))
+    .map((p) => ({ p, top: kind === 'dive' && p.z === 1 ? 0 : 1, d: Math.hypot(partWorld(foe, p).x - bug.pos.x, partWorld(foe, p).y - bug.pos.y) }))
+    .sort((a, b) => a.top - b.top || a.d - b.d)
+    .slice(0, 2);
+  for (const { p } of targets) damagePart(sim, foe, p, kind === 'dive' ? 18 : 15, bug);
+  if (foe.dead) return;
+  knock(foe, unit({ x: foe.pos.x - bug.pos.x, y: foe.pos.y - bug.pos.y }), 160);
+  foe.poise -= 18;
+  if (kind === 'dive' && foe.alt > 6) {
+    foe.stamina = 0;
+    foe.vAlt = -200;
+  }
+}
+
+/** A Hornet Swarm drone: wobbles, then homes on the nearest enemy (altitude too). */
+function steerDrone(sim: Sim, pr: Projectile, owner: Bug, dt: number) {
+  let best: Bug | null = null;
+  let bd = Infinity;
+  for (const e of foesOf(sim, owner)) {
+    if (e.dead || e.burrow > 0) continue;
+    const d = Math.hypot(e.pos.x - pr.x, e.pos.y - pr.y);
+    if (d < bd) {
+      bd = d;
+      best = e;
+    }
+  }
+  if (!best) return;
+  const sp = 270;
+  const want = Math.atan2(best.pos.y - pr.y, best.pos.x - pr.x) + Math.sin((sim.time + pr.ttl) * 9) * 0.35;
+  const cur = Math.atan2(pr.vy, pr.vx);
+  const turn = Math.sign(angleDiff(cur, want)) * Math.min(Math.abs(angleDiff(cur, want)), 5.5 * dt);
+  const a = cur + turn;
+  const v = Math.min(sp, Math.hypot(pr.vx, pr.vy) + 260 * dt);
+  pr.vx = Math.cos(a) * v;
+  pr.vy = Math.sin(a) * v;
+  pr.vz = Math.max(-80, Math.min(80, (best.alt + 8 - pr.z) * 3));
 }
 
 /**
@@ -1172,6 +1484,11 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
   bug.stun = Math.max(0, bug.stun - dt);
   bug.cloak = Math.max(0, bug.cloak - dt);
   bug.haste = Math.max(0, bug.haste - dt);
+  bug.blind = Math.max(0, bug.blind - dt);
+  bug.ward = Math.max(0, bug.ward - dt);
+  bug.anchor = Math.max(0, bug.anchor - dt);
+  bug.markedT = Math.max(0, bug.markedT - dt);
+  if (bug.markedT <= 0) bug.marked = 0;
   bug.dodgeCd = Math.max(0, bug.dodgeCd - dt);
   bug.evade = Math.max(0, bug.evade - dt);
   bug.open = Math.max(0, bug.open - dt);
@@ -1256,6 +1573,14 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
     }
   }
 
+  // Pounce / Dive Bomb: sailing through the air at the target; lands with a hit.
+  if (bug.leap > 0) {
+    bug.leap -= dt;
+    bug.vel.x = bug.dashVel.x;
+    bug.vel.y = bug.dashVel.y;
+    if (bug.leap <= 0) land(sim, bug);
+  }
+
   stepFlight(sim, bug, input, dt);
 
   // Weapons act on their own when an enemy part is inside their cone and reach.
@@ -1263,7 +1588,7 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
   const foes = foesOf(sim, bug);
   const quick = bug.haste > 0 ? 1.5 : 1;
   for (const p of bug.parts) if (p.part.weapon) p.struck += dt;
-  if (foes.length && bug.stun <= 0 && bug.stagger <= 0) {
+  if (foes.length && bug.stun <= 0 && bug.stagger <= 0 && bug.leap <= 0) {
     for (const p of bug.parts) {
       const w = p.part.weapon;
       if (!p.alive || !w) continue;
@@ -1316,8 +1641,12 @@ function stepBug(sim: Sim, i: number, input: Input, dt: number) {
       }
       p.struck = 0;
       if (bug.cloak > 0) bug.cloak = 0;
-      const dx = target.w.x - wp.x;
-      const dy = target.w.y - wp.y;
+      // Blinded: half its shots go wide.
+      const wide = bug.blind > 0 && rand(sim) < 0.5 ? (rand(sim) < 0.5 ? -1 : 1) * (0.3 + rand(sim) * 0.2) : 0;
+      const dx0 = target.w.x - wp.x;
+      const dy0 = target.w.y - wp.y;
+      const dx = dx0 * Math.cos(wide) - dy0 * Math.sin(wide);
+      const dy = dx0 * Math.sin(wide) + dy0 * Math.cos(wide);
       const n = Math.hypot(dx, dy) || 1;
       const flight = Math.max(0.05, Math.hypot(n, dz) / w.projectileSpeed!);
       sim.projectiles.push({
@@ -1425,10 +1754,32 @@ function stepFlight(sim: Sim, bug: Bug, input: Input, dt: number) {
 
 function stepStompers(sim: Sim, dt: number) {
   for (const h of sim.hazards) {
-    if (h.kind !== 'stomper') continue;
+    if (h.kind !== 'stomper' && h.kind !== 'bolt') continue;
     const before = h.t;
     h.t = (h.t + dt) % h.period;
     if (h.t >= before) continue;
+    if (h.kind === 'bolt') {
+      // Lightning: hits everything in the circle (high flyers too), two parts each, and stuns.
+      sim.events.push({ type: 'bolt', x: h.x, y: h.y, r: h.r }); // (the arena draws the bolt itself)
+      sim.shake = Math.max(sim.shake, 0.3);
+      sim.flash = Math.max(sim.flash, 0.35);
+      for (const bug of sim.bugs) {
+        if (bug.dead || bug.burrow > 0) continue;
+        const d = Math.hypot(bug.pos.x - h.x, bug.pos.y - h.y);
+        if (d > h.r + bug.radius * 0.5) {
+          if (d < h.r + bug.radius + 50) gainProc(bug, PROC.dodge);
+          continue;
+        }
+        bug.parts
+          .filter((p) => p.alive && !shielded(bug, p))
+          .map((p) => ({ p, d: Math.hypot(partWorld(bug, p).x - h.x, partWorld(bug, p).y - h.y) }))
+          .sort((a, b) => a.d - b.d)
+          .slice(0, 2)
+          .forEach(({ p }) => damagePart(sim, bug, p, 16, null));
+        if (!bug.dead && canBeHurt(sim, bug)) bug.stun = Math.max(bug.stun, 0.7);
+      }
+      continue;
+    }
     // Slam! Damage the three nearest parts of any bug under it.
     sim.effects.push({ x: h.x, y: h.y, h: 0, ttl: 0.4, color: '#FF8A3D', size: h.r * 2 });
     sim.shake = Math.max(sim.shake, 0.25);
@@ -1524,15 +1875,29 @@ export function step(sim: Sim, dt: number, inputs: Input[]) {
   stepStompers(sim, dt);
 
   for (const pr of sim.projectiles) {
+    const attacker = sim.bugs[pr.owner];
+    if (pr.kind === 'drone') steerDrone(sim, pr, attacker, dt);
     pr.x += pr.vx * dt;
     pr.y += pr.vy * dt;
     pr.z = Math.max(0, pr.z + pr.vz * dt);
     pr.ttl -= dt;
-    const attacker = sim.bugs[pr.owner];
     for (const target of foesOf(sim, attacker)) {
       if (target.burrow > 0 || target.evade > 0) continue; // underground, or mid-dodge
       const hit = nearestPart(target, pr, true);
-      if (!(hit && hit.d < CELL * (pr.kind === 'web' ? 1.1 : 0.6) && Math.abs(pr.z - target.alt) < (pr.kind === 'web' ? 30 : 20))) continue;
+      const wide = pr.kind === 'web' ? 1.1 : pr.kind === 'drone' ? 0.8 : 0.6;
+      const tall = pr.kind === 'web' || pr.kind === 'drone' ? 30 : 20;
+      if (!(hit && hit.d < CELL * wide && Math.abs(pr.z - target.alt) < tall)) continue;
+      // Mirror Ward: it bounces straight back at whoever fired it.
+      if (target.ward > 0) {
+        pr.owner = target.index;
+        pr.vx = -pr.vx;
+        pr.vy = -pr.vy;
+        pr.vz = -pr.vz;
+        pr.ttl = Math.max(pr.ttl, 0.8);
+        if (pr.kind === 'drone') pr.ttl = 0;
+        sim.events.push({ type: 'reflect', bug: target.index, x: pr.x, y: pr.y, h: pr.z });
+        break;
+      }
       if (pr.kind === 'web') {
         snare(sim, target);
         damagePart(sim, target, hit.p, pr.damage, attacker);
@@ -1541,7 +1906,7 @@ export function step(sim: Sim, dt: number, inputs: Input[]) {
       }
       // Weapon darts can crit (judged by where they came from); move volleys can't.
       const from = { x: pr.x - pr.vx * 0.2, y: pr.y - pr.vy * 0.2 };
-      const crit = !pr.big && rand(sim) < critChance(attacker, target, from);
+      const crit = !pr.big && (rand(sim) < critChance(attacker, target, from) || markCrit(target));
       const dealt = damagePart(sim, target, strikeTarget(sim, target, pr, pr.z > target.alt + 8) ?? hit.p, pr.damage, attacker, crit);
       const sp = Math.hypot(pr.vx, pr.vy) || 1;
       if (dealt > 0) knock(target, { x: pr.vx / sp, y: pr.vy / sp }, Math.min(90, dealt * 4));
@@ -2050,7 +2415,7 @@ function danger(sim: Sim, bug: Bug, d: Vec, look: number, airborne: boolean) {
       worst = Math.max(worst, Math.min(1, w) * (sim.spikedWalls ? 1 : 0.75));
     }
     for (const h of sim.hazards) {
-      const live = h.kind === 'stomper' ? h.t > h.period - 2.2 : !airborne;
+      const live = h.kind === 'stomper' || h.kind === 'bolt' ? h.t > h.period - 2.2 : !airborne;
       if (!live) continue;
       const edge = Math.hypot(p.x - h.x, p.y - h.y) - h.r - bug.radius * 0.5;
       const now = Math.hypot(bug.pos.x - h.x, bug.pos.y - h.y) - h.r - bug.radius * 0.5;
@@ -2104,7 +2469,7 @@ export function hud(sim: Sim): Hud {
     dead: bug.dead,
     hp: hpFraction(bug),
     proc: bug.proc,
-    status: `${bug.webbed > 0 ? ' 🕸' : ''}${bug.stun > 0 ? ' ⚡' : ''}${bug.stagger > 0 ? ' 💫' : ''}${bug.cloak > 0 ? ' 👻' : ''}${bug.burrow > 0 ? ' ⛏' : ''}${bug.haste > 0 ? ' 🔥' : ''}${bug.siphon > 0 ? ' 🩸' : ''}`,
+    status: `${bug.webbed > 0 ? ' 🕸' : ''}${bug.stun > 0 ? ' ⚡' : ''}${bug.stagger > 0 ? ' 💫' : ''}${bug.cloak > 0 ? ' 👻' : ''}${bug.burrow > 0 ? ' ⛏' : ''}${bug.haste > 0 ? ' 🔥' : ''}${bug.siphon > 0 ? ' 🩸' : ''}${bug.blind > 0 ? ' 🌫' : ''}${bug.ward > 0 ? ' 🪞' : ''}${bug.anchor > 0 ? ' ⚓' : ''}${bug.marked > 0 ? ' 🎯' : ''}`,
     shield: bug.shield > 0,
     flying: bug.alt > 8,
     wings: maxStamina(bug) > 0 ? bug.stamina / maxStamina(bug) : -1,

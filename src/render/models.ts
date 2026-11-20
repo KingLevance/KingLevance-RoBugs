@@ -295,6 +295,89 @@ function wingGeo(len: number, width: number, key: string) {
   });
 }
 
+/** A coil spring along +y, centred on the origin: radius r, wire radius `wire`, height h. */
+const helix = (r: number, wire: number, h: number, turns: number) =>
+  geo(`hx:${r}:${wire}:${h}:${turns}`, () => {
+    const n = Math.ceil(turns * 12);
+    const pts = Array.from({ length: n + 1 }, (_, i) => {
+      const u = i / n;
+      const ang = u * turns * Math.PI * 2;
+      return V(Math.cos(ang) * r, (u - 0.5) * h, Math.sin(ang) * r);
+    });
+    return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), Math.ceil(turns * 14), wire, 6, false);
+  });
+
+/**
+ * Honeycomb: wax-coloured hexagon cells with dark walls, tiling seamlessly
+ * around a sphere's u (10 cells across). Written linear like the wing texture.
+ */
+let hexTex: THREE.DataTexture | null = null;
+function hexTexture() {
+  if (hexTex) return hexTex;
+  const W = 160;
+  const H = 80;
+  const N = 10; // cells around
+  const M = 3; // lattice periods pole to pole
+  const data = new Uint8Array(W * H * 4);
+  const ry = Math.sqrt(3);
+  const nx = 1 / Math.hypot(1, ry);
+  const ny = ry / Math.hypot(1, ry);
+  const mod = (a: number, b: number) => a - b * Math.floor(a / b);
+  const hexDist = (x: number, y: number) => Math.max(Math.abs(x) * nx + Math.abs(y) * ny, Math.abs(x));
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const px = (x / W) * N;
+      const py = (y / H) * M * ry;
+      const ax = mod(px, 1) - 0.5;
+      const ay = mod(py, ry) - ry / 2;
+      const bx = mod(px - 0.5, 1) - 0.5;
+      const by = mod(py - ry / 2, ry) - ry / 2;
+      const [gx, gy] = ax * ax + ay * ay < bx * bx + by * by ? [ax, ay] : [bx, by];
+      const e = hexDist(gx, gy); // 0 at the cell centre, 0.5 at its wall
+      const wall = e > 0.41;
+      const c = wall ? [120, 66, 24] : [255 - e * 120, 196 - e * 110, 92 - e * 80];
+      const o = (y * W + x) * 4;
+      data[o] = lin(c[0]);
+      data[o + 1] = lin(c[1]);
+      data[o + 2] = lin(c[2]);
+      data[o + 3] = 255;
+    }
+  hexTex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  hexTex.wrapS = THREE.RepeatWrapping;
+  hexTex.magFilter = THREE.LinearFilter;
+  hexTex.minFilter = THREE.LinearMipmapLinearFilter;
+  hexTex.generateMipmaps = true;
+  hexTex.needsUpdate = true;
+  return hexTex;
+}
+
+/**
+ * A stiff, swept metal blade (thin extruded plate) in the x/z plane reaching out
+ * along +x with a sharp tip; leading edge toward −z. Centred on its bounds so
+ * the outline hull is even; `offset` is where the root (origin) ended up.
+ */
+function bladeGeo(len: number, width: number) {
+  const g = geo(`blade:${len}:${width}`, () => {
+    const s = new THREE.Shape();
+    s.moveTo(0, width * 0.42);
+    s.lineTo(len * 0.42, width * 0.5);
+    s.lineTo(len, width * 0.06); // tip
+    s.lineTo(len * 0.62, -width * 0.18);
+    s.lineTo(len * 0.5, -width * 0.42); // trailing notch
+    s.lineTo(len * 0.28, -width * 0.3);
+    s.lineTo(0, -width * 0.5);
+    s.closePath();
+    const e = new THREE.ExtrudeGeometry(s, { depth: 0.04, bevelEnabled: false });
+    e.rotateX(-Math.PI / 2);
+    e.computeBoundingBox();
+    const c = e.boundingBox!.getCenter(new THREE.Vector3());
+    e.translate(-c.x, -c.y, -c.z);
+    e.userData.offset = c;
+    return e;
+  });
+  return { g, offset: g.userData.offset as THREE.Vector3 };
+}
+
 // ── Model API ───────────────────────────────────────────────────────
 
 export type AnimCtx = {
@@ -345,6 +428,18 @@ const LOOK: Record<string, number> = {
   'horn-shock': 2,
   'sting-tail': 3,
   'pinc-grip': 3,
+  'head-coil': 3,
+  'head-mirror': 4,
+  'thorax-anvil': 2,
+  'abdomen-hive': 3,
+  'abdomen-smog': 4,
+  'legs-hopper': 4,
+  'wings-blade': 2,
+  'horn-gavel': 3,
+  'sting-needle': 4,
+  'armor-thorn': 4,
+  'core-lodestone': 2,
+  'sensor-beacon': 2,
 };
 
 const STEEL = 0x9aa6b4;
@@ -416,6 +511,55 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           skull.add(at(shape(cyl(0.09, 0.11, 0.08, 12), gun, 0.02).rotateZ(Math.PI / 2), 0.41 * d, 0.6, 0.06)); // ear caps
           skull.add(seg(V(0.43 * d, 0.62, 0.06), V(0.5 * d, 0.86, 0.2), 0.025, steel, 0.015, 0));
         }
+      } else if (look === 3) {
+        // Coil crown: a slate dome wearing a copper ring, a coiled spire and spark-tipped prongs.
+        const copper = mat(0xd9844a);
+        const spark = mat(0xe6ffff, { emissive: 0x19d6ff });
+        skull.add(at(shape(ellip(0.4, 0.3, 0.42), mat(0x56677a)), 0, 0.6, 0.02));
+        for (const d of [-1, 1]) {
+          skull.add(at(shape(cyl(0.12, 0.12, 0.08, 14), gun, 0.02).rotateX(Math.PI / 2), 0.17 * d, 0.64, -0.33)); // eye socket
+          skull.add(at(new THREE.Mesh(ball(0.085), spark), 0.17 * d, 0.64, -0.37)); // glowing eye
+        }
+        skull.add(at(shape(torus(0.3, 0.05), copper, 0.02).rotateX(Math.PI / 2), 0, 0.82, 0.02)); // crown ring
+        skull.add(at(shape(cyl(0.05, 0.08, 0.1, 10), gun, 0.02), 0, 0.92, 0.02));
+        skull.add(at(shape(helix(0.08, 0.025, 0.26, 4), copper, 0.015), 0, 1.06, 0.02)); // coil spire
+        const tips: THREE.Object3D[] = [];
+        const top = at(new THREE.Mesh(ball(0.065), spark), 0, 1.24, 0.02);
+        skull.add(top);
+        tips.push(top);
+        for (let i = 0; i < 4; i++) {
+          const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+          const [x, z] = [Math.cos(a) * 0.3, Math.sin(a) * 0.3 + 0.02];
+          skull.add(seg(V(x, 0.82, z), V(x * 1.25, 1.0, z * 1.25), 0.03, copper, 0.02, 0.02));
+          const tip = at(new THREE.Mesh(ball(0.045), spark), x * 1.27, 1.03, z * 1.27);
+          skull.add(tip);
+          tips.push(tip);
+        }
+        blinkers.push(...tips);
+        octoLens = spark;
+      } else if (look === 4) {
+        // Mirror crown: a faceted, polished silver head ringed by angled mirror panels.
+        const silver = mat(0xdfe7f0, { emissive: 0x0d2a44, rim: 0.7 });
+        const face = mat(0xb8d4ec, { emissive: 0x1d5f99, rim: 0.7 });
+        const gem = geo('mirror-head', () => new THREE.IcosahedronGeometry(0.42, 0).scale(1, 0.72, 1));
+        skull.add(at(shape(gem, silver), 0, 0.62, 0.02));
+        // Narrow eye slit of two diamond lenses.
+        const eyeGem = geo('mirror-eye', () => new THREE.OctahedronGeometry(0.08, 0).scale(1.4, 0.7, 0.6));
+        for (const d of [-1, 1]) skull.add(at(shape(eyeGem, mat(0x9fdcff, { emissive: 0x2f9cff }), 0.02), 0.14 * d, 0.6, -0.34));
+        const crown = new THREE.Group();
+        crown.position.set(0, 0.86, 0.02);
+        const panel = rbox(0.16, 0.2, 0.04, 0.02);
+        for (let i = 0; i < 7; i++) {
+          const a = (i / 7) * Math.PI * 2;
+          const p = shape(panel, i % 2 ? silver : face, 0.02);
+          p.position.set(Math.sin(a) * 0.24, 0.06, Math.cos(a) * 0.24);
+          p.rotation.set(0, a, 0);
+          p.rotateX(0.35); // flare outward
+          crown.add(p);
+        }
+        skull.add(crown);
+        blinkers.push(crown);
+        octoLens = face;
       } else {
         // Spider head: a low dome, eight glowing lenses in two rows, and a pair of fangs.
         skull.add(at(shape(ellip(0.42, 0.27, 0.42), main), 0, 0.58, 0.04));
@@ -447,6 +591,13 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           for (const e of blinkers) e.scale.y = 0.15 + 0.85 * open;
         } else if (look === 1) {
           blinkers[0].position.x = Math.sin(t * 2.2 + row) * 0.26; // visor scanner sweeps
+        } else if (look === 3 && octoLens) {
+          // Sparks crackle: each tip flickers and jitters on its own beat.
+          octoLens.emissiveIntensity = 0.7 + Math.abs(Math.sin(t * 19 + row)) * 0.8;
+          blinkers.forEach((s, i) => s.scale.setScalar(0.75 + Math.abs(Math.sin(t * (13 + i * 3.7) + i)) * 0.55));
+        } else if (look === 4 && octoLens) {
+          blinkers[0].rotation.y = t * 0.6 + row; // the mirror ring turns, throwing glints
+          octoLens.emissiveIntensity = 0.6 + Math.max(0, Math.sin(t * 2.4 + row)) * 0.7;
         } else if (octoLens) {
           octoLens.emissiveIntensity = 0.7 + Math.sin(t * 3 + row) * 0.35; // the eyes smoulder
         }
@@ -468,6 +619,21 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         shell.add(at(new THREE.Mesh(torus(0.46, 0.035), dark), 0, 0.02, 0).rotateX(Math.PI / 2)); // seam
         shell.add(at(shape(rbox(0.4, 0.08, 0.4, 0.04), dark, 0.02), 0, 0.33, 0)); // hatch
         for (const sx of [-1, 1]) for (const sz of [-1, 1]) shell.add(at(new THREE.Mesh(ball(0.04), steel), 0.15 * sx, 0.37, 0.15 * sz));
+      } else if (look === 2) {
+        // Anvil: a blocky iron waist under a wide, polished top face with a horn out front.
+        const iron = mat(0x4a5059);
+        const face = mat(0x99a2ad);
+        shell.add(at(shape(rbox(0.6, 0.18, 0.6, 0.05), iron), 0, 0.06, 0.02)); // waist
+        shell.add(at(shape(rbox(0.94, 0.2, 0.66, 0.06), iron), 0, 0.24, 0.04)); // block
+        shell.add(at(shape(rbox(0.84, 0.05, 0.56, 0.02), face, 0.02), 0, 0.35, 0.04)); // worn top face
+        const horn = shape(cone(0.15, 0.36, 10), face, 0.025);
+        horn.rotation.x = -Math.PI / 2; // tapering forward
+        shell.add(at(horn, 0, 0.27, -0.44));
+        shell.add(at(shape(rbox(0.3, 0.14, 0.12, 0.03), iron, 0.02), 0, 0.26, 0.42)); // heel
+        for (const d of [-1, 1]) {
+          for (const z of [-0.18, 0.04, 0.26]) shell.add(at(new THREE.Mesh(ball(0.035), steel), 0.475 * d, 0.24, z)); // rivets
+          shell.add(at(shape(rbox(0.06, 0.16, 0.5, 0.02), dark, 0.02), 0.31 * d, 0.06, 0.02)); // side straps
+        }
       } else {
         // Overlapping chitin plates with a ridge of spines down the middle.
         [-0.22, 0.04, 0.28].forEach((z, i) => {
@@ -479,9 +645,13 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
       for (const d of [-1, 1])
         for (let i = 0; i < 3; i++) body.add(at(new THREE.Mesh(rbox(0.03, 0.05, 0.12, 0.012), ventMat), 0.455 * d, 0.42, -0.16 + i * 0.16)); // glowing side vents
       root.add(body);
-      animate = ({ t, speed }) => {
-        const s = 1 + Math.sin(t * 2 + row) * 0.015;
-        shell.scale.set(s, 1 + Math.sin(t * 2 + row) * 0.03, s);
+      animate = ({ t, walk, speed }) => {
+        // (The iron anvil doesn't breathe; it just settles with each stride.)
+        if (look === 2) shell.position.y = 0.56 - Math.abs(Math.sin(walk + row)) * 0.015 * speed;
+        else {
+          const s = 1 + Math.sin(t * 2 + row) * 0.015;
+          shell.scale.set(s, 1 + Math.sin(t * 2 + row) * 0.03, s);
+        }
         for (const v of vents) v.emissiveIntensity = 0.6 + speed * 0.6 + Math.sin(t * 5 + row) * 0.25;
       };
       break;
@@ -489,35 +659,109 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
 
     case 'abdomen': {
       const segs: THREE.Group[] = [];
-      const rows: [number, number, number, number][] =
-        look === 0
-          ? [
-              [0.44, 0.3, 0.22, -0.26],
-              [0.4, 0.28, 0.2, 0.04],
-              [0.31, 0.23, 0.18, 0.31],
-            ]
-          : look === 1
-            ? [
-                [0.46, 0.32, 0.28, -0.18],
-                [0.38, 0.28, 0.24, 0.24],
-              ]
-            : [
-                [0.36, 0.3, 0.22, -0.3],
-                [0.48, 0.4, 0.38, 0.08],
-              ];
+      const rows = (
+        [
+          [
+            [0.44, 0.3, 0.22, -0.26],
+            [0.4, 0.28, 0.2, 0.04],
+            [0.31, 0.23, 0.18, 0.31],
+          ],
+          [
+            [0.46, 0.32, 0.28, -0.18],
+            [0.38, 0.28, 0.24, 0.24],
+          ],
+          [
+            [0.36, 0.3, 0.22, -0.3],
+            [0.48, 0.4, 0.38, 0.08],
+          ],
+          [
+            [0.3, 0.24, 0.2, -0.3],
+            [0.46, 0.42, 0.42, 0.08],
+          ],
+          [
+            [0.3, 0.22, 0.18, -0.32],
+            [0.46, 0.38, 0.4, 0.06],
+          ],
+        ] as [number, number, number, number][][]
+      )[look];
+      // Segment skins (alternating front to back) and the stripe band colour.
+      const rubber = look === 4 ? mat(0x5d4f69) : null;
+      const rubberDark = look === 4 ? mat(0x40364b) : null;
+      const [skins, bandMat]: [THREE.Material[], THREE.Material | null] =
+        look === 3
+          ? [[mat(0x6e4626), mat(0xffffff, { map: hexTexture() })], null]
+          : rubber && rubberDark
+            ? [[rubberDark, rubber], mat(0x8b7b98)]
+            : [[main, dark], light];
       rows.forEach(([rx, ry, rz, z], i) => {
         const s = new THREE.Group();
-        s.add(at(shape(ellip(rx, ry, rz), i % 2 ? dark : main), 0, 0.52 - i * 0.02, 0));
-        const band = at(new THREE.Mesh(torus(1, 0.035 / rx), light), 0, 0.52 - i * 0.02, rz * 0.45);
-        band.scale.set(rx * 0.9, ry * 0.9, rx * 0.9);
-        s.add(band); // stripe band hugging the segment
+        s.add(at(shape(ellip(rx, ry, rz), skins[i % 2]), 0, 0.52 - i * 0.02, 0));
+        if (bandMat) {
+          const band = at(new THREE.Mesh(torus(1, 0.035 / rx), bandMat), 0, 0.52 - i * 0.02, rz * 0.45);
+          band.scale.set(rx * 0.9, ry * 0.9, rx * 0.9);
+          s.add(band); // stripe band hugging the segment
+        }
         s.position.z = z;
         root.add(s);
         segs.push(s);
       });
       const tipMat = mat(0xfff0c0, { emissive: 0xffa21f });
       const tip = new THREE.Mesh(ball(0.07), tipMat);
-      segs[segs.length - 1].add(at(tip, 0, 0.5, rows[rows.length - 1][2] + 0.04));
+      if (look < 3) segs[segs.length - 1].add(at(tip, 0, 0.5, rows[rows.length - 1][2] + 0.04));
+      const drones: THREE.Object3D[] = [];
+      const puffs: THREE.Object3D[] = [];
+      if (look === 3) {
+        // Hive: a honeycomb nest with glowing entrances; drones buzz around it.
+        const big = segs[1];
+        const [rx, ry, rz] = rows[1];
+        const lip = mat(0x5a3518);
+        const holes: [number, number, number, number][] = [
+          [0.2, 0.25, -0.75, 0.09],
+          [-0.6, 0.45, -0.4, 0.07],
+          [0.85, 0.05, 0.2, 0.075],
+          [-0.75, -0.25, 0.45, 0.065],
+          [0.15, 0.6, 0.7, 0.06],
+        ];
+        for (const [ux, uy, uz, r] of holes) {
+          const k = 1 / Math.hypot(ux / rx, uy / ry, uz / rz);
+          const n = V(ux / (rx * rx), uy / (ry * ry), uz / (rz * rz)).normalize();
+          const hole = new THREE.Group();
+          hole.add(shape(cyl(r, r * 1.2, 0.06, 12), lip, 0.015));
+          hole.add(at(new THREE.Mesh(ellip(r * 0.8, 0.02, r * 0.8), tipMat), 0, 0.03, 0));
+          aim(hole, n);
+          big.add(at(hole, ux * k, 0.5 + uy * k, uz * k));
+        }
+        big.add(at(shape(cyl(0.12, 0.16, 0.1, 10), lip, 0.02), 0, 0.93, 0)); // hanging stem
+        const droneMat = mat(0xffd23f);
+        const wingMat = mat(0xffffff, { transparent: true, opacity: 0.7 });
+        for (let i = 0; i < 3; i++) {
+          const dr = new THREE.Group();
+          dr.add(shape(ellip(0.045, 0.04, 0.055), droneMat, 0.018));
+          dr.add(at(new THREE.Mesh(ellip(0.047, 0.012, 0.015), OUTLINE), 0, 0.005, 0.01)); // stripe
+          for (const d of [-1, 1]) dr.add(at(new THREE.Mesh(ellip(0.045, 0.008, 0.025), wingMat), 0.04 * d, 0.045, 0.01));
+          big.add(dr);
+          drones.push(dr);
+        }
+      }
+      if (look === 4) {
+        // Smog bladder: a rubbery sac with a vent nozzle at the back that coughs smoke.
+        const big = segs[1];
+        const rz = rows[1][2];
+        const nozzle = new THREE.Group();
+        nozzle.add(shape(cyl(0.08, 0.11, 0.14, 12), gun, 0.02));
+        nozzle.add(at(shape(cyl(0.13, 0.09, 0.08, 12), steel, 0.02), 0, 0.1, 0)); // flared mouth
+        nozzle.add(at(new THREE.Mesh(cyl(0.085, 0.085, 0.02, 12), OUTLINE), 0, 0.14, 0));
+        nozzle.rotation.x = 0.75; // up and back
+        big.add(at(nozzle, 0, 0.8, rz * 0.62));
+        big.add(at(shape(cyl(0.05, 0.06, 0.08, 8), steel, 0.02), 0.14, 0.88, -0.06)); // fill valve
+        for (const d of [-1, 1]) big.add(at(shape(ellip(0.07, 0.05, 0.1), rubberDark ?? dark, 0.02), 0.3 * d, 0.72, 0.06)); // patches
+        const smoke = mat(0x9a94a3, { transparent: true, opacity: 0.6 });
+        for (let i = 0; i < 3; i++) {
+          const p = new THREE.Mesh(ball(0.09), smoke);
+          big.add(p);
+          puffs.push(p);
+        }
+      }
       if (look === 2) {
         // Spider abdomen: a big bulb with a silk nozzle and a strand of silk at the back.
         const silk = mat(0xf4f1e6, { emissive: 0x8a8672 });
@@ -555,6 +799,24 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           s.scale.y = 1 + Math.sin(t * 2.2 - i * 0.8 + row) * 0.03; // breathing
         });
         tipMat.emissiveIntensity = 0.6 + Math.max(0, Math.sin(t * 3 + row)) * 0.8;
+        drones.forEach((dr, i) => {
+          // Lazy orbits around the nest, bobbing and wobbling.
+          const a = t * (1.1 + i * 0.25) + i * 2.1 + row;
+          dr.position.set(Math.cos(a) * (0.58 + i * 0.04), 0.62 + Math.sin(t * 3.1 + i * 1.7) * 0.12 + i * 0.06, 0.02 + Math.sin(a) * 0.55);
+          dr.rotation.y = -a;
+          dr.rotation.z = Math.sin(t * 23 + i) * 0.15;
+        });
+        if (look === 4) {
+          // The bladder slowly inflates and deflates; smoke puffs drift out of the vent and fade.
+          const big = segs[1];
+          const s = 1 + Math.sin(t * 1.6 + row) * 0.07;
+          big.scale.set(s, s * (1 + Math.sin(t * 2.2 + row) * 0.03), s);
+          puffs.forEach((p, i) => {
+            const k = (t * 0.6 + i / puffs.length + row * 0.37) % 1;
+            p.position.set(Math.sin(i * 2.4 + t) * 0.04, 0.96 + k * 0.3, 0.38 + k * 0.3);
+            p.scale.setScalar(Math.sin(k * Math.PI) * (0.7 + k * 0.9));
+          });
+        }
         if (fluidMat) {
           fluidMat.emissiveIntensity = 0.6 + Math.sin(t * 2.5) * 0.25;
           fluid.forEach((f, i) => (f.rotation.y = Math.sin(t * 3 + i) * 0.06 * (1 + speed * 3))); // slosh
@@ -573,19 +835,30 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         [0.052, 0.78, 0.46],
         [0.085, 0.58, 0.46],
         [0.045, 0.98, 0.46],
+        [0.058, 0.74, 0.46],
       ][look];
       const arch = look === 3; // spider legs: knee held high above the body
       const legs: { hip: THREE.Group; knee: THREE.Group; d: number; phase: number }[] = [];
+      const hopperMat = look === 4 ? mat(0x8cc152) : main;
+      const springMat = look === 4 ? mat(0xe3a03c) : steel;
       for (const d of sides) {
         for (const dz of [-0.2, 0.2]) {
           root.add(at(shape(cyl(0.11, 0.11, 0.1, 12), gun, 0.02).rotateZ(Math.PI / 2), 0.25 * d, 0.5, dz)); // motor drum
           const hip = new THREE.Group();
           hip.position.set(0.24 * d, 0.5, dz);
-          const kneeAt = V(reach * (arch ? 0.42 : 0.55) * d, arch ? 0.78 : 0.3, dz * (arch ? 0.7 : 0.4));
-          const footAt = V(reach * d, -drop, dz * (arch ? 1.7 : 0.9));
+          // Spring hoppers: the rear leg is a big grasshopper leg, knee folded high and back.
+          const hop = look === 4 && dz > 0;
+          const kneeAt = hop ? V(reach * 0.42 * d, 0.4, 0.24) : V(reach * (arch ? 0.42 : 0.55) * d, arch ? 0.78 : 0.3, dz * (arch ? 0.7 : 0.4));
+          const footAt = hop ? V(reach * d, -drop, -0.04) : V(reach * d, -drop, dz * (arch ? 1.7 : 0.9));
           // Femur: armoured, chunky; a light plate on top.
-          hip.add(seg(V(0, 0, 0), kneeAt, r * 1.35, main, r * 1.05));
-          if (look !== 1) hip.add(seg(V(0.05 * d, 0.07, 0), kneeAt.clone().multiplyScalar(0.8).add(V(0, 0.07, 0)), r * 0.6, light, r * 0.5, 0));
+          hip.add(seg(V(0, 0, 0), kneeAt, r * (hop ? 1.9 : 1.35), look === 4 ? hopperMat : main, r * (hop ? 1.2 : 1.05)));
+          if (hop) {
+            // Chevron ridges along the drumstick femur.
+            for (const k of [0.3, 0.5, 0.7]) {
+              const p = kneeAt.clone().multiplyScalar(k);
+              hip.add(aim(at(new THREE.Mesh(torus(r * (1.95 - k * 0.8), 0.016), dark), p.x, p.y, p.z), kneeAt).rotateX(Math.PI / 2));
+            }
+          } else if (look !== 1) hip.add(seg(V(0.05 * d, 0.07, 0), kneeAt.clone().multiplyScalar(0.8).add(V(0, 0.07, 0)), r * 0.6, light, r * 0.5, 0));
           if (look === 1) hip.add(seg(V(0.12 * d, -0.04, 0), V(reach * 0.45 * d, 0.12, dz * 0.35), r * 0.45, steel, r * 0.45, 0)); // piston
           const knee = new THREE.Group();
           knee.position.copy(kneeAt);
@@ -593,7 +866,14 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           const foot = footAt.clone().sub(kneeAt);
           // Tibia: slimmer, darker, ending in a foot.
           knee.add(seg(V(0, 0, 0), foot, r * 1.0, dark, r * 0.55));
-          if (look === 2) {
+          if (look === 4) {
+            // A coil spring sheathing the shin (the rear one is long and fat), and a flat foot pad.
+            const coil = shape(helix(r * (hop ? 1.9 : 1.6), 0.018, foot.length() * (hop ? 0.5 : 0.36), hop ? 6 : 4), springMat, 0.015);
+            aim(coil, foot);
+            knee.add(at(coil, foot.x * (hop ? 0.4 : 0.3), foot.y * (hop ? 0.4 : 0.3), foot.z * (hop ? 0.4 : 0.3)));
+            const pad = shape(ellip(0.09, 0.035, 0.13), joint, 0.02);
+            knee.add(at(pad, foot.x + 0.02 * d, foot.y - 0.02, foot.z - 0.03));
+          } else if (look === 2) {
             for (const k of [-1, 1]) {
               const claw = shape(cone(0.05, 0.2, 6), joint, 0.02);
               aim(claw, V(0.5 * d, -1, k * 0.6));
@@ -637,13 +917,42 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
       if (!onGrid) root.add(at(shape(rbox(0.56, 0.08, 0.66, 0.04), gun, 0.02), 0, hubY - 0.12, 0)); // saddle on the body
       for (const d of sides) root.add(at(shape(cyl(0.1, 0.1, 0.09, 12), steel, 0.02).rotateZ(Math.PI / 2), hubX + 0.17 * d, hubY + 0.1, -0.04));
       const glassy = look === 1;
+      const blade = look === 2;
       const film = mat(0xffffff, { transparent: true, opacity: 1, map: wingTexture(glassy ? 'glass' : 'foil'), side: THREE.DoubleSide });
       const strut = mat(glassy ? 0x7fcbe6 : baseColor.clone().multiplyScalar(0.6));
       const caseMat = mat(new THREE.Color(0x2f6f8f));
       type Wing = { g: THREE.Group; d: number; k: number };
       const wings: Wing[] = [];
       const shells: { g: THREE.Group; d: number }[] = [];
+      // Razor wings: three stiff, overlapping metal blades per side, fanned and swept back.
+      const bladeMat = mat(0xc3d0de, { rim: 0.6, side: THREE.DoubleSide });
+      const edgeMat = mat(0xf4fbff, { emissive: 0x3a6f8c });
       for (const d of sides) {
+        if (blade) {
+          const pivot = new THREE.Group();
+          pivot.position.set(hubX + 0.16 * d, hubY + 0.14, 0.02);
+          [
+            [1.5, 0.34, 0, 0.03],
+            [1.2, 0.3, 0.3, 0.0],
+            [0.9, 0.26, 0.58, -0.03],
+          ].forEach(([len, w, sweep, y], k) => {
+            const fan = new THREE.Group();
+            const { g, offset } = bladeGeo(len, w);
+            const plate = shape(g, k === 1 ? strut : bladeMat, 0.025);
+            plate.position.copy(offset);
+            fan.add(plate);
+            fan.add(seg(V(0.02, 0.03, -w * 0.42), V(len * 0.42, 0.03, -w * 0.5), 0.018, edgeMat, 0.012, 0)); // honed edge
+            fan.add(seg(V(len * 0.42, 0.03, -w * 0.5), V(len * 0.98, 0.03, -w * 0.06), 0.012, edgeMat, 0.006, 0));
+            fan.position.y = y;
+            fan.rotation.y = -sweep * d;
+            if (d < 0) fan.scale.x = -1;
+            pivot.add(fan);
+          });
+          pivot.add(shape(cyl(0.07, 0.07, 0.16, 10), gun, 0.02).rotateX(Math.PI / 2)); // blade root clamp
+          root.add(pivot);
+          wings.push({ g: pivot, d, k: 0 });
+          continue;
+        }
         (glassy ? [-0.12, 0.18] : [0.02]).forEach((dz, k) => {
           const pivot = new THREE.Group();
           pivot.position.set(hubX + 0.16 * d, hubY + 0.14, dz);
@@ -679,6 +988,14 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
           const s = Math.sin(t * rate + k * 1.3);
           g.rotation.z = d * (0.2 + s * amp);
           g.rotation.x = Math.cos(t * rate + k * 1.3) * 0.18 * beat; // figure-eight twist
+          if (blade) {
+            // Stiff blades: a shallow, snappy beat with no twist; at rest they fold back along the body.
+            const open = Math.min(1, beat * 1.6 + 0.1);
+            g.rotation.z = d * (0.12 + s * amp * 0.8 - (1 - open) * 0.12);
+            g.rotation.x = 0;
+            g.rotation.y = d * -(0.15 + (1 - open) * 0.55);
+            continue;
+          }
           // Foil membranes fold back under the cases at rest.
           if (!glassy) {
             const open = Math.min(1, beat * 1.6 + 0.08);
@@ -801,6 +1118,42 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
     }
 
     case 'stinger': {
+      if (look === 4) {
+        // Needle gun: a four-barrel needle launcher on a stinger mount, fed from a glowing drum.
+        const charge = mat(0xf0dcff, { emissive: 0xa04ae0 });
+        const dart = mat(0xf2fbff, { emissive: 0x6fd2ff });
+        root.add(at(shape(rbox(0.46, 0.2, 0.44, 0.08), dark), 0, 0.38, 0.18)); // socket
+        root.add(at(shape(rbox(0.16, 0.2, 0.16, 0.05), gun, 0.02), 0, 0.52, 0.18)); // post
+        const gunGroup = new THREE.Group();
+        gunGroup.position.set(0, 0.66, 0.06);
+        gunGroup.add(at(shape(cyl(0.2, 0.2, 0.26, 14), main).rotateX(Math.PI / 2), 0, 0, 0.12)); // drum
+        gunGroup.add(at(new THREE.Mesh(torus(0.205, 0.03), charge), 0, 0, 0.12)); // charge band
+        gunGroup.add(at(shape(cyl(0.16, 0.16, 0.06, 14), gun, 0.02).rotateX(Math.PI / 2), 0, 0, 0.28)); // back cap
+        const cluster = new THREE.Group();
+        cluster.add(at(shape(cyl(0.13, 0.15, 0.12, 12), gun, 0.02).rotateX(Math.PI / 2), 0, 0, -0.04)); // breech
+        for (let i = 0; i < 4; i++) {
+          const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+          const [x, y] = [Math.cos(a) * 0.075, Math.sin(a) * 0.075];
+          cluster.add(seg(V(x, y, -0.06), V(x, y, -0.66), 0.035, steel, 0.03, 0.02));
+          cluster.add(at(new THREE.Mesh(ball(0.028), dart), x, y, -0.68)); // loaded dart
+        }
+        for (const z of [-0.3, -0.58]) cluster.add(at(new THREE.Mesh(torus(0.115, 0.028), dark), 0, 0, z)); // barrel clamps
+        gunGroup.add(cluster);
+        root.add(gunGroup);
+        let spin = 0;
+        let last = 0;
+        animate = ({ t, attack }) => {
+          // The barrels spin up while firing and recoil with each dart.
+          spin += (t - last) * (0.6 + attack * 14);
+          last = t;
+          cluster.rotation.z = spin;
+          cluster.position.z = attack * 0.14;
+          gunGroup.rotation.x = Math.sin(t * 1.4 + row) * 0.04 + attack * 0.06;
+          dart.emissiveIntensity = 0.6 + Math.sin(t * 7) * 0.25 + attack * 1.8;
+          charge.emissiveIntensity = 0.55 + Math.sin(t * 2 + row) * 0.2 + attack;
+        };
+        break;
+      }
       if (look === 3) {
         // Scorpion tail: fat armored segments arching up and over the body, ending in a venom bulb and a barb.
         const venom = mat(0xd8ff7a, { emissive: 0x7fd61a });
@@ -899,6 +1252,22 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         horn.add(at(shape(cyl(0.3, 0.32, 0.12, 14), main), 0, 0.02, 0)); // chuck
         horn.position.set(0, 0.56, -0.12);
         horn.rotation.x = -Math.PI / 2 + 0.12;
+      } else if (look === 3) {
+        // Gavel: a stout handle ending in a crosswise mallet head with brass bands.
+        const wood = mat(0x9a6a43);
+        const iron = mat(0x5a626d);
+        const brass = mat(0xd9a84a);
+        horn.add(seg(V(0, 0, 0.02), V(0, 0.1, -0.5), 0.08, wood, 0.065));
+        horn.add(at(new THREE.Mesh(torus(0.085, 0.025), brass), 0, 0.01, -0.06)); // ferrule
+        const head = new THREE.Group();
+        head.position.set(0, 0.12, -0.6);
+        head.add(shape(cyl(0.16, 0.16, 0.5, 16), iron).rotateZ(Math.PI / 2));
+        for (const d of [-1, 1]) {
+          head.add(at(new THREE.Mesh(torus(0.165, 0.03), brass), 0.17 * d, 0, 0).rotateY(Math.PI / 2)); // bands
+          head.add(at(shape(cyl(0.13, 0.13, 0.05, 16), steel, 0.02).rotateZ(Math.PI / 2), 0.27 * d, 0, 0)); // striking faces
+        }
+        horn.add(head);
+        horn.position.set(0, 0.6, -0.04);
       } else {
         // Tesla prongs: two coiled rods with a spark jumping between the tips.
         for (const d of [-1, 1]) {
@@ -916,6 +1285,7 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         if (look === 1) spin.rotation.y = t * (6 + speed * 18 + attack * 20);
         horn.position.z = (look === 1 ? -0.12 : -0.06) - attack * 0.12;
         if (look === 0) horn.rotation.x = -attack * 0.25;
+        if (look === 3) horn.rotation.x = 0.14 + Math.sin(t * 1.5 + row) * 0.03 - attack * 0.6; // raised, then brought down hard
         if (sparkMat && sparkOrb) {
           // The spark flickers and jumps about between the prongs.
           sparkMat.emissiveIntensity = 0.6 + Math.abs(Math.sin(t * 23 + row)) * 0.7 + attack * 2;
@@ -952,6 +1322,39 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
         bumper.add(at(new THREE.Mesh(rbox(1.08, 0.22, 0.26, 0.06), OUTLINE), 0, 0, 0.03));
         root.add(at(bumper, 0, 0.46, -0.45));
         for (const sx of [-1, 1]) for (const sz of [-1, 1]) bolt(0.36 * sx, 0.83, 0.36 * sz, 0.06);
+      } else if (look === 4) {
+        // Thornback: a mossy plate bristling with short, green-tipped thorns on dark bosses.
+        const bark = mat(0x4c5946);
+        const thorn = mat(0xa6e36c, { emissive: 0x1c3a0a });
+        root.add(at(shape(rbox(1.0, 0.28, 1.0, 0.1), bark), 0, 0.36, 0));
+        root.add(at(shape(rbox(0.86, 0.08, 0.86, 0.04), dark, 0.02), 0, 0.53, 0));
+        const spines: THREE.Object3D[] = [];
+        const spots: [number, number, number][] = [
+          [0, 0, 1.2],
+          [-0.3, -0.3, 0.9],
+          [0.3, -0.3, 1],
+          [-0.3, 0.3, 1],
+          [0.3, 0.3, 0.9],
+          [0, -0.34, 0.8],
+          [0, 0.34, 0.85],
+          [-0.34, 0, 0.8],
+          [0.34, 0, 0.85],
+        ];
+        for (const [x, z, sc] of spots) {
+          root.add(at(shape(ball(0.07), gun, 0.02), x, 0.57, z));
+          const sp = shape(cone(0.06, 0.24, 6), thorn, 0.02);
+          aim(sp, V(x * 0.7, 1, z * 0.7));
+          sp.scale.setScalar(sc);
+          root.add(at(sp, x, 0.56 + 0.11 * sc, z));
+          spines.push(sp);
+        }
+        const base = spines.map((sp) => sp.position.clone());
+        animate = ({ t, attack }) =>
+          spines.forEach((sp, i) => {
+            // A springy quiver, and a jab outward when struck.
+            const k = Math.sin(t * 9 + i * 1.7 + row) * 0.012 + Math.max(0, attack) * 0.08;
+            sp.position.copy(base[i]).addScaledVector(UP, k);
+          });
       } else {
         // Mirage plate: a dark slab studded with light-bending crystal facets.
         root.add(at(shape(rbox(1.0, 0.26, 1.0, 0.09), gun), 0, 0.35, 0));
@@ -976,19 +1379,33 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
     }
 
     case 'core': {
-      const hot = look === 1 ? new THREE.Color(0xff9a3d) : baseColor;
+      const hot = look === 1 ? new THREE.Color(0xff9a3d) : look === 2 ? new THREE.Color(0x4f9dff) : baseColor;
       root.add(at(shape(cyl(0.44, 0.48, 0.22, 14), gun), 0, 0.3, 0));
       root.add(at(new THREE.Mesh(torus(0.4, 0.04), steel), 0, 0.42, 0).rotateX(Math.PI / 2));
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) root.add(seg(V(0.29 * sx, 0.4, 0.29 * sz), V(0.27 * sx, 0.98, 0.27 * sz), 0.035, steel, 0.03, 0.02));
       root.add(at(shape(torus(0.31, 0.05), gun, 0.02).rotateX(Math.PI / 2), 0, 1.0, 0)); // open cap ring
-      const glass = mat(0xe8fff4, { transparent: true, opacity: 0.25 });
+      const glass = mat(look === 2 ? 0xe3f0ff : 0xe8fff4, { transparent: true, opacity: 0.25 });
       root.add(at(new THREE.Mesh(cyl(0.3, 0.3, 0.56, 16), glass), 0, 0.71, 0));
       const glow = mat(hot.clone().lerp(new THREE.Color(0xffffff), 0.25), { emissive: hot });
-      const crystal = shape(
-        geo(`gem:${look}`, () => (look === 1 ? new THREE.IcosahedronGeometry(0.2, 0) : new THREE.OctahedronGeometry(0.22, 0))),
-        glow,
-        0.025,
-      );
+      let crystal: THREE.Object3D;
+      if (look === 2) {
+        // Lodestone: a horseshoe magnet (red body, silver poles) hanging in a soft blue field.
+        const red = mat(0xe0443e);
+        const pole = mat(0xe6ecf3, { rim: 0.6 });
+        crystal = new THREE.Group();
+        crystal.add(at(shape(torus(0.15, 0.07, Math.PI), red, 0.02), 0, 0.04, 0));
+        for (const d of [-1, 1]) {
+          crystal.add(at(shape(cyl(0.07, 0.07, 0.1, 10), red, 0.02), 0.15 * d, -0.01, 0));
+          crystal.add(at(shape(cyl(0.071, 0.071, 0.1, 10), pole, 0.02), 0.15 * d, -0.11, 0));
+        }
+        root.add(at(new THREE.Mesh(ball(0.24), mat(0x9fd0ff, { emissive: 0x2f7fff, transparent: true, opacity: 0.3 })), 0, 0.7, 0)); // field haze
+      } else {
+        crystal = shape(
+          geo(`gem:${look}`, () => (look === 1 ? new THREE.IcosahedronGeometry(0.2, 0) : new THREE.OctahedronGeometry(0.22, 0))),
+          glow,
+          0.025,
+        );
+      }
       root.add(crystal);
       const rings = [0, 1].slice(0, look === 1 ? 2 : 1).map(() => {
         const halo = new THREE.Mesh(torus(0.27, 0.022), glow);
@@ -997,7 +1414,9 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
       });
       animate = ({ t }) => {
         crystal.position.y = 0.7 + Math.sin(t * 3 + row) * 0.04;
-        crystal.rotation.y = t * 1.5;
+        // (The magnet sways on the spot, poles down, rather than spinning.)
+        crystal.rotation.y = look === 2 ? -0.75 + Math.sin(t * 1.2 + row) * 0.45 : t * 1.5;
+        if (look === 2) crystal.rotation.x = 0.5; // leaning back, poles to the front
         rings.forEach((h, i) => {
           h.position.y = 0.7;
           h.rotation.set(Math.PI / 2 + Math.sin(t * 2 + i * 2) * 0.5, t * (1 + i), i * 1.2);
@@ -1035,6 +1454,33 @@ export function buildPart(partId: string, side: number, row = 0): PartModel {
             g.rotation.z = Math.sin(t * 1.5 + d * 2) * 0.1;
           });
           tipMat.emissiveIntensity = 0.6 + Math.sin(t * 3 + row) * 0.4;
+        };
+      } else if (look === 2) {
+        // Beacon: one tall stalk carrying a caged yellow lamp with a turning reflector.
+        root.add(seg(V(0, 0.6, 0), V(0, 1.0, 0), 0.045, steel));
+        root.add(at(new THREE.Mesh(torus(0.06, 0.02), dark), 0, 0.8, 0).rotateX(Math.PI / 2)); // collar
+        const lamp = mat(0xfff3a6, { emissive: 0xffbe1a });
+        const head = new THREE.Group();
+        head.position.y = 1.02;
+        head.add(shape(cyl(0.13, 0.15, 0.06, 14), gun, 0.02)); // base
+        head.add(at(shape(cyl(0.06, 0.08, 0.16, 12), lamp, 0.02), 0, 0.12, 0)); // bulb
+        head.add(at(new THREE.Mesh(ball(0.06), lamp), 0, 0.2, 0));
+        for (let i = 0; i < 4; i++) {
+          const a = (i / 4) * Math.PI * 2;
+          head.add(seg(V(Math.cos(a) * 0.12, 0.02, Math.sin(a) * 0.12), V(Math.cos(a) * 0.12, 0.27, Math.sin(a) * 0.12), 0.015, steel, 0.015, 0)); // cage bars
+        }
+        head.add(at(shape(cone(0.16, 0.1, 14), gun, 0.02), 0, 0.32, 0)); // hood
+        head.add(at(new THREE.Mesh(ball(0.03), steel), 0, 0.38, 0));
+        const reflector = new THREE.Group();
+        reflector.position.y = 0.14;
+        // A half-shell mirror behind the bulb that swings the light round.
+        reflector.add(new THREE.Mesh(geo('beacon-shell', () => new THREE.CylinderGeometry(0.1, 0.1, 0.2, 12, 1, true, 0, Math.PI)), mat(0xc0c8d2, { side: THREE.DoubleSide })));
+        head.add(reflector);
+        root.add(head);
+        animate = ({ t }) => {
+          reflector.rotation.y = t * 4 + row;
+          // Two quick blinks per sweep.
+          lamp.emissiveIntensity = 0.5 + (Math.sin(t * 8 + row) > 0.6 ? 1.3 : 0) + Math.max(0, Math.sin(t * 4 + row)) * 0.3;
         };
       } else {
         root.add(seg(V(0, 0.6, 0), V(0, 0.92, 0), 0.05, steel));

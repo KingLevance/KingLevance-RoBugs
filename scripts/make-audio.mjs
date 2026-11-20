@@ -1018,3 +1018,234 @@ for (const [name, fn] of Object.entries({ hub: songHub, garage: songGarage, batt
 }
 rmSync(tmp, { recursive: true, force: true });
 writeSfx(SFX_LATE);
+
+// ---------------------------------------------------------------- SFX, third set
+
+// The second wave of signature moves, the lightning rod and mirror bounces. (Rendered last
+// of all, so every file above keeps its exact bytes.)
+const SFX_MOVES = {};
+function sfxMove(name, dur, peakDb, make) {
+  SFX_MOVES[name] = { dur, peakDb, make };
+}
+/** A short, crackly electric zap at `hz` (bright band-passed sparks over a buzzing saw). */
+function zap(r, hz, len) {
+  const o = osc(r);
+  const f = svf(r);
+  return (u) => {
+    if (u < 0 || u > len + 0.06) return 0;
+    const a = Math.min(1, u / 0.003) * Math.exp(-u / (len * 0.6));
+    const spark = rand() < 0.35 ? noise() : 0;
+    return (f.run(spark, hz * 3, 1.8).bp * 1.6 + o.saw(hz * (1 + 0.3 * Math.sin(TAU * 60 * u))) * 0.35) * a;
+  };
+}
+sfxMove('m_chain', 0.6, -3, (r) => {
+  // Four zaps leaping from part to part, each one a little higher.
+  const zs = [0, 0.09, 0.17, 0.24].map((at, k) => ({ at, z: zap(r, 420 + k * 140, 0.08) }));
+  const hum = osc(r);
+  return (t) => zs.reduce((a, v) => a + v.z(t - v.at), 0) + hum.pulse(95, 0.15) * env(t, 0.01, 0.18) * 0.18;
+});
+sfxMove('m_pounce', 0.45, -4, (r) => {
+  // A coiled spring letting go: a quick sproing up, then the rush of the leap.
+  const o = osc(r);
+  const f = svf(r);
+  return (t) => {
+    const spring = o.tri(glide(160, 760, 0.16, t) * (1 + 0.06 * Math.sin(TAU * 34 * t))) * env(t, 0.004, 0.1) * 0.8;
+    const rush = f.run(noise(), glide(600, 2600, 0.35, t), 1.3).bp * Math.sin(Math.PI * Math.min(1, t / 0.44)) * 0.9;
+    return spring + rush;
+  };
+});
+sfxMove('m_thorn', 0.5, -4, (r) => {
+  // The plate bristles (a dry rattle), then a ring of thorns fwips out all at once.
+  const f = svf(r);
+  const g = svf(r);
+  const ticks = Array.from({ length: 10 }, (_, k) => ({ at: 0.1 + k * 0.007 + rand() * 0.01, hz: 1800 + rand() * 2200 }));
+  const ch = ticks.map((k) => ({ ...k, o: osc(r) }));
+  return (t) => {
+    const rattle = t < 0.11 ? f.run(rand() < 0.25 ? noise() : 0, 3500, 2).bp * 1.5 * (t / 0.11) : 0;
+    const fwip = t > 0.1 ? g.run(noise(), glide(1800, 6500, 0.12, t - 0.1), 2.2).bp * env(t - 0.1, 0.003, 0.1) * 1.3 : 0;
+    let v = rattle + fwip;
+    for (const k of ch) if (t > k.at) v += k.o.sin(glide(k.hz, k.hz * 0.6, 0.05, t - k.at)) * env(t - k.at, 0.0005, 0.02) * 0.18;
+    return v;
+  };
+});
+sfxMove('m_ink', 0.9, -5, (r) => {
+  // A wet, low "pfoomp" and a long hiss of smog rolling out.
+  const o = osc(r);
+  const f = svf(r);
+  const lp = lp1(r);
+  return (t) => {
+    const pfoomp = Math.tanh(1.6 * o.sin(glide(150, 48, 0.18, t)) * env(t, 0.006, 0.12));
+    const puff = lp(noise(), 900) * env(t, 0.005, 0.06) * 1.4;
+    const smog = f.run(noise(), 500 + 900 * Math.exp(-t / 0.3), 0.9).lp * env(t, 0.08, 0.35) * 1.3 * (0.8 + 0.2 * Math.sin(TAU * 7 * t));
+    return pfoomp + puff + smog;
+  };
+});
+sfxMove('m_rally', 0.85, -5, (r) => {
+  // A warm repair pulse: three throbs of a rising major chord, sparkle on top.
+  const chord = [n('F4'), n('A4'), n('C5'), n('F5')].map((m) => ({ o: osc(r), o2: osc(r), f: midi(m) }));
+  const lp = lp1(r);
+  const sp = osc(r);
+  return (t) => {
+    const throb = 0.55 + 0.45 * Math.cos(TAU * 7.5 * t);
+    const rise = Math.pow(2, Math.min(t, 0.5) * (5 / 12) / 0.5);
+    const pad = chord.reduce((a, c) => a + c.o.tri(c.f * rise) + c.o2.tri(c.f * rise * 1.005) * 0.5, 0) / chord.length;
+    const amp = Math.min(1, t / 0.04) * (t > 0.6 ? Math.exp(-(t - 0.6) / 0.08) : 1);
+    const sparkle = sp.sin(midi(n('C7')) * (1 + Math.floor(t * 16) % 3 * 0.25)) * (t > 0.3 ? env((t - 0.3) % 0.0625, 0.001, 0.02) : 0) * 0.25;
+    return lp(pad, 2400) * throb * amp * 0.9 + sparkle * amp;
+  };
+});
+sfxMove('m_magnet', 0.7, -4, (r) => {
+  // The core spins up a throbbing hum that bends upward as it pulls, then a metal clunk.
+  const a = osc(r);
+  const b = osc(r);
+  const f = svf(r);
+  const clank = metal(r, 380, [1, 2.3, 3.1], [0.12, 0.08, 0.05], [0.45, 0.3, 0.2]);
+  return (t) => {
+    const hz = glide(70, 210, 0.5, t);
+    const wob = 0.5 + 0.5 * Math.sin(TAU * glide(6, 22, 0.5, t) * t);
+    const hum = f.run(a.saw(hz) + b.saw(hz * 1.5 + 2), 300 + 1500 * Math.min(1, t / 0.5), 3).lp * wob;
+    const amp = t < 0.5 ? Math.min(1, t / 0.05) : Math.exp(-(t - 0.5) / 0.04);
+    return hum * amp * 0.9 + (t > 0.5 ? clank(t - 0.5) + noise() * env(t - 0.5, 0.0005, 0.005) * 0.4 : 0);
+  };
+});
+sfxMove('m_swarm', 1.3, -3, (r) => {
+  // The hive opens: a dozen wing-buzzes at slightly different pitches swell, scatter and fly off.
+  const bees = Array.from({ length: 9 }, (_, k) => ({ o: osc(r), hz: 190 + k * 23 + rand() * 15, wing: 26 + rand() * 14, ph: rand() * TAU }));
+  const f = svf(r);
+  const pop = osc(r);
+  return (t) => {
+    let v = 0;
+    for (const b of bees) {
+      const bend = 1 + 0.12 * Math.sin(TAU * 1.3 * t + b.ph) + 0.25 * Math.max(0, t - 0.6);
+      v += b.o.saw(b.hz * bend) * (0.6 + 0.4 * Math.sin(TAU * b.wing * t + b.ph));
+    }
+    const amp = Math.min(1, t / 0.25) * (t > 0.85 ? Math.exp(-(t - 0.85) / 0.15) : 1);
+    const lid = pop.sin(glide(320, 90, 0.06, t)) * env(t, 0.001, 0.05) * 0.8;
+    return f.run(v / bees.length, 1400 + 900 * Math.sin(TAU * 2 * t), 2).lp * amp * 1.6 + lid;
+  };
+});
+sfxMove('m_quake', 1.3, -0.5, (r) => {
+  // The slam: a huge low thud, a crack of stone and a long rumble with falling grit.
+  const o = osc(r);
+  const sub = osc(r);
+  const f = lp1(r);
+  const rum = lp1(r);
+  const crack = svf(r);
+  return (t) => {
+    const thud = o.sin(glide(95, 26, 0.35, t)) * env(t, 0.002, 0.3) + sub.sin(glide(48, 30, 0.6, t)) * env(t, 0.01, 0.5) * 0.6;
+    const snap = crack.run(noise(), 2200, 1.2).bp * env(t, 0.0008, 0.04) * 1.5;
+    const rumble = rum(noise(), 140) * env(t, 0.04, 0.55) * 4 * (0.7 + 0.3 * Math.sin(TAU * 9 * t));
+    const grit = rand() < 0.02 * Math.exp(-t / 0.5) ? noise() * 0.6 : 0;
+    return Math.tanh(2 * (thud + rumble + f(noise(), 900) * env(t, 0.001, 0.08))) + snap + grit;
+  };
+});
+sfxMove('m_dive', 0.7, -3, (r) => {
+  // A falling whistle as it drops out of the sky, then the impact.
+  const o = osc(r);
+  const o2 = osc(r);
+  const f = svf(r);
+  const thump = osc(r);
+  return (t) => {
+    const hz = glide(1900, 420, 0.5, t);
+    const fall = t < 0.52 ? (o.sin(hz) + o2.sin(hz * 1.01) * 0.5) * Math.min(1, t / 0.08) * 0.4 + f.run(noise(), hz * 1.5, 2).bp * 0.6 * Math.min(1, t / 0.3) : 0;
+    const u = t - 0.5;
+    const hit = u > 0 ? Math.tanh(2 * (thump.sin(glide(140, 45, 0.1, u)) * env(u, 0.001, 0.1) + noise() * env(u, 0.001, 0.03) * 0.7)) : 0;
+    return fall + hit;
+  };
+});
+sfxMove('m_mirror', 0.75, -6, (r) => {
+  // A glassy shimmer: bright inharmonic chimes that swirl (a slow chorus) as the field rises.
+  const chime = metal(r, 1480, [1, 1.414, 2.08, 2.83, 3.6], [0.5, 0.4, 0.3, 0.2, 0.12], [0.4, 0.32, 0.25, 0.15, 0.1]);
+  const chime2 = metal(r, 1497, [1, 2.08, 3.6], [0.45, 0.28, 0.15], [0.3, 0.2, 0.1]);
+  const f = svf(r);
+  return (t) => {
+    const sweep = f.run(noise(), glide(2000, 8000, 0.4, t), 3).bp * env(t, 0.05, 0.12) * 0.5;
+    return (chime(t) + chime2(t)) * (0.75 + 0.25 * Math.sin(TAU * 5 * t)) + sweep;
+  };
+});
+sfxMove('m_anchor', 0.65, -3, (r) => {
+  // Hooks rattle down and bite into the floor: a chain clatter, then two heavy clunks.
+  const ticks = Array.from({ length: 8 }, (_, k) => ({ at: k * 0.022 + rand() * 0.008, m: metal(r, 1500 + rand() * 900, [1, 1.7], [0.02, 0.012], [0.3, 0.2]) }));
+  const clunk = metal(r, 230, [1, 2.6, 4.2], [0.18, 0.1, 0.06], [0.5, 0.3, 0.15]);
+  const o = osc(r);
+  const f = lp1(r);
+  return (t) => {
+    let v = 0;
+    for (const k of ticks) if (t > k.at) v += k.m(t - k.at);
+    for (const at of [0.2, 0.29]) {
+      const u = t - at;
+      if (u > 0) v += Math.tanh(2 * (o.sin(glide(120, 50, 0.08, u)) * env(u, 0.001, 0.08) + f(noise(), 1200) * env(u, 0.001, 0.03))) * 0.8 + clunk(u) * 0.8;
+    }
+    return v;
+  };
+});
+sfxMove('m_ram', 0.6, -3, (r) => {
+  // A snorting motor rev and a drum-roll of footfalls gathering speed.
+  const o = osc(r);
+  const f = svf(r);
+  const feet = osc(r);
+  return (t) => {
+    const rev = f.run(o.pulse(glide(55, 140, 0.45, t), 0.3) * (0.6 + 0.4 * Math.sin(TAU * 30 * t)), 700 + 1600 * Math.min(1, t / 0.4), 1.6).lp;
+    const period = glide(0.09, 0.045, 0.5, t);
+    const u = t % period;
+    const step = feet.sin(glide(150, 70, 0.03, u)) * env(u, 0.001, 0.02);
+    const amp = Math.min(1, t / 0.04) * (t > 0.5 ? Math.exp(-(t - 0.5) / 0.04) : 1);
+    return (Math.tanh(1.8 * rev) * 0.6 + step * 0.7) * amp;
+  };
+});
+sfxMove('m_vise', 0.5, -3, (r) => {
+  // A ratchet clicking tight, then a crunching squeeze.
+  const lp = lp1(r);
+  const o = osc(r);
+  const clicks = [0, 0.045, 0.085, 0.12, 0.15].map((at, k) => ({ at, o: osc(r), hz: 2400 + k * 300 }));
+  return (t) => {
+    let v = 0;
+    for (const c of clicks) if (t > c.at) v += (c.o.sin(c.hz) * 0.5 + noise() * 0.5) * env(t - c.at, 0.0005, 0.008);
+    const u = t - 0.17;
+    if (u > 0) v += Math.tanh(2.4 * (o.pulse(glide(110, 70, 0.25, u), 0.2) * env(u, 0.004, 0.12) * 0.5 + lp(noise(), 1800) * env(u, 0.002, 0.09) * (0.7 + 0.3 * Math.sin(TAU * 45 * u))));
+    return v;
+  };
+});
+sfxMove('m_mark', 0.45, -6, (r) => {
+  // Lock-on: two quick rising blips, then a bright held tone with a soft hiss.
+  const a = osc(r);
+  const b = osc(r);
+  const hp = svf(r);
+  return (t) => {
+    const blip = (at, hz) => (t > at && t < at + 0.05 ? a.pulse(hz, 0.5) * env(t - at, 0.001, 0.025) * 0.5 : 0);
+    const u = t - 0.13;
+    const lock = u > 0 ? b.sin(1980 * (1 + 0.004 * Math.sin(TAU * 18 * u))) * env(u, 0.002, 0.14) * 0.6 : 0;
+    const hiss = hp.run(noise(), 6000).hp * (u > 0 ? env(u, 0.002, 0.05) * 0.2 : 0);
+    return blip(0, 1320) + blip(0.065, 1660) + lock + hiss;
+  };
+});
+sfxMove('bolt', 1.4, -0.5, (r) => {
+  // Thunder from the lightning rod: a sharp crack of sizzle, then a rolling boom.
+  const crack = svf(r);
+  const sizz = svf(r);
+  const o = osc(r);
+  const rum = lp1(r);
+  const rum2 = lp1(r);
+  return (t) => {
+    const snap = crack.run(noise(), 3800, 0.9).hp * env(t, 0.0005, 0.03) * 1.4;
+    const fizz = sizz.run(rand() < 0.3 ? noise() : 0, 5000, 2).bp * env(t, 0.001, 0.12) * 1.5;
+    const boom = o.sin(glide(70, 30, 0.5, t)) * env(t, 0.01, 0.4) * 0.8;
+    const roll = rum(noise(), 220) * env(t, 0.06, 0.5) * 3.5 * (0.6 + 0.4 * Math.sin(TAU * 4.5 * t + 1)) + rum2(noise(), 90) * env(t, 0.15, 0.6) * 3;
+    return snap + fizz + Math.tanh(1.8 * (boom + roll));
+  };
+});
+sfxMove('reflect', 0.22, -7, (r) => {
+  // A shot glancing off the mirror: a quick bright "tink" that bends up.
+  const o = osc(r);
+  const o2 = osc(r);
+  return (t) => (o.sin(glide(2600, 3900, 0.05, t)) + o2.sin(glide(3900, 5200, 0.05, t)) * 0.4) * env(t, 0.001, 0.05) + noise() * env(t, 0.0005, 0.003) * 0.4;
+});
+sfxMove('land', 0.35, -4, (r) => {
+  // A Pounce / Dive Bomb coming down: a dull thump and a puff of grit.
+  const o = osc(r);
+  const f = lp1(r);
+  return (t) => Math.tanh(1.8 * (o.sin(glide(120, 40, 0.12, t)) * env(t, 0.002, 0.1) + f(noise(), 1100) * env(t, 0.001, 0.06) * 0.9));
+});
+
+writeSfx(SFX_MOVES);
+

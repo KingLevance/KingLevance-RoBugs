@@ -15,7 +15,7 @@ export function fromLayout(rows: string[], legend: Record<string, string>): Plac
   return out;
 }
 
-export type ArenaId = 'pit' | 'foundry' | 'hive' | 'meadow' | 'pond';
+export type ArenaId = 'pit' | 'foundry' | 'hive' | 'meadow' | 'pond' | 'mesa';
 
 export const ARENA_NAMES: Record<ArenaId, string> = {
   pit: 'The Acid Pit',
@@ -23,6 +23,7 @@ export const ARENA_NAMES: Record<ArenaId, string> = {
   hive: 'The Hive Ring',
   meadow: 'The Meadow',
   pond: 'Moonlit Pond',
+  mesa: 'Thunder Mesa',
 };
 
 export type Reward = { kind: 'part' | 'move'; id: string };
@@ -60,6 +61,11 @@ const part = (id: string): Reward => ({ kind: 'part', id });
 
 const RARITY_WEIGHT: Record<Rarity, number> = { common: 50, uncommon: 30, rare: 15, epic: 6 };
 const ORDER: Rarity[] = ['common', 'uncommon', 'rare', 'epic'];
+
+/** The Storm Peaks parts (they only drop up there), weighted by rarity. */
+function stormTable(scale = 1): LootEntry[] {
+  return PARTS.filter((p) => p.tag === 'storm').map((p) => ({ reward: part(p.id), weight: Math.round(RARITY_WEIGHT[p.rarity] * 0.4 * scale) }));
+}
 
 /** Every part up to `maxTier`, weighted by rarity. */
 function tierTable(maxTier: Rarity): LootEntry[] {
@@ -105,6 +111,19 @@ const L = {
   y: 'mand-proboscis',
   k: 'sting-tail',
   j: 'pinc-grip',
+  // Storm Peaks parts
+  U: 'head-coil',
+  Y: 'head-mirror',
+  N: 'thorax-anvil',
+  Q: 'abdomen-hive',
+  b: 'abdomen-smog',
+  f: 'legs-hopper',
+  W: 'wings-blade',
+  J: 'horn-gavel',
+  u: 'sting-needle',
+  x: 'armor-thorn',
+  E: 'core-lodestone',
+  a: 'sensor-beacon',
 };
 
 const bug = (name: string, rows: string[]): Build => ({ name, placements: fromLayout(rows, L) });
@@ -175,7 +194,7 @@ export const OPPONENTS: Opponent[] = [
     blurb: 'Foundry boss. Slow, plated, and it hits like a press. Farmable.',
     arena: 'foundry',
     aggression: 0.45,
-    build: bug('Ironback', ['.p.p.', 'rBVBr', 'sBOBs', '.KKK.', '.g.g.']),
+    build: bug('Ironback', ['.p.p.', 'rBHBr', 'sBOBs', '.KKK.', '.l.l.']),
     boss: true,
     guaranteed: [part('core-fusion'), part('pinc-vise')],
     lootTable: [
@@ -261,7 +280,7 @@ export const OPPONENTS: Opponent[] = [
     name: 'Queen Vexa',
     blurb: 'Hive champion. Drill horn, shear jaws, glass wings. Farmable boss.',
     arena: 'hive',
-    aggression: 0.95,
+    aggression: 0.9,
     build: bug('Queen Vexa', ['.MtM.', 'XBVBX', 'GBOBG', '.sos.']),
     boss: true,
     guaranteed: [part('wings-glass'), part('mand-shear')],
@@ -312,7 +331,7 @@ export const OPPONENTS: Opponent[] = [
     blurb: 'Optional. An assassin nobody has seen twice. Cloak, laser, and a very short fight.',
     arena: 'foundry',
     aggression: 0.9,
-    build: bug('Nullshade', ['PMzMP', 'iBVBi', 'sOKOs', '.s.s.']),
+    build: bug('Nullshade', ['PMzMP', 'iBHBi', 'sOKOs', '.s.s.']),
     boss: true,
     optional: true,
     guaranteed: [part('sting-lance'), part('armor-mirage'), part('head-visor')],
@@ -369,7 +388,7 @@ export const OPPONENTS: Opponent[] = [
     aggression: 0.95,
     build: bug('Hive Warden', ['.PHP.', 'XBOBX', 'csKsc', '.s.s.']),
     team: [
-      { build: bug('Stingwing', ['.n.n.', '.eVe.', '.GBG.', '.oOo.', '..A..']), aggression: 0.8 },
+      { build: bug('Stingwing', ['.n.n.', '.eVe.', '.GBG.', '.oOo.', '..A..']), aggression: 0.6 },
       { build: bug('Shellback', ['.MHM.', 'XBOBX', 'sKoKs', '.s.s.']), aggression: 1.0 },
     ],
     allies: ['ironback', 'arcfly'],
@@ -385,7 +404,7 @@ export const OPPONENTS: Opponent[] = [
     blurb: 'Three-on-three finale. Web, beam and jaws, with two royal guards. Bring your best squad (or borrow Glimmer and Lenswing). Farmable.',
     arena: 'hive',
     aggression: 0.95,
-    build: bug('Empress Kalyx', ['.MzM.', 'cBVBc', 'GBOBG', 'vKOKv', '.vSv.']),
+    build: bug('Empress Kalyx', ['.MzM.', 'cBCBc', 'GBOBG', 'vKOKv', '.vSv.']),
     team: [
       { build: bug('Royal Guard', ['.PHP.', 'XBOBX', 'sKoKs', '.s.s.']), aggression: 0.9 },
       { build: bug('Royal Lancer', ['.MDM.', '.sHs.', 'cBOBc', '.oKo.']), aggression: 0.9 },
@@ -403,6 +422,131 @@ export const OPPONENTS: Opponent[] = [
       { reward: part('wings-glass'), weight: 10 },
     ],
     unlockedBy: ['hiveguard'],
+    map: { x: 0.5, row: 4 },
+  },
+  // ── The Storm Peaks (every bug here is built around the new move parts) ──
+  {
+    id: 'sparkcrown',
+    name: 'Sparkcrown',
+    blurb: 'Lives on the mesa and loves the storm. Its crown throws lightning from part to part, and its needle gun marks you for the jaws.',
+    arena: 'mesa',
+    aggression: 0.8,
+    build: bug('Sparkcrown', ['.MuM.', '.lUl.', 'cBOBc', 'lKoKl', '.l.l.']),
+    boss: false,
+    guaranteed: [part('head-coil'), part('sting-needle')],
+    lootTable: [...tierTable('epic'), ...stormTable()],
+    unlockedBy: ['kalyx'],
+    map: { x: 0.5, row: 0 },
+  },
+  {
+    id: 'hopjack',
+    name: 'Hopjack',
+    blurb: 'Springs in from across the arena and hammers you on landing. Never stands still.',
+    arena: 'meadow',
+    aggression: 0.85,
+    build: bug('Hopjack', ['.mJm.', 'fcHcf', 'fBOBf', '.fof.']),
+    boss: false,
+    guaranteed: [part('legs-hopper'), part('legs-hopper'), part('horn-gavel')],
+    lootTable: [...tierTable('epic'), ...stormTable()],
+    unlockedBy: ['sparkcrown'],
+    map: { x: 0.28, row: 1 },
+  },
+  {
+    id: 'smogmaw',
+    name: 'Smogmaw',
+    blurb: 'Fights from inside its own smoke. Blinded bugs swing at nothing while it chews.',
+    arena: 'pond',
+    aggression: 0.9,
+    build: bug('Smogmaw', ['.MHM.', 'cBOBc', 'gKbKg', '.g.g.']),
+    boss: false,
+    guaranteed: [part('abdomen-smog'), part('legs-crawler')],
+    lootTable: [...tierTable('epic'), ...stormTable()],
+    unlockedBy: ['sparkcrown'],
+    map: { x: 0.72, row: 1 },
+  },
+  {
+    id: 'mirrorback',
+    name: 'Old Mirrorback',
+    blurb: 'Optional boss. Bristling with thorns and wrapped in mirrors: shots come straight back, and it drags you in close. Bring jaws, not darts.',
+    arena: 'mesa',
+    aggression: 0.95,
+    build: bug('Old Mirrorback', ['.PYP.', 'xBEBx', 'xKoKx', '.s.s.']),
+    boss: true,
+    optional: true,
+    guaranteed: [part('head-mirror'), part('armor-thorn'), part('core-lodestone')],
+    lootTable: [
+      ...tierTable('epic'),
+      ...stormTable(),
+      { reward: part('head-mirror'), weight: 12 },
+      { reward: part('core-lodestone'), weight: 12 },
+      { reward: part('armor-thorn'), weight: 12 },
+    ],
+    unlockedBy: ['hopjack'],
+    map: { x: 0.12, row: 2 },
+  },
+  {
+    id: 'lodewing',
+    name: 'Lodewing',
+    blurb: 'Pins you with needles, yanks you out of the sky with its magnet, then dives on your back.',
+    arena: 'mesa',
+    aggression: 0.75,
+    build: bug('Lodewing', ['.nUn.', 'WBEBW', 'cOKOc', '.l.l.']),
+    boss: false,
+    guaranteed: [part('wings-blade'), part('wings-blade'), part('core-lodestone')],
+    lootTable: [...tierTable('epic'), ...stormTable()],
+    unlockedBy: ['hopjack', 'smogmaw'],
+    map: { x: 0.5, row: 2 },
+  },
+  {
+    id: 'thornhide',
+    name: 'Thornhide',
+    blurb: 'A walking hedge. Hug it and you get a faceful of thorns; its claws lock on and do not let go.',
+    arena: 'foundry',
+    aggression: 0.85,
+    build: bug('Thornhide', ['.PHP.', 'xBOBx', 'gxKxg', '.gog.']),
+    boss: false,
+    guaranteed: [part('armor-thorn'), part('armor-thorn'), part('sensor-beacon')],
+    lootTable: [...tierTable('epic'), ...stormTable()],
+    unlockedBy: ['smogmaw'],
+    map: { x: 0.86, row: 2 },
+  },
+  {
+    id: 'anvils',
+    name: 'The Anvil Pair',
+    blurb: 'Two-on-two. One shakes the ground, the other keeps it patched up. Bring a second bug (or borrow Hopjack).',
+    arena: 'mesa',
+    aggression: 0.9,
+    build: bug('Anvil', ['.PHP.', 'gNENg', '.sos.', '.s.s.']),
+    team: [{ build: bug('Tinker', ['.MHM.', 'cBaBc', '.sOs.', '.s.s.']), aggression: 0.8 }],
+    allies: ['hopjack'],
+    boss: false,
+    guaranteed: [part('thorax-anvil'), part('sensor-beacon')],
+    lootTable: [...tierTable('epic'), ...stormTable()],
+    unlockedBy: ['lodewing', 'thornhide'],
+    map: { x: 0.5, row: 3 },
+  },
+  {
+    id: 'aurix',
+    name: 'Tempest Queen Aurix',
+    blurb: 'Three-on-three, at the top of the storm. Her hive pours out drones while her guards hold the line. Bring your best squad (or borrow Sparkcrown and Smogmaw). Farmable.',
+    arena: 'mesa',
+    aggression: 1.0,
+    build: bug('Tempest Queen Aurix', ['.MUM.', 'XBEBX', 'WBOBW', 'fKQKf']),
+    team: [
+      { build: bug('Storm Guard', ['.PJP.', 'xBHBx', 'sNONs', '.sos.']), aggression: 1.0 },
+      { build: bug('Storm Lancer', ['.nYn.', 'WBEBW', 'cKOKc', '.l.l.']), aggression: 0.9 },
+    ],
+    allies: ['sparkcrown', 'smogmaw'],
+    boss: true,
+    guaranteed: [part('abdomen-hive'), part('wings-blade'), part('head-coil')],
+    lootTable: [
+      ...tierTable('epic'),
+      ...stormTable(1.5),
+      { reward: part('abdomen-hive'), weight: 10 },
+      { reward: part('thorax-anvil'), weight: 10 },
+      { reward: part('head-mirror'), weight: 8 },
+    ],
+    unlockedBy: ['anvils'],
     map: { x: 0.5, row: 4 },
   },
 ];
@@ -458,12 +602,13 @@ export function fightSize(o: Opponent) {
  * `starsToEnter` stars earned in the zone before it, so a player has to
  * do well, not just scrape through, before moving on.
  */
-export type ZoneId = 'scrapyard' | 'undergrowth' | 'hive';
+export type ZoneId = 'scrapyard' | 'undergrowth' | 'hive' | 'peaks';
 export type Zone = { id: ZoneId; name: string; stops: string[]; starsToEnter: number };
 export const ZONES: Zone[] = [
   { id: 'scrapyard', name: 'The Scrapyard', stops: ['rustmite', 'needlewisp', 'snapclaw', 'scrapjaw', 'ironback'], starsToEnter: 0 },
   { id: 'undergrowth', name: 'The Undergrowth', stops: ['silkjaw', 'lattice', 'gravelgrub', 'arcfly', 'bloodgnat', 'vexa'], starsToEnter: 9 },
   { id: 'hive', name: 'The Deep Hive', stops: ['twins', 'glimmer', 'nullshade', 'lenswing', 'barbtail', 'tunnelkings', 'hiveguard', 'kalyx'], starsToEnter: 12 },
+  { id: 'peaks', name: 'The Storm Peaks', stops: ['sparkcrown', 'hopjack', 'smogmaw', 'mirrorback', 'lodewing', 'thornhide', 'anvils', 'aurix'], starsToEnter: 15 },
 ];
 
 export function zoneIndex(o: Opponent) {

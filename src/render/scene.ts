@@ -88,6 +88,21 @@ type BugView = {
   trail: THREE.Mesh;
   trailFrom: THREE.Vector3;
   trailLife: number;
+  /** Mirror Ward bubble, and a pop when a shot bounces off it. */
+  ward: THREE.Group;
+  wardPop: number;
+  /** Anchor Grip: hooks bitten into the floor round its feet, and a steel ring. */
+  anchor: THREE.Group;
+  /** Mark Prey: a reticle floating over it (faces the camera), and the snap-in as it's applied. */
+  reticle: THREE.Group;
+  markSnap: number;
+  /** Ink Cloud: dark smudge round its head while blinded. */
+  ink: THREE.Group;
+  /** Cosmetic leap height (world units) and pitch (Pounce / Dive Bomb). */
+  hop: number;
+  hopPitch: number;
+  /** Ram Charge: head down while it charges (seconds left). */
+  ramT: number;
 };
 /**
  * A signature move being staged: `charge` while the sim is frozen for the
@@ -103,6 +118,130 @@ const MOVE_PART: Partial<Record<MoveId, { is: (p: PartDef) => boolean; reach: nu
   'venom-barrage': { is: (p) => p.tag === 'venom', reach: 0.9 },
   'sunder-beam': { is: (p) => p.tag === 'laser', reach: 0.8 },
   'carapace-lock': { is: (p) => p.category === 'armor', reach: 0 },
+  'hornet-swarm': { is: (p) => p.move === 'hornet-swarm', reach: 0 },
+  'quake-stomp': { is: (p) => p.category === 'thorax', reach: 0 },
+};
+/** Ultimates whose charge gathers around the body (no orb at a weapon). */
+const BODY_ULT: MoveId[] = ['carapace-lock', 'quake-stomp'];
+/** How long Pounce / Dive Bomb leaps last (mirrors the sim's resolveMove). */
+const LEAP_T = { pounce: 0.45, dive: 0.5 };
+
+const UP = new THREE.Vector3(0, 1, 0);
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+
+/**
+ * A ribbon along a polyline: two crossed quads per segment, so it reads from
+ * any angle (WebGL lines are 1 px). Electric arcs, magnet beams, sight lines.
+ */
+class Ribbon {
+  readonly mesh: THREE.Mesh;
+  private pos: Float32Array;
+  private attr: THREE.BufferAttribute;
+  private a = new THREE.Vector3();
+  private d = new THREE.Vector3();
+  private p1 = new THREE.Vector3();
+  private p2 = new THREE.Vector3();
+  constructor(
+    private max: number,
+    color: THREE.ColorRepresentation,
+  ) {
+    const geo = new THREE.BufferGeometry();
+    this.pos = new Float32Array(max * 8 * 3);
+    const idx: number[] = [];
+    for (let s = 0; s < max; s++)
+      for (let q = 0; q < 2; q++) {
+        const o = s * 8 + q * 4;
+        idx.push(o, o + 1, o + 2, o + 2, o + 1, o + 3);
+      }
+    this.attr = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('position', this.attr);
+    geo.setIndex(idx);
+    this.mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    this.mesh.frustumCulled = false;
+    this.mesh.visible = false;
+  }
+  get material() {
+    return this.mesh.material as THREE.MeshBasicMaterial;
+  }
+  /** Lay the ribbon through `pts` (`width` = half-width, tapering to `tip` × width at both ends). */
+  set(pts: THREE.Vector3[], width: number, tip = 1) {
+    const n = Math.min(pts.length - 1, this.max);
+    for (let s = 0; s < n; s++) {
+      const a = pts[s];
+      const b = pts[s + 1];
+      this.d.subVectors(b, a);
+      if (this.d.lengthSq() < 1e-8) this.d.set(0, 0, 1e-3);
+      this.d.normalize();
+      this.p1.crossVectors(this.d, UP);
+      if (this.p1.lengthSq() < 1e-6) this.p1.crossVectors(this.d, X_AXIS);
+      this.p1.normalize();
+      this.p2.crossVectors(this.d, this.p1).normalize();
+      const wa = width * (s === 0 ? tip : 1);
+      const wb = width * (s === n - 1 ? tip : 1);
+      for (let q = 0; q < 2; q++) {
+        const p = q ? this.p2 : this.p1;
+        const o = (s * 8 + q * 4) * 3;
+        this.a.copy(a).addScaledVector(p, wa).toArray(this.pos, o);
+        this.a.copy(a).addScaledVector(p, -wa).toArray(this.pos, o + 3);
+        this.a.copy(b).addScaledVector(p, wb).toArray(this.pos, o + 6);
+        this.a.copy(b).addScaledVector(p, -wb).toArray(this.pos, o + 9);
+      }
+    }
+    this.mesh.geometry.setDrawRange(0, n * 12);
+    this.attr.needsUpdate = true;
+  }
+}
+
+/** Chain Spark / Magnet Pull / Mark Prey: an arc or beam that lives for a moment. */
+type Arc = {
+  kind: 'spark' | 'magnet' | 'sight';
+  glow: Ribbon;
+  core: Ribbon;
+  /** Sim-space path (spark) — or the two bugs it runs between (magnet, sight). */
+  path: THREE.Vector3[];
+  from: number;
+  to: number;
+  life: number;
+  max: number;
+  /** Next time the jagged path is re-rolled (spark flicker). */
+  reroll: number;
+  pts: THREE.Vector3[];
+};
+
+/** Silvery faceted bubble (Mirror Ward): big flat facets that catch the light, with bright edges. */
+function mirrorShell(radius: number) {
+  const g = new THREE.Group();
+  const geo = new THREE.IcosahedronGeometry(radius, 0);
+  geo.scale(1, 0.74, 1);
+  geo.translate(0, radius * 0.42, 0);
+  g.add(
+    new THREE.Mesh(
+      geo,
+      new THREE.MeshPhongMaterial({ color: 0xd8e6f5, specular: 0xffffff, shininess: 90, flatShading: true, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide }),
+    ),
+  );
+  g.add(
+    new THREE.LineSegments(
+      new THREE.EdgesGeometry(geo),
+      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }),
+    ),
+  );
+  return g;
+}
+
+/** Shared bits for the per-bug status visuals and move props (built once). */
+const STATUS_GEO = {
+  hook: new THREE.TorusGeometry(0.2, 0.055, 5, 10, Math.PI),
+  puff: new THREE.IcosahedronGeometry(1, 1),
+  reticleRing: new THREE.RingGeometry(0.44, 0.52, 32),
+  reticleTick: new THREE.PlaneGeometry(0.07, 0.26),
+  dot: new THREE.CircleGeometry(0.07, 10),
+  hex: new THREE.RingGeometry(0.5, 0.72, 6),
+  jaw: new THREE.TorusGeometry(1, 0.1, 6, 18, Math.PI * 0.75),
+  crack: new THREE.BoxGeometry(0.09, 0.02, 1).translate(0, 0, 0.5),
 };
 
 type Debris = { obj: THREE.Object3D; vel: THREE.Vector3; spin: THREE.Vector3; age: number };
@@ -202,7 +341,7 @@ export class ArenaRenderer {
   private tmpV = new THREE.Vector3();
   private bits: { m: THREE.Mesh; vel: THREE.Vector3; life: number; max: number }[] = [];
   private nextBit = 0;
-  private waves: { m: THREE.Mesh; life: number; size: number }[] = [];
+  private waves: { m: THREE.Mesh; life: number; max: number; size: number }[] = [];
   private nextWave = 0;
   /** Follow-through after an ultimate resolves. */
   private finisher: { id: MoveId; caster: number; t: number } | null = null;
@@ -219,6 +358,25 @@ export class ArenaRenderer {
   private beam = new THREE.Group();
   /** Flash spheres (muzzle flash, bite flash). */
   private flashes: { m: THREE.Mesh; life: number; max: number; size: number }[] = [];
+  /** Hornet Swarm drones and Thorn Bloom spikes, made on demand per projectile slot. */
+  private drones: (THREE.Group | undefined)[] = [];
+  private thorns: (THREE.Mesh | undefined)[] = [];
+  /** Chain Spark arcs, Magnet Pull beams, Mark Prey sight lines. */
+  private arcs: Arc[] = [];
+  /** Field rings that slide along a Magnet Pull beam toward the caster. */
+  private fieldRings: THREE.Mesh[] = [];
+  /** Soft puffs: ink smog, stomp dust, landing dust. */
+  private puffs: { m: THREE.Mesh; vel: THREE.Vector3; life: number; max: number; size: number; alpha: number }[] = [];
+  private nextPuff = 0;
+  /** Mirror Ward bounces: a silver hex shard that faces the camera. */
+  private hexes: { m: THREE.Mesh; life: number }[] = [];
+  /** Vise Lock: two jaws that clamp shut round the enemy. */
+  private clamps: { g: THREE.Group; bug: number; from: number; life: number }[] = [];
+  /** Quake Stomp: cracks radiating across the floor (dark, with a hot glow that fades first). */
+  private cracks = new THREE.Group();
+  private crackLife = 0;
+  /** Extra cosmetic camera rumble (Quake Stomp), decays. */
+  private rumble = 0;
 
   /**
    * Wall-clock pacing hint for the screen's sim loop: a brief slow motion
@@ -274,12 +432,12 @@ export class ArenaRenderer {
       this.bits.push({ m, vel: new THREE.Vector3(), life: 0, max: 1 });
     }
     const waveGeo = new THREE.RingGeometry(0.82, 1, 28);
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
       const m = new THREE.Mesh(waveGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
       m.rotation.x = -Math.PI / 2;
       m.visible = false;
       this.scene.add(m);
-      this.waves.push({ m, life: 0, size: 1 });
+      this.waves.push({ m, life: 0, max: 0.45, size: 1 });
     }
 
     this.orb = new THREE.Mesh(
@@ -306,7 +464,7 @@ export class ArenaRenderer {
       this.streaks.push(m);
     }
     const flashGeo = new THREE.SphereGeometry(1, 16, 12);
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 6; i++) {
       const m = new THREE.Mesh(
         flashGeo,
         new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
@@ -315,6 +473,67 @@ export class ArenaRenderer {
       this.scene.add(m);
       this.flashes.push({ m, life: 0, max: 1, size: 1 });
     }
+    for (let i = 0; i < 3; i++) {
+      const glow = new Ribbon(48, 0xffffff);
+      const core = new Ribbon(48, 0xffffff);
+      this.scene.add(glow.mesh, core.mesh);
+      this.arcs.push({ kind: 'spark', glow, core, path: [], from: 0, to: 0, life: 0, max: 1, reroll: 0, pts: Array.from({ length: 49 }, () => new THREE.Vector3()) });
+    }
+    const ringGeo = new THREE.TorusGeometry(0.5, 0.05, 4, 20);
+    for (let i = 0; i < 4; i++) {
+      const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xaeb8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+      m.visible = false;
+      this.scene.add(m);
+      this.fieldRings.push(m);
+    }
+    for (let i = 0; i < 28; i++) {
+      const m = new THREE.Mesh(STATUS_GEO.puff, new THREE.MeshBasicMaterial({ color: 0x2b2838, transparent: true, opacity: 0, depthWrite: false }));
+      m.visible = false;
+      this.scene.add(m);
+      this.puffs.push({ m, vel: new THREE.Vector3(), life: 0, max: 1, size: 1, alpha: 1 });
+    }
+    for (let i = 0; i < 4; i++) {
+      const m = new THREE.Mesh(STATUS_GEO.hex, new THREE.MeshBasicMaterial({ color: 0xe6f2ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+      m.visible = false;
+      this.scene.add(m);
+      this.hexes.push({ m, life: 0 });
+    }
+    const jawMat = new THREE.MeshBasicMaterial({ color: 0xff6b5a, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
+    for (let i = 0; i < 2; i++) {
+      const g = new THREE.Group();
+      for (const sd of [1, -1]) {
+        const jaw = new THREE.Mesh(STATUS_GEO.jaw, jawMat);
+        jaw.rotation.set(Math.PI / 2, 0, sd > 0 ? Math.PI * 0.125 : Math.PI * 1.125);
+        g.add(jaw);
+      }
+      g.visible = false;
+      this.scene.add(g);
+      this.clamps.push({ g, bug: 0, from: 0, life: 0 });
+    }
+    // Quake Stomp floor cracks: zig-zag lines out from the centre (dark seam + hot glow).
+    const seam = new THREE.MeshBasicMaterial({ color: 0x1c130d, transparent: true, opacity: 0, depthWrite: false });
+    const hot = new THREE.MeshBasicMaterial({ color: 0xff9a3d, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+    for (let i = 0; i < 9; i++) {
+      let a = (i / 9) * Math.PI * 2 + Math.random() * 0.4;
+      let at = new THREE.Vector3(Math.cos(a) * 1.2, 0, Math.sin(a) * 1.2);
+      for (let k = 0; k < 4; k++) {
+        const len = 1.1 + Math.random() * 1.3;
+        a += (Math.random() - 0.5) * 0.9;
+        for (const [mat, w] of [
+          [seam, 1.6],
+          [hot, 0.7],
+        ] as const) {
+          const m = new THREE.Mesh(STATUS_GEO.crack, mat);
+          m.position.copy(at).setY(mat === seam ? 0.035 : 0.045);
+          m.rotation.y = Math.atan2(Math.cos(a), Math.sin(a));
+          m.scale.set(w * (1 - k * 0.2), 1, len);
+          this.cracks.add(m);
+        }
+        at = at.clone().add(new THREE.Vector3(Math.cos(a) * len, 0, Math.sin(a) * len));
+      }
+    }
+    this.cracks.visible = false;
+    this.scene.add(this.cracks);
 
     // Start the fight camera already in position (a long step snaps it there).
     this.updateCamera(sim, 10, 0);
@@ -476,7 +695,61 @@ export class ArenaRenderer {
     );
     trail.visible = false;
     this.scene.add(trail);
-    return { group, pose, parts, links, rig, spine, tether, web, mound, sink: 0, ghost: 1, fxClock: 0, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3(), wind: 0, reel: 0, stars, trail, trailFrom: new THREE.Vector3(), trailLife: 0 };
+
+    // Mirror Ward bubble.
+    const ward = mirrorShell(r + 0.75);
+    ward.visible = false;
+    group.add(ward);
+    // Anchor Grip: six hooks round the feet (they drive down into the floor) on a steel ring.
+    const anchor = new THREE.Group();
+    const hookMat = new THREE.MeshToonMaterial({ color: 0x9aa7bd });
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+      const hook = new THREE.Mesh(STATUS_GEO.hook, hookMat);
+      hook.position.set(Math.cos(a) * (r * 0.8 + 0.2), 0, Math.sin(a) * (r * 0.8 + 0.2));
+      hook.rotation.y = -a;
+      anchor.add(hook);
+    }
+    const aring = new THREE.Mesh(
+      new THREE.RingGeometry(r * 0.8 + 0.1, r * 0.8 + 0.3, 36),
+      new THREE.MeshBasicMaterial({ color: 0x9aa7bd, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    aring.rotation.x = -Math.PI / 2;
+    aring.position.y = 0.04;
+    anchor.add(aring);
+    anchor.visible = false;
+    ground.add(anchor);
+    // Mark Prey reticle: ring, four ticks, a centre dot and a pip per sure crit left.
+    const reticle = new THREE.Group();
+    const retMat = new THREE.MeshBasicMaterial({ color: 0xff8fd8, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false });
+    const spin = new THREE.Group();
+    spin.add(new THREE.Mesh(STATUS_GEO.reticleRing, retMat));
+    for (let i = 0; i < 4; i++) {
+      const tick = new THREE.Mesh(STATUS_GEO.reticleTick, retMat);
+      const a = (i / 4) * Math.PI * 2;
+      tick.position.set(Math.cos(a) * 0.5, Math.sin(a) * 0.5, 0);
+      tick.rotation.z = a + Math.PI / 2;
+      spin.add(tick);
+    }
+    reticle.add(spin);
+    reticle.add(new THREE.Mesh(STATUS_GEO.dot, retMat));
+    for (let i = 0; i < 3; i++) {
+      const pip = new THREE.Mesh(STATUS_GEO.dot, retMat);
+      pip.position.set((i - 1) * 0.24, -0.74, 0);
+      reticle.add(pip);
+    }
+    reticle.traverse((o) => (o.renderOrder = 11));
+    reticle.visible = false;
+    this.scene.add(reticle);
+    // Ink smudge round the head (Ink Cloud).
+    const ink = new THREE.Group();
+    const inkMat = new THREE.MeshBasicMaterial({ color: 0x24202f, transparent: true, opacity: 0.7, depthWrite: false });
+    for (let i = 0; i < 6; i++) ink.add(new THREE.Mesh(STATUS_GEO.puff, inkMat));
+    const head = parts.find((pv) => pv.part.part.category === 'head' && !pv.part.z) ?? parts.reduce((a, b) => (b.model.root.position.z < a.model.root.position.z ? b : a), parts[0]);
+    ink.position.set(head?.model.root.position.x ?? 0, 0.75, head?.model.root.position.z ?? -r * 0.6);
+    ink.visible = false;
+    group.add(ink);
+    return { group, pose, parts, links, rig, spine, tether, web, mound, sink: 0, ghost: 1, fxClock: 0, ground, shadows, shadow, shadowCount: parts.length, baseRadius: r, marker, shield, walk: 0, lean: 0, lastHeading: bug.heading, kick: new THREE.Vector3(), wind: 0, reel: 0, stars, trail, trailFrom: new THREE.Vector3(), trailLife: 0, ward, wardPop: 0, anchor, reticle, markSnap: 0, ink, hop: 0, hopPitch: 0, ramT: 0 };
   }
 
   private fitOffset(aspect: number) {
@@ -579,7 +852,8 @@ export class ArenaRenderer {
         // Nose down when diving, up when climbing, levelling out on the way down to land.
         const high = THREE.MathUtils.clamp((bug.alt - 2) / 26, 0, 1);
         // Wide open after a miss: it slumps forward.
-        const tilt = THREE.MathUtils.clamp(bug.vAlt / 260, -0.35, 0.3) * high - (bug.open > 0 && !bug.dead ? 0.1 : 0);
+        // (Plus the arc of a Pounce / Dive Bomb, and head down for a Ram Charge.)
+        const tilt = THREE.MathUtils.clamp(bug.vAlt / 260, -0.35, 0.3) * high - (bug.open > 0 && !bug.dead ? 0.1 : 0) + v.hopPitch - (v.ramT > 0 ? 0.12 : 0);
         v.pose.rotation.x += (tilt - v.pose.rotation.x) * (high < 1 ? 0.35 : 0.2);
         // Strikes read as a motion: crouch back while a weapon winds up, then snap forward as it lands.
         let swinging = false;
@@ -672,6 +946,7 @@ export class ArenaRenderer {
     this.updateProjectiles(sim);
     this.updateSparks(sim);
     this.updateCineFx(sim, cine, t, dt);
+    this.updateMoveFx(sim, t, dt);
     this.updateCamera(sim, dt, t);
 
     this.renderer.render(this.scene, this.camera);
@@ -786,12 +1061,39 @@ export class ArenaRenderer {
       } else if (e.type === 'move') {
         this.moveFx(sim, e.move, e.bug);
       } else if (e.type === 'heal') {
-        // Health flowing from the victim into the drinker: a few red droplets and a green glint.
         const to = toWorld(e.x, e.y, e.h / CELL + 0.9);
         const src = sim.bugs[e.from];
-        const from = toWorld(src.pos.x, src.pos.y, src.alt / CELL + 0.8);
-        this.drip(from, to, Math.min(6, 2 + Math.round(e.amount / 3)));
-        this.burst(to, 3, 0x7cffb2, 0.5);
+        if (src.team === sim.bugs[e.bug].team) {
+          // A repair (Rally Pulse): golden sparkles and a little ring on whoever it patched up.
+          this.burst(to, 6, 0xffd23f, 0.7);
+          this.burst(to, 3, 0xffffff, 0.6);
+          if (e.bug !== e.from) this.wave(to, 0xffd23f, 0.8);
+        } else {
+          // Health flowing from the victim into the drinker: a few red droplets and a green glint.
+          const from = toWorld(src.pos.x, src.pos.y, src.alt / CELL + 0.8);
+          this.drip(from, to, Math.min(6, 2 + Math.round(e.amount / 3)));
+          this.burst(to, 3, 0x7cffb2, 0.5);
+        }
+      } else if (e.type === 'arc') {
+        this.startArc(sim, e.move === 'magnet-pull' ? 'magnet' : 'spark', e.bug, e.points);
+      } else if (e.type === 'reflect') {
+        // A shot glances off the mirror: a silver hex shard and a glint.
+        const at = toWorld(e.x, e.y, e.h / CELL + 0.7);
+        this.hexFlash(at);
+        this.flash(at, 0xdff0ff, 0.5, 0.14);
+        this.burst(at, 5, 0xe6f2ff, 0.7);
+        this.bugs[e.bug].wardPop = 1;
+      } else if (e.type === 'land') {
+        // Touchdown: a dust ring, a puff of grit and impact sparks.
+        const dive = e.move === 'dive-bomb';
+        const floor = toWorld(e.x, e.y, 0.15);
+        const at = toWorld(e.x, e.y, e.h / CELL + 0.5);
+        this.wave(floor, 0xd9c9a8, dive ? 1.7 : 1.3);
+        this.burst(floor, dive ? 14 : 10, 0xcbbd9c, 1.3);
+        this.burst(at, 8, dive ? 0x9ad8ff : 0xffd27a, 1.5);
+        this.flash(at, 0xffffff, dive ? 1.1 : 0.8, 0.14);
+        this.dust(floor, dive ? 7 : 5, 0xc9b896, 1, 0.55);
+        this.arena.hype(0.4);
       } else if (e.type === 'erupt') {
         // A burrower bursts out of the floor.
         const at = toWorld(e.x, e.y, 0.3);
@@ -809,7 +1111,7 @@ export class ArenaRenderer {
         this.nextWave = (this.nextWave + 1) % this.waves.length;
         w.m.position.copy(at).setY(0.06);
         (w.m.material as THREE.MeshBasicMaterial).color.set(0xd9d4c7);
-        w.life = 0.45;
+        w.life = w.max = 0.45;
         w.size = 1;
         w.m.visible = true;
       } else if (e.type === 'break') {
@@ -821,7 +1123,7 @@ export class ArenaRenderer {
         this.nextWave = (this.nextWave + 1) % this.waves.length;
         w.m.position.copy(at).setY(0.06);
         (w.m.material as THREE.MeshBasicMaterial).color.set(CATEGORY_COLOR[e.category]);
-        w.life = 0.45;
+        w.life = w.max = 0.45;
         w.size = 1;
         w.m.visible = true;
       }
@@ -846,7 +1148,7 @@ export class ArenaRenderer {
     for (const w of this.waves) {
       if (w.life <= 0) continue;
       w.life -= dt;
-      const k = 1 - w.life / 0.45;
+      const k = 1 - w.life / w.max;
       w.m.scale.setScalar((0.4 + k * 2.6) * w.size);
       (w.m.material as THREE.MeshBasicMaterial).opacity = 0.7 * (1 - k);
       if (w.life <= 0) w.m.visible = false;
@@ -916,8 +1218,35 @@ export class ArenaRenderer {
       const laser = p?.kind === 'laser';
       const webShot = p?.kind === 'web';
       tail.visible = !!p && (p.big || laser);
+      const drone = p?.kind === 'drone' ? (this.drones[i] ??= this.makeDrone()) : this.drones[i];
+      const thorn = p?.kind === 'thorn' ? (this.thorns[i] ??= this.makeThorn()) : this.thorns[i];
+      if (drone) drone.visible = p?.kind === 'drone';
+      if (thorn) thorn.visible = p?.kind === 'thorn';
       if (!p) return;
       m.position.copy(toWorld(p.x, p.y, p.z / CELL + 0.7));
+      if (p.kind === 'drone' && drone) {
+        // A tiny buzzing drone: wobbles about its flight line, wings a blur, a short amber trail.
+        m.visible = false;
+        const vel = this.tmpV.set(p.vx, p.vz, p.vy);
+        drone.position.copy(m.position);
+        drone.position.y += Math.sin(this.clock * 23 + i * 1.7) * 0.08;
+        faceAlong(drone, vel);
+        const flap = Math.sin(this.clock * 95 + i * 2.1);
+        drone.children[2].rotation.z = 0.35 + flap * 0.55;
+        drone.children[3].rotation.z = -0.35 - flap * 0.55;
+        tail.position.copy(drone.position);
+        faceAlong(tail, vel);
+        tail.scale.set(0.45, 0.45, 1.1 + Math.sin(this.clock * 40 + i) * 0.15);
+        (tail.material as THREE.MeshBasicMaterial).color.set(0xffb22e);
+        return;
+      }
+      if (p.kind === 'thorn' && thorn) {
+        m.visible = false;
+        tail.visible = false;
+        thorn.position.copy(m.position);
+        faceAlong(thorn, this.tmpV.set(p.vx, p.vz, p.vy));
+        return;
+      }
       m.scale.setScalar(webShot ? 2.4 + Math.sin(this.clock * 30 + i) * 0.3 : laser ? 0.7 : p.big ? 1.8 : 1);
       (m.material as THREE.MeshBasicMaterial).color.set(webShot ? 0xf4f1e6 : laser ? 0xe9feff : 0xe07bff);
       (tail.material as THREE.MeshBasicMaterial).color.set(webShot ? 0xf4f1e6 : laser ? 0x5cf2ff : 0xc77dff);
@@ -935,6 +1264,47 @@ export class ArenaRenderer {
       }
     });
   }
+
+  /** A Hornet Swarm drone: amber body, dark nose, two flickering wings (children 2 and 3). */
+  private makeDrone() {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(this.droneParts.body, this.droneParts.amber);
+    body.scale.set(1, 0.8, 1.5);
+    g.add(body);
+    const nose = new THREE.Mesh(this.droneParts.body, this.droneParts.dark);
+    nose.scale.setScalar(0.6);
+    nose.position.z = 0.2;
+    g.add(nose);
+    for (const sd of [1, -1]) {
+      const pivot = new THREE.Group();
+      pivot.position.set(0, 0.1, 0.02);
+      const wing = new THREE.Mesh(this.droneParts.wing, this.droneParts.film);
+      wing.position.x = sd * 0.17;
+      wing.rotation.x = -Math.PI / 2;
+      pivot.add(wing);
+      g.add(pivot);
+    }
+    g.visible = false;
+    this.scene.add(g);
+    return g;
+  }
+
+  private makeThorn() {
+    const m = new THREE.Mesh(this.droneParts.thorn, this.droneParts.green);
+    m.visible = false;
+    this.scene.add(m);
+    return m;
+  }
+
+  private droneParts = {
+    body: new THREE.SphereGeometry(0.13, 8, 6),
+    wing: new THREE.PlaneGeometry(0.3, 0.13),
+    thorn: new THREE.ConeGeometry(0.1, 0.75, 5).rotateX(Math.PI / 2),
+    amber: new THREE.MeshToonMaterial({ color: 0xffc23f, emissive: 0x5a3500 }),
+    dark: new THREE.MeshToonMaterial({ color: 0x2a2320 }),
+    film: new THREE.MeshBasicMaterial({ color: 0xfff6d8, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide }),
+    green: new THREE.MeshToonMaterial({ color: 0x8bd450, emissive: 0x1e3a0a }),
+  };
 
   private updateSparks(sim: Sim) {
     while (this.sparks.length < sim.effects.length) {
@@ -1005,6 +1375,31 @@ export class ArenaRenderer {
         v.pose.rotation.y = spin * Math.PI * 2;
         return { air: 0.85 * crouch, glow: 0.06 + Math.sin(t * 12) * 0.04 * spin };
       }
+      case 'hornet-swarm': {
+        // Head down, abdomen raised high; the hive throbs faster and faster as the drones wake.
+        const rear = smooth((k - 0.05) / 0.4);
+        const beat = Math.max(0, Math.sin(t * (14 + 26 * k)));
+        const quiver = Math.sin(t * 80) * 0.025 * rear;
+        v.pose.scale.set(1 + crouch * 0.05, 1 - crouch * 0.08, 1 + rear * 0.06);
+        v.pose.position.set(quiver, 0.12 * rear, 0.15 * rear);
+        v.pose.rotation.x = -0.32 * rear + beat * 0.03 * rear;
+        v.pose.rotation.y = 0;
+        const hive = v.parts.find((pv) => pv.attached && pv.part.part.move === 'hornet-swarm');
+        if (hive) hive.punch = Math.max(hive.punch, (0.35 + 0.55 * beat) * rear);
+        return { glow: 0.04 + 0.08 * beat * rear };
+      }
+      case 'quake-stomp': {
+        // Rears up on its back legs, front high, shuddering at the top… then slams down.
+        const rear = smooth((k - 0.08) / 0.6) * (1 - smooth((k - 0.86) / 0.1));
+        const slam = smooth((k - 0.88) / 0.1);
+        const shudder = Math.sin(t * 60) * 0.03 * smooth((k - 0.5) / 0.3) * (1 - slam);
+        const r = sim.bugs[c.caster].radius / CELL;
+        v.pose.scale.set(1 + slam * 0.1, 1 - crouch * 0.1 * (1 - rear) - slam * 0.18 + rear * 0.06, 1 + slam * 0.06);
+        v.pose.rotation.x = 0.55 * rear + shudder;
+        v.pose.rotation.y = 0;
+        v.pose.position.set(shudder, Math.sin(0.55 * rear) * r * 0.55 - 0.12 * crouch * (1 - rear) - 0.1 * slam, 0.35 * rear);
+        return { air: 0.6 * rear, glow: 0.06 * rear + Math.max(0, Math.sin(t * 16)) * 0.05 * rear };
+      }
       default:
         return {};
     }
@@ -1033,13 +1428,13 @@ export class ArenaRenderer {
     fl.m.visible = true;
   }
 
-  private wave(at: THREE.Vector3, color: THREE.ColorRepresentation, size = 1) {
+  private wave(at: THREE.Vector3, color: THREE.ColorRepresentation, size = 1, life = 0.45) {
     const w = this.waves[this.nextWave];
     this.nextWave = (this.nextWave + 1) % this.waves.length;
     w.m.position.copy(at).setY(0.08);
     (w.m.material as THREE.MeshBasicMaterial).color.set(color);
     w.size = size;
-    w.life = 0.45;
+    w.life = w.max = life;
     w.m.visible = true;
   }
 
@@ -1080,6 +1475,37 @@ export class ArenaRenderer {
       this.wave(c, color);
       this.wave(c, 0xffffff);
       this.burst(c, 16, color, 1.2);
+    } else if (id === 'hornet-swarm') {
+      // The hive bursts open: an amber flash, a ring and a shower of sparks as the drones pour out.
+      this.flash(at, color, 1.7, 0.35);
+      this.flash(at, 0xffffff, 0.8, 0.15);
+      this.wave(at, color, 1.6);
+      this.burst(at, 18, color, 1.4);
+      this.burst(at, 6, 0x2a2320, 1.2);
+      v.kick.addScaledVector(f, 0.5); // the launch shoves it forward
+    } else if (id === 'quake-stomp') {
+      // The slam: a huge dust shockwave, cracks across the floor and a heavy rumble.
+      const b = sim.bugs[bi];
+      const c = toWorld(b.pos.x, b.pos.y, 0.2);
+      const reach = 170 / CELL / 3; // (a wave grows to ~3× its size)
+      this.flash(c.clone().setY(0.6), color, 2.6, 0.35);
+      this.flash(c.clone().setY(0.4), 0xffffff, 1.3, 0.15);
+      this.wave(c, color, reach, 0.75);
+      this.wave(c, 0xe8d2b0, reach * 0.75, 0.6);
+      this.wave(c, 0xffffff, reach * 0.45, 0.4);
+      this.burst(c, 30, 0x8a6a45, 2.2);
+      this.burst(c, 14, 0xd9c4a0, 1.6);
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2 + Math.random() * 0.3;
+        const p = this.puff(c.clone().add(new THREE.Vector3(Math.cos(a) * 1.2, 0.25, Math.sin(a) * 1.2)), i % 2 ? 0xc9a77c : 0xa8885f, 1.2 + Math.random() * 0.6, 0.7, 0.9 + Math.random() * 0.4);
+        p.vel.set(Math.cos(a) * 11, 0.8 + Math.random(), Math.sin(a) * 11);
+      }
+      this.cracks.position.copy(c).setY(0);
+      this.cracks.rotation.y = Math.random() * Math.PI * 2;
+      this.cracks.scale.setScalar(Math.max(0.8, b.radius / CELL / 2.2));
+      this.crackLife = 1.8;
+      this.rumble = 1;
+      v.spine.kick(0, 4);
     }
   }
 
@@ -1160,9 +1586,306 @@ export class ArenaRenderer {
         this.burst(floor, 16, 0x8a6a45, 1.2);
         this.wave(floor, 0xc98b4a, 1);
         break;
+      case 'chain-spark': {
+        // The crown discharges (the bolt itself arrives as an 'arc' event).
+        const { at } = this.weaponTip(bi, sim, { is: (p) => p.move === 'chain-spark', reach: 0 });
+        this.flash(at, color, 1.2, 0.2);
+        this.flash(at, 0xffffff, 0.6, 0.1);
+        this.burst(at, 8, color, 1.1);
+        break;
+      }
+      case 'pounce':
+        // Springs off: dust where it pushed off, streaks behind it.
+        this.burst(floor, 12, 0xcbbd9c, 1.1);
+        this.dust(floor, 4, 0xc9b896, 0.7, 0.45);
+        this.wave(floor, 0xd9c9a8, 0.9);
+        this.startStreaks(bi, color, 0.45);
+        break;
+      case 'dive-bomb':
+        // Wings snap back for the dive: a gust and streaks.
+        this.wave(mid, 0xffffff, 1.2);
+        this.burst(mid, 10, 0xffffff, 1.2);
+        this.flash(mid, color, 1.2, 0.2);
+        this.startStreaks(bi, color, 0.55);
+        break;
+      case 'thorn-bloom':
+        // The plate bursts open: a green flash and ring as the thorns fly.
+        this.flash(mid, color, 1.9, 0.22);
+        this.flash(mid, 0xffffff, 0.8, 0.1);
+        this.wave(mid, color, 2.2);
+        this.burst(mid, 14, color, 1.6);
+        this.bugs[bi].spine.kick(0, 2);
+        break;
+      case 'ink-cloud': {
+        // A big rolling puff of black smog that hangs for a second.
+        const c = toWorld(b.pos.x, b.pos.y, b.alt / CELL + 0.6);
+        this.flash(c, 0x3a3450, 2.2, 0.3);
+        for (let i = 0; i < 14; i++) {
+          const a = (i / 14) * Math.PI * 2 + Math.random() * 0.4;
+          const out = 3.2 + Math.random() * 3.6;
+          const p = this.puff(c.clone().add(new THREE.Vector3(Math.cos(a) * 0.6, Math.random() * 0.6, Math.sin(a) * 0.6)), i % 3 ? 0x2b2838 : 0x4a4560, 1.4 + Math.random() * 0.5, 0.85, 1.05 + Math.random() * 0.35);
+          p.vel.set(Math.cos(a) * out, 0.4 + Math.random() * 0.8, Math.sin(a) * out);
+        }
+        this.burst(c, 8, 0x24202f, 1.2);
+        break;
+      }
+      case 'rally-pulse':
+        // A golden repair pulse rolls out, sparkles rising.
+        this.flash(mid, color, 1.8, 0.3);
+        this.wave(mid, color, 3.4, 0.7);
+        this.wave(mid, 0xffffff, 2, 0.5);
+        this.burst(mid, 16, color, 1.4);
+        this.burst(mid, 6, 0xffffff, 1.1);
+        break;
+      case 'magnet-pull': {
+        // The core flares (the beam arrives as an 'arc' event).
+        const { at } = this.weaponTip(bi, sim, { is: (p) => p.move === 'magnet-pull', reach: 0 });
+        this.flash(at, color, 1.4, 0.25);
+        this.wave(at, color, 1.2);
+        break;
+      }
+      case 'mirror-ward':
+        // The mirror field snaps up: a silver flash and ring.
+        this.flash(mid, 0xe6f2ff, 2.2, 0.25);
+        this.wave(mid, 0xffffff, 1.6);
+        this.burst(mid, 10, 0xffffff, 1);
+        this.bugs[bi].wardPop = 1.6;
+        break;
+      case 'anchor-grip':
+        // Hooks slam into the floor: grit and a steel ring (the hooks show while it holds).
+        this.flash(floor, color, 1.4, 0.2);
+        this.wave(floor, color, 1.3);
+        this.burst(floor, 14, 0xb9b2a0, 1.1);
+        this.dust(floor, 5, 0xbdb39b, 0.8, 0.5);
+        break;
+      case 'ram-charge':
+        // Head down, dust kicked up behind, long streaks.
+        this.burst(floor, 14, 0xcbbd9c, 1);
+        this.dust(floor, 4, 0xc9b896, 0.8, 0.5);
+        this.startStreaks(bi, color, 0.65);
+        this.bugs[bi].ramT = 0.6;
+        break;
+      case 'vise-lock': {
+        // The claws clamp shut on the enemy.
+        const foe = foeOf(sim, b);
+        const at = toWorld(foe.pos.x, foe.pos.y, foe.alt / CELL + 0.8);
+        this.flash(at, color, 1.3, 0.2);
+        this.flash(at, 0xffffff, 0.6, 0.1);
+        this.burst(at, 10, color, 1.2);
+        this.startClamp(bi, foe.index);
+        break;
+      }
+      case 'mark-prey': {
+        // A sight line flicks to the enemy and the reticle snaps onto it.
+        const foe = foeOf(sim, b);
+        this.startArc(sim, 'sight', bi, [], foe.index);
+        this.bugs[foe.index].markSnap = 1;
+        break;
+      }
       default:
         break;
     }
+  }
+
+  /** Start an arc: a Chain Spark bolt through `points`, or a beam/sight line between two bugs. */
+  private startArc(sim: Sim, kind: Arc['kind'], from: number, points: { x: number; y: number; h: number }[], to = -1) {
+    const arc = this.arcs.find((a) => a.life <= 0) ?? this.arcs[0];
+    arc.kind = kind;
+    arc.from = from;
+    arc.path = points.map((p) => toWorld(p.x, p.y, p.h / CELL + 0.6));
+    if (to < 0 && points.length > 1) {
+      // The bug at the far end (the one being pulled).
+      const end = points[points.length - 1];
+      let best = Infinity;
+      for (const b of sim.bugs)
+        if (b.index !== from && !b.dead && Math.hypot(b.pos.x - end.x, b.pos.y - end.y) < best) {
+          best = Math.hypot(b.pos.x - end.x, b.pos.y - end.y);
+          to = b.index;
+        }
+    }
+    arc.to = Math.max(0, to);
+    arc.life = arc.max = kind === 'spark' ? 0.32 : kind === 'magnet' ? 0.5 : 0.3;
+    arc.reroll = 0;
+    const color = kind === 'spark' ? 0x7df9ff : kind === 'magnet' ? 0x8f7dff : 0xff8fd8;
+    arc.glow.material.color.set(color);
+    arc.core.material.color.set(kind === 'magnet' ? 0xdfe4ff : 0xffffff);
+    if (kind === 'spark')
+      arc.path.forEach((p, i) => {
+        if (i === 0) return;
+        this.flash(p, 0x7df9ff, 0.7, 0.18);
+        this.burst(p, 5, i % 2 ? 0x7df9ff : 0xffffff, 0.9);
+      });
+  }
+
+  /** A soft puff (smog, dust) that drifts and grows, then fades. */
+  private puff(at: THREE.Vector3, color: THREE.ColorRepresentation, size: number, alpha: number, life: number) {
+    const p = this.puffs[this.nextPuff];
+    this.nextPuff = (this.nextPuff + 1) % this.puffs.length;
+    p.m.position.copy(at);
+    (p.m.material as THREE.MeshBasicMaterial).color.set(color);
+    p.vel.set(0, 0, 0);
+    p.size = size;
+    p.alpha = alpha;
+    p.life = p.max = life;
+    p.m.visible = true;
+    return p;
+  }
+
+  /** A few low dust puffs rolling outward along the floor. */
+  private dust(at: THREE.Vector3, n: number, color: THREE.ColorRepresentation, size: number, life: number) {
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + Math.random();
+      const p = this.puff(at.clone().setY(0.3), color, size * (0.8 + Math.random() * 0.4), 0.6, life * (0.8 + Math.random() * 0.4));
+      p.vel.set(Math.cos(a) * 3 * size, 0.6, Math.sin(a) * 3 * size);
+    }
+  }
+
+  private hexFlash(at: THREE.Vector3) {
+    const h = this.hexes.find((x) => x.life <= 0) ?? this.hexes[0];
+    h.m.position.copy(at);
+    h.m.rotation.z = Math.random() * Math.PI;
+    h.life = 0.25;
+    h.m.visible = true;
+  }
+
+  private startClamp(bi: number, foe: number) {
+    const c = this.clamps.find((x) => x.life <= 0) ?? this.clamps[0];
+    c.bug = foe;
+    c.from = bi;
+    c.life = 0.9;
+    c.g.visible = true;
+  }
+
+  /** Arcs, beams, puffs, hex shards, clamps and cracks from the newer moves. */
+  private updateMoveFx(sim: Sim, t: number, dt: number) {
+    for (const arc of this.arcs) {
+      const on = arc.life > 0;
+      arc.glow.mesh.visible = arc.core.mesh.visible = on;
+      if (!on) continue;
+      arc.life -= dt;
+      const k = 1 - arc.life / arc.max;
+      const A = this.bugs[arc.from];
+      const B = this.bugs[arc.to];
+      if (arc.kind === 'spark') {
+        // Jagged, flickering lightning through the hit points (re-rolled a few times a second).
+        if (t >= arc.reroll) {
+          arc.reroll = t + 0.045;
+          let n = 0;
+          arc.pts[n++].copy(arc.path[0]);
+          for (let s = 1; s < arc.path.length && n < arc.pts.length; s++) {
+            const a = arc.path[s - 1];
+            const b = arc.path[s];
+            const len = a.distanceTo(b);
+            const m = Math.max(3, Math.min(10, Math.round(len / 0.5)));
+            for (let j = 1; j <= m && n < arc.pts.length; j++) {
+              const p = arc.pts[n++].copy(a).lerp(b, j / m);
+              if (j < m) p.add(this.tmpV.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(Math.min(0.8, len * 0.12)));
+            }
+          }
+          const pts = arc.pts.slice(0, n);
+          arc.glow.set(pts, 0.17, 0.5);
+          arc.core.set(pts, 0.05);
+        }
+        const flick = 0.55 + Math.random() * 0.45;
+        arc.glow.material.opacity = 0.7 * flick * (1 - k * k);
+        arc.core.material.opacity = flick * (1 - k * k);
+        continue;
+      }
+      // Beam / sight line between two live bugs (ends follow them).
+      const a = A.group.position.clone().add(this.tmpV.set(0, 0.8, 0));
+      const b = B.group.position.clone().add(this.tmpV.set(0, 0.8, 0));
+      const n = 24;
+      const dir = b.clone().sub(a);
+      const p1 = new THREE.Vector3().crossVectors(dir, UP).normalize();
+      const p2 = new THREE.Vector3().crossVectors(dir, p1).normalize();
+      const pts = arc.pts.slice(0, n + 1);
+      const fade = arc.kind === 'sight' ? 1 - k : Math.min(1, arc.life * 6);
+      if (arc.kind === 'magnet') {
+        // A twisting field beam (helix) round a straight bright core.
+        for (let i = 0; i <= n; i++) {
+          const u = i / n;
+          const amp = 0.32 * Math.sin(Math.PI * u);
+          const ph = u * 14 - t * 24;
+          pts[i].copy(a).lerp(b, u).addScaledVector(p1, Math.cos(ph) * amp).addScaledVector(p2, Math.sin(ph) * amp);
+        }
+        arc.glow.set(pts, 0.11, 0.4);
+        arc.core.set([a, b], 0.06);
+        arc.glow.material.opacity = 0.9 * fade;
+        arc.core.material.opacity = (0.6 + Math.sin(t * 50) * 0.2) * fade;
+      } else {
+        // Mark Prey: a thin pink laser sight that snaps on and fades.
+        const reach = smooth(k / 0.25);
+        const end = a.clone().lerp(b, reach);
+        arc.glow.set([a, end], 0.07);
+        arc.core.set([a, end], 0.02);
+        arc.glow.material.opacity = 0.7 * fade;
+        arc.core.material.opacity = fade;
+      }
+    }
+    // Field rings slide down the strongest magnet beam toward the caster.
+    const mag = this.arcs.find((x) => x.kind === 'magnet' && x.life > 0);
+    this.fieldRings.forEach((m, i) => {
+      m.visible = !!mag;
+      if (!mag) return;
+      const a = this.bugs[mag.from].group.position.clone().setY(this.bugs[mag.from].group.position.y + 0.8);
+      const b = this.bugs[mag.to].group.position.clone().setY(this.bugs[mag.to].group.position.y + 0.8);
+      const u = 1 - ((t * 2.6 + i / this.fieldRings.length) % 1);
+      m.position.copy(a).lerp(b, u);
+      faceAlong(m, b.clone().sub(a));
+      m.scale.setScalar(0.6 + u * 1.3);
+      (m.material as THREE.MeshBasicMaterial).opacity = 0.8 * Math.sin(Math.PI * u) * Math.min(1, mag.life * 6);
+    });
+
+    for (const p of this.puffs) {
+      if (p.life <= 0) continue;
+      p.life -= dt;
+      const k = 1 - p.life / p.max;
+      p.vel.multiplyScalar(Math.exp(-dt * 3.2));
+      p.m.position.addScaledVector(p.vel, dt);
+      p.m.scale.setScalar(p.size * (0.45 + 0.75 * Math.sqrt(k)));
+      (p.m.material as THREE.MeshBasicMaterial).opacity = p.alpha * Math.min(1, k * 8) * (1 - k * k);
+      if (p.life <= 0) p.m.visible = false;
+    }
+    for (const h of this.hexes) {
+      if (h.life <= 0) continue;
+      h.life -= dt;
+      const k = 1 - h.life / 0.25;
+      h.m.quaternion.copy(this.camera.quaternion);
+      h.m.rotateZ(k * 1.5);
+      h.m.scale.setScalar(0.5 + k * 0.9);
+      (h.m.material as THREE.MeshBasicMaterial).opacity = 0.95 * (1 - k);
+      if (h.life <= 0) h.m.visible = false;
+    }
+    for (const c of this.clamps) {
+      if (c.life <= 0) continue;
+      c.life -= dt;
+      const foe = sim.bugs[c.bug];
+      const by = sim.bugs[c.from];
+      const k = 1 - c.life / 0.9;
+      const shut = smooth(k / 0.12);
+      c.g.position.copy(this.bugs[c.bug].group.position).setY(this.bugs[c.bug].group.position.y + 0.7);
+      // Jaws come in from either side of the caster → enemy line.
+      c.g.rotation.y = Math.atan2(foe.pos.x - by.pos.x, foe.pos.y - by.pos.y) + Math.PI / 2;
+      c.g.scale.setScalar((foe.radius / CELL) * 0.75 + 0.3);
+      const open = (1 - shut) * 0.9 + (k > 0.12 ? Math.sin(t * 60) * 0.02 : 0);
+      c.g.children[0].position.z = open;
+      c.g.children[1].position.z = -open;
+      const mat = (c.g.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      mat.opacity = Math.min(1, c.life * 5) * (0.75 + 0.25 * Math.sin(t * 30));
+      if (c.life <= 0 || foe.dead) {
+        c.life = 0;
+        c.g.visible = false;
+      }
+    }
+    this.crackLife = Math.max(0, this.crackLife - dt);
+    this.cracks.visible = this.crackLife > 0;
+    if (this.cracks.visible) {
+      const seam = (this.cracks.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      const hot = (this.cracks.children[1] as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      seam.opacity = 0.75 * Math.min(1, this.crackLife / 0.6);
+      hot.opacity = 0.9 * Math.max(0, (this.crackLife - 1.2) / 0.6);
+    }
+    this.rumble = Math.max(0, this.rumble - dt * 1.4);
   }
 
   /** Per-bug status visuals: burrowing, webbing, cloaking, stun sparks, overclock embers. */
@@ -1189,10 +1912,87 @@ export class ArenaRenderer {
       v.ghost = Math.abs(next - want) < 0.02 ? want : next;
       for (const pv of v.parts) if (pv.attached) setGhost(pv.model.root, v.ghost);
     }
+    // Pounce / Dive Bomb: the model really arcs through the air (the sim only hops a little).
+    let hop = 0;
+    let pitch = 0;
+    if (bug.leap > 0 && bug.leapKind && !bug.dead) {
+      const u = THREE.MathUtils.clamp(1 - bug.leap / LEAP_T[bug.leapKind], 0, 1);
+      if (bug.leapKind === 'pounce') {
+        hop = 4 * u * (1 - u) * Math.min(2.2, 1 + bug.radius / CELL / 3);
+        pitch = 0.4 * (1 - 2 * u);
+      } else {
+        // Rise, then dive down onto the target's height.
+        const foe = sim.bugs[bug.leapAt];
+        const drop = foe ? Math.min(0, (foe.alt - bug.alt) / CELL) : 0;
+        const rise = smooth(u / 0.3);
+        const dive = smooth((u - 0.3) / 0.7);
+        hop = 1.5 * rise * (1 - dive) + drop * dive;
+        pitch = 0.3 * rise * (1 - dive) - 0.75 * dive * (1 - smooth((u - 0.9) / 0.1));
+      }
+      v.hop = hop;
+      v.hopPitch = pitch;
+    } else {
+      v.hop += (0 - v.hop) * Math.min(1, dt * 10);
+      v.hopPitch += (0 - v.hopPitch) * Math.min(1, dt * 10);
+    }
+    v.group.position.y += v.hop;
+    v.ramT = Math.max(0, v.ramT - dt);
+
+    // Mirror Ward: a silvery faceted bubble that turns slowly and pops when a shot bounces off.
+    v.wardPop = Math.max(0, v.wardPop - dt * 5);
+    v.ward.visible = bug.ward > 0 && !bug.dead;
+    if (v.ward.visible) {
+      const fade = Math.min(1, bug.ward * 3);
+      v.ward.rotation.y = -t * 0.7;
+      v.ward.scale.setScalar(1 + v.wardPop * 0.1 + Math.sin(t * 4) * 0.012);
+      ((v.ward.children[0] as THREE.Mesh).material as THREE.MeshPhongMaterial).opacity = (0.16 + v.wardPop * 0.2) * fade;
+      ((v.ward.children[1] as THREE.LineSegments).material as THREE.LineBasicMaterial).opacity = (0.45 + 0.2 * Math.sin(t * 9) + v.wardPop * 0.4) * fade;
+    }
+    // Anchor Grip: hooks drive into the floor round the feet and hold.
+    v.anchor.visible = bug.anchor > 0 && !bug.dead && bug.alt < 12;
+    if (v.anchor.visible) {
+      const since = 3 - bug.anchor;
+      const plant = smooth(since / 0.14);
+      const pull = bug.anchor < 0.3 ? 1 - bug.anchor / 0.3 : 0;
+      v.anchor.children.forEach((h, i) => {
+        if (i < 6) h.position.y = 0.7 * (1 - plant) + 0.5 * pull * pull - 0.04 + Math.sin(t * 20 + i) * 0.01 * plant;
+      });
+      const ring = v.anchor.children[6] as THREE.Mesh;
+      ring.scale.setScalar(1 + (1 - plant) * 0.4);
+      (ring.material as THREE.MeshBasicMaterial).opacity = 0.5 * plant * (1 - pull);
+    }
+    // Mark Prey: a pink reticle hovers over the marked bug, a pip for each sure crit left.
+    v.markSnap = Math.max(0, v.markSnap - dt * 4);
+    v.reticle.visible = bug.marked > 0 && !bug.dead && v.ghost > 0.2 && !sim.ult;
+    if (v.reticle.visible) {
+      v.reticle.position.copy(v.group.position).setY(v.group.position.y + 2.75 + Math.sin(t * 3.4) * 0.06);
+      v.reticle.quaternion.copy(this.camera.quaternion);
+      v.reticle.children[0].rotation.z = -t * 1.6;
+      v.reticle.scale.setScalar((1 + v.markSnap * v.markSnap * 2.2) * Math.max(0.9, bug.radius / CELL / 2.2));
+      for (let i = 0; i < 3; i++) v.reticle.children[2 + i].visible = i < bug.marked;
+      const mat = (v.reticle.children[1] as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      mat.opacity = (0.8 + Math.sin(t * 8) * 0.15) * Math.min(1, bug.markedT * 2);
+    }
+    // Blinded by ink: a dark smudge swirling round its head.
+    v.ink.visible = bug.blind > 0 && !bug.dead && v.ghost > 0.2;
+    if (v.ink.visible) {
+      const a = Math.min(1, bug.blind * 2);
+      v.ink.children.forEach((m, i) => {
+        const ang = t * (1.4 + i * 0.13) + i * 1.05;
+        m.position.set(Math.cos(ang) * 0.5, 0.25 + Math.sin(t * 2.3 + i) * 0.16, Math.sin(ang) * 0.5);
+        m.scale.setScalar((0.32 + 0.08 * Math.sin(t * 3 + i * 2)) * (0.6 + 0.4 * a));
+      });
+      ((v.ink.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 0.72 * a;
+    }
+
     // Sparks: dirt while tunnelling, static while stunned, embers while overclocked.
     v.fxClock += dt;
     if (v.fxClock > 0.09 && !sim.ult) {
       v.fxClock = 0;
+      if (bug.blind > 0 && !bug.dead) {
+        const head = v.ink.getWorldPosition(this.tmpV);
+        this.burst(head, 1, 0x24202f, 0.4);
+      }
       if (under) this.burst(toWorld(bug.pos.x, bug.pos.y, 0.2), 2, 0x8a6a45, 0.8);
       if (bug.stun > 0) this.burst(toWorld(bug.pos.x, bug.pos.y, bug.alt / CELL + 1.3), 2, 0xffe14d, 0.6);
       if (bug.siphon > 0 && !bug.dead) this.burst(toWorld(bug.pos.x, bug.pos.y, bug.alt / CELL + 1.1), 1, 0xe8323f, 0.5);
@@ -1230,18 +2030,25 @@ export class ArenaRenderer {
         const a = (i / this.auraSparks.length) * Math.PI * 2 + t * 2.5;
         const u = (t * 1.4 + i * 0.23) % 1;
         const from = new THREE.Vector3(Math.cos(a) * 3.2, 0.3 + (i % 3) * 0.9, Math.sin(a) * 3.2);
-        const to = charging.id === 'carapace-lock' ? new THREE.Vector3(Math.cos(a) * 1.6, 0.6 + (i % 4) * 0.35, Math.sin(a) * 1.6) : local;
-        s.position.copy(from).lerp(to, u * u);
+        let to = local;
+        if (charging.id === 'carapace-lock') to = new THREE.Vector3(Math.cos(a) * 1.6, 0.6 + (i % 4) * 0.35, Math.sin(a) * 1.6);
+        else if (charging.id === 'quake-stomp') to = new THREE.Vector3(Math.cos(a) * 1.3, 0.15, Math.sin(a) * 1.3);
+        else if (charging.id === 'hornet-swarm') {
+          // A buzzing cloud of drones gathering round the hive.
+          const r = 0.5 + 0.5 * smooth(k / 0.6);
+          to = local.clone().add(new THREE.Vector3(Math.cos(a * 3 + t * 9) * r, Math.sin(t * 13 + i) * 0.35, Math.sin(a * 3 + t * 9) * r));
+        }
+        s.position.copy(from).lerp(to, charging.id === 'hornet-swarm' ? Math.min(1, u * 2.5) : u * u);
         s.scale.setScalar(0.6 + (1 - u) * 0.8);
         s.rotation.set(t * 5 + i, t * 3, 0);
         (s.material as THREE.MeshBasicMaterial).color.copy(color);
       });
       // Energy gathering at the weapon.
-      if (charging.id !== 'carapace-lock') {
+      if (!BODY_ULT.includes(charging.id)) {
         const grow = smooth((k - 0.1) / 0.75) * (charging.id === 'mandible-crusher' ? 1 - smooth((k - 0.88) / 0.08) : 1);
         this.orb.visible = grow > 0.01;
         this.orb.position.copy(at);
-        this.orb.scale.setScalar(0.15 + grow * (charging.id === 'mandible-crusher' ? 0.7 : 1.1) + Math.sin(t * 30) * 0.05 * grow);
+        this.orb.scale.setScalar(0.15 + grow * (charging.id === 'mandible-crusher' ? 0.7 : charging.id === 'hornet-swarm' ? 0.6 : 1.1) + Math.sin(t * 30) * 0.05 * grow);
         const om = this.orb.material as THREE.MeshBasicMaterial;
         om.color.copy(color).lerp(new THREE.Color(0xffffff), 0.35);
         om.opacity = 0.55 + 0.35 * grow;
@@ -1374,6 +2181,36 @@ export class ArenaRenderer {
         shot = center.clone().addScaledVector(dirAt(a), r + 5 * K).add(new THREE.Vector3(0, 1.7 + 0.8 * K, 0));
         aim = center.clone().add(new THREE.Vector3(0, 0.6, 0));
         fov = FOV - 4;
+      } else if (c.id === 'hornet-swarm') {
+        // From high behind the raised hive (it fills the frame as it throbs)… then pull up and
+        // back to watch the swarm stream across to the enemy.
+        const away = Math.atan2(caster.pos.y - foe.pos.y, caster.pos.x - foe.pos.x) + 0.7 * side;
+        const behind = new THREE.Vector3(Math.cos(away), 0, Math.sin(away));
+        if (c.phase === 'charge') {
+          const push = smooth((p - 0.3) / 0.7);
+          shot = center.clone().addScaledVector(behind, r + (5 - push * 1.3) * K).add(new THREE.Vector3(0, 2.4 + 0.8 * K, 0));
+          aim = center.clone().add(new THREE.Vector3(0, 0.9, 0)).lerp(foeAt, 0.15);
+          fov = FOV - 5 * push;
+        } else {
+          const mid = center.clone().lerp(foeAt, 0.45);
+          shot = center.clone().addScaledVector(behind, r + (4 + p * 2.5) * K).add(new THREE.Vector3(0, 3 + p * 1.5 + 0.8 * K, 0));
+          aim = mid.add(new THREE.Vector3(0, 0.6, 0));
+          fov = FOV - 3 * (1 - p);
+        }
+      } else if (c.id === 'quake-stomp') {
+        // Low and to the side, looking up as it rears… then up and back for the shockwave.
+        const fwd = dirAt(1.3 * side);
+        if (c.phase === 'charge') {
+          const push = smooth((p - 0.5) / 0.4);
+          shot = center.clone().addScaledVector(fwd, r + (5.2 - push * 1.2) * K).add(new THREE.Vector3(0, 0.55 + 0.4 * K, 0));
+          aim = center.clone().add(new THREE.Vector3(0, 1.3 + 0.5 * smooth(p / 0.7), 0));
+          fov = FOV - 6 * push;
+        } else {
+          const up = smooth(p / 0.6);
+          shot = center.clone().addScaledVector(fwd, r + (5 + up * 3) * K).add(new THREE.Vector3(0, 1.2 + up * 5 + 0.6 * K, 0));
+          aim = center.clone().add(new THREE.Vector3(0, 0.3, 0));
+          fov = FOV + 4 * up;
+        }
       } else if (c.phase === 'charge') {
         // Mandible Crusher: low front three-quarter, then push in hard for the lunge.
         const fwd = dirAt(0.95 * side);
@@ -1408,8 +2245,8 @@ export class ArenaRenderer {
     fog.near = THREE.MathUtils.lerp(55, focus + 0.5, this.ultWeight);
     fog.far = THREE.MathUtils.lerp(120, focus + 10, this.ultWeight);
 
-    if (sim.shake > 0) {
-      const s = sim.shake * 0.9;
+    if (sim.shake > 0 || this.rumble > 0) {
+      const s = sim.shake * 0.9 + this.rumble * this.rumble * 1.4;
       pos.add(new THREE.Vector3((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s));
     }
     this.camera.position.copy(pos);
