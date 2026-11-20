@@ -11,6 +11,8 @@ import * as Updates from 'expo-updates';
 import { useEffect } from 'react';
 import { AppState, Platform } from 'react-native';
 
+import { stopAllAudio } from '@/audio/audio';
+
 const LAUNCH_DELAY_MS = 4000;
 const THROTTLE_MS = 10 * 60 * 1000;
 
@@ -64,6 +66,8 @@ export function useUpdateReady(): boolean {
 /** Restart into the downloaded update. Saves are synchronous, but give any pending state flush a beat. */
 export async function applyUpdate() {
   if (!updatesActive) return;
+  // Native audio players survive the reload: stop them, or the old music plays under the new.
+  stopAllAudio();
   await new Promise((r) => setTimeout(r, 250));
   await Updates.reloadAsync();
 }

@@ -195,6 +195,30 @@ export function useMusic(id: TrackId | null, restart = false) {
   );
 }
 
+/**
+ * Stop and release every player. Call before reloading the app (e.g. to apply an
+ * update): native players outlive a JS reload, so the old music would keep
+ * playing under the new one.
+ */
+export function stopAllAudio() {
+  for (const id of fades.values()) clearInterval(id);
+  fades.clear();
+  const release = (p: AudioPlayer) => {
+    try {
+      p.pause();
+      p.remove();
+    } catch {
+      // Already gone.
+    }
+  };
+  for (const p of tracks.values()) release(p);
+  tracks.clear();
+  for (const pool of pools.values()) for (const v of pool) release(v.player);
+  pools.clear();
+  current = null;
+  wanted = null;
+}
+
 // ---------------------------------------------------------------- settings
 
 export function getAudioPrefs() {
