@@ -236,16 +236,13 @@ export default function Garage() {
   const holder = (id: string) => game.bugs.find((b, i) => i !== game.active && b.placements.some((p) => p.partId === id))?.name || 'another bug';
   const stats = computeStats(resolve(placements));
   const errors = validateBuild(placements);
-  /** Ready to fight: a valid build with no parts that another bug is using. */
-  const blocked = errors.length > 0 || Object.keys(short).length > 0;
+  /** This bug is your lead, so it has first claim on shared parts: only its own build can block it. */
+  const blocked = errors.length > 0;
+  const sharedWith = [...new Set(Object.keys(short).map(holder))];
   const checks = buildChecks(placements, stats);
   // The power line is redundant while there's no core at all (adding one fixes both).
   const noCore = !checks[2].ok;
-  const missing = [
-    ...checks.filter((c) => !c.ok && !c.optional && !(noCore && c.short.startsWith('Less power'))),
-    // Parts that are also on another bug: one of them has to give it up.
-    ...sharedNotes(short, holder).map((text) => ({ label: text, short: text, ok: false })),
-  ];
+  const missing = checks.filter((c) => !c.ok && !c.optional && !(noCore && c.short.startsWith('Less power')));
   const tips = checks.filter((c) => !c.ok && c.optional);
   const editorW = Math.min(width, MaxContentWidth);
   const editorH = Math.min(editorW * 1.05, height * 0.44);
@@ -462,7 +459,7 @@ export default function Garage() {
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bugTabs}>
           {game.bugs.map((b, i) => {
             const on = i === game.active;
-            const ready = bugReady(game.inventory, game.bugs, i);
+            const ready = bugReady(game.inventory, game.bugs, i, game.active);
             const squad = game.squad.includes(i);
             return (
               <Pressable
@@ -616,11 +613,17 @@ export default function Garage() {
                 </Text>
               ))}
             </View>
+
           </View>
         ) : (
           <View style={[styles.status, styles.statusGood]}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.statusTitle, { color: Colors.good }]}>✓ READY TO FIGHT</Text>
+              {sharedWith.length > 0 && (
+                <Text style={[styles.statusTip, { color: '#FFD23F' }]}>
+                  Shares {Object.values(short).reduce((a, n) => a + n, 0) > 1 ? 'parts' : 'a part'} with {sharedWith.join(' and ')}, so {sharedWith.length > 1 ? 'they' : 'it'} {"can't"} fight alongside this bug. Tap Auto-build to rebuild this one from spare parts.
+                </Text>
+              )}
               {tips.length > 0 && <Text style={styles.statusTip}>Tip: {tips.map((c) => c.short.toLowerCase()).join(', ')} would help</Text>}
             </View>
             <Button label="Fight" size="sm" variant="go" onPress={() => router.dismissTo('/campaign')} />

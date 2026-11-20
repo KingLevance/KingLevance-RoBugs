@@ -144,7 +144,7 @@ export default function Campaign() {
   const mapH = layout.h;
   const avoid = keepOut(layout, (o) => ({ name: isUnlocked(o, game.cleared, game.stars), stars: game.cleared.includes(o.id) }));
   const sel = getOpponent(game.selected);
-  const errors = bugProblems(game.inventory, game.bugs, game.active);
+  const errors = bugProblems(game.inventory, game.bugs, game.active, game.active);
   const selUnlocked = isUnlocked(sel, game.cleared, game.stars);
   const selGate = starGate(sel, game.stars);
   const gateBlocks = !selUnlocked && pathOpen(sel, game.cleared) && selGate && !selGate.met;
@@ -154,7 +154,7 @@ export default function Campaign() {
   const best = game.stars[sel.id] ?? 0;
   // Team fights: your squad bugs (valid ones, in order), then borrowed opponents for any gaps.
   const slots = allySlots(sel);
-  const readySquad = game.squad.filter((i) => bugReady(game.inventory, game.bugs, i));
+  const readySquad = game.squad.filter((i) => bugReady(game.inventory, game.bugs, i, game.active));
   const { borrowed } = alliesFor(
     sel,
     readySquad.map((i) => ({ build: game.bugs[i], moves: game.bugs[i].equipped, aggression: 0.7 })),
@@ -303,25 +303,42 @@ export default function Campaign() {
         {selUnlocked && slots > 0 && (
           <View style={{ gap: 6 }}>
             <Text style={styles.alliesLabel}>
-              YOUR SQUAD · {game.build.name} + {slots} MORE {slots > 1 ? '(TAP UP TO 2)' : '(TAP 1)'}
+              YOUR SQUAD · YOUR LEAD + {slots} MORE {slots > 1 ? '(TAP UP TO 2)' : '(TAP 1)'}
             </Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.allies}>
+              {/* Your lead (the bug you're editing in the Garage) always fights. */}
+              <Pressable onPress={() => router.push('/garage')} style={[styles.ally, styles.allyLead]}>
+                <Text style={[styles.allyName, { color: Colors.bg }]}>★ {game.build.name || 'Unnamed'}</Text>
+                <Text style={[styles.allyNote, { color: Colors.bg }]}>LEAD</Text>
+              </Pressable>
               {game.bugs.map((b, i) => {
                 if (i === game.active) return null;
-                const ready = bugReady(game.inventory, game.bugs, i);
+                const ready = bugReady(game.inventory, game.bugs, i, game.active);
                 const pos = readySquad.indexOf(i);
                 const fighting = pos >= 0 && pos < slots;
+                // Not ready: say why, and tap to go and fix it (that makes it the bug you're editing).
+                const why = ready ? '' : (bugProblems(game.inventory, game.bugs, i, game.active)[0] ?? 'needs work');
                 return (
                   <Pressable
                     key={i}
-                    disabled={!ready}
-                    onPress={() => game.toggleSquad(i)}
-                    style={[styles.ally, fighting && styles.allyOn, !ready && { opacity: 0.45 }]}>
+                    onPress={() => {
+                      if (ready) {
+                        game.toggleSquad(i);
+                        return;
+                      }
+                      game.selectBug(i);
+                      router.push('/garage');
+                    }}
+                    style={[styles.ally, fighting && styles.allyOn, !ready && styles.allyBlocked]}>
                     <Text style={[styles.allyName, fighting && { color: Colors.bg }]}>
                       {fighting ? '✓ ' : ''}
                       {b.name}
                     </Text>
-                    {!ready && <Text style={styles.allyNote}>needs work</Text>}
+                    {!ready && (
+                      <Text style={[styles.allyNote, { color: Colors.bad, maxWidth: 150 }]} numberOfLines={2}>
+                        {why} · tap to fix
+                      </Text>
+                    )}
                   </Pressable>
                 );
               })}
@@ -502,6 +519,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   allyOn: { backgroundColor: '#58C7FF', borderColor: '#58C7FF' },
+  allyLead: { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  allyBlocked: { borderColor: Colors.bad, borderStyle: 'dashed' },
   allyBorrowed: { borderStyle: 'dashed', borderColor: Colors.border },
   allyNote: { color: Colors.textDim, fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
   allyPortrait: { width: 30, height: 30 },

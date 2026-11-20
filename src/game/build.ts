@@ -258,9 +258,18 @@ export function availableFor(inventory: Record<string, number>, bugs: { placemen
   return out;
 }
 
-/** Parts bug `index` uses that it can't have because other bugs are using them: part id → how many. */
-export function shortParts(inventory: Record<string, number>, bugs: { placements: Placement[] }[], index: number) {
-  const avail = availableFor(inventory, bugs, index);
+/**
+ * Parts bug `index` uses that it can't have because other bugs are using them: part id → how many.
+ * With `lead`, that bug has first claim on anything shared (then the rest in order), so your lead
+ * is never blocked by another bug; without it, every overlap counts against both bugs.
+ */
+export function shortParts(inventory: Record<string, number>, bugs: { placements: Placement[] }[], index: number, lead?: number) {
+  let avail = availableFor(inventory, bugs, index);
+  if (lead !== undefined) {
+    avail = { ...inventory };
+    const ahead = index === lead ? [] : bugs.filter((_, i) => i === lead || (i < index && i !== lead));
+    for (const b of ahead) for (const p of b.placements) avail[p.partId] = (avail[p.partId] ?? 0) - 1;
+  }
   const out: Record<string, number> = {};
   for (const [id, n] of Object.entries(usage(bugs[index]?.placements ?? []))) {
     const over = n - Math.max(0, avail[id] ?? 0);
@@ -269,18 +278,18 @@ export function shortParts(inventory: Record<string, number>, bugs: { placements
   return out;
 }
 
-/** Ready to fight: a valid build, and none of its parts are claimed by another bug. */
-export function bugReady(inventory: Record<string, number>, bugs: { placements: Placement[] }[], index: number) {
+/** Ready to fight: a valid build, and none of its parts are claimed by another bug (`lead` has first claim). */
+export function bugReady(inventory: Record<string, number>, bugs: { placements: Placement[] }[], index: number, lead?: number) {
   const b = bugs[index];
-  return !!b && validateBuild(b.placements).length === 0 && Object.keys(shortParts(inventory, bugs, index)).length === 0;
+  return !!b && validateBuild(b.placements).length === 0 && Object.keys(shortParts(inventory, bugs, index, lead)).length === 0;
 }
 
 /** Plain-language problems for bug `index`: build errors first, then parts held by other bugs. */
-export function bugProblems(inventory: Record<string, number>, bugs: (Build & { placements: Placement[] })[], index: number): string[] {
+export function bugProblems(inventory: Record<string, number>, bugs: (Build & { placements: Placement[] })[], index: number, lead?: number): string[] {
   const b = bugs[index];
   if (!b) return [];
   const out = validateBuild(b.placements);
-  for (const [id, n] of Object.entries(shortParts(inventory, bugs, index))) {
+  for (const [id, n] of Object.entries(shortParts(inventory, bugs, index, lead))) {
     const holder = bugs.find((o, i) => i !== index && o.placements.some((p) => p.partId === id));
     out.push(`${n > 1 ? `${n}× ` : ''}${getPart(id).name} ${n > 1 ? 'are' : 'is'} on ${holder?.name || 'another bug'}`);
   }

@@ -112,7 +112,7 @@ export default function Arena() {
     // Your lead bug and your squad (borrowing beaten opponents for any empty slots)
     // against the opponent's whole team.
     const squad = game.squad
-      .filter((i) => bugReady(game.inventory, game.bugs, i))
+      .filter((i) => bugReady(game.inventory, game.bugs, i, game.active))
       .map((i) => game.bugs[i])
       .map((b) => ({ build: { name: b.name, placements: b.placements }, moves: b.equipped, aggression: 0.7 }));
     const { allies } = alliesFor(opponent, squad);

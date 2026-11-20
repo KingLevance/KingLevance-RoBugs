@@ -21,7 +21,7 @@ const STEPS: [string, string, string][] = [
 export default function Hub() {
   const game = useGame();
   useMusic('hub');
-  const errors = bugProblems(game.inventory, game.bugs, game.active);
+  const errors = bugProblems(game.inventory, game.bugs, game.active, game.active);
   const next = getOpponent(game.selected);
   const totalParts = Object.values(game.inventory).reduce((a, n) => a + n, 0);
   const allClear = game.cleared.length >= OPPONENTS.length;
