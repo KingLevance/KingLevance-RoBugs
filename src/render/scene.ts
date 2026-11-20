@@ -121,6 +121,8 @@ const MOVE_PART: Partial<Record<MoveId, { is: (p: PartDef) => boolean; reach: nu
   'hornet-swarm': { is: (p) => p.move === 'hornet-swarm', reach: 0 },
   'quake-stomp': { is: (p) => p.category === 'thorax', reach: 0 },
 };
+/** Sim effects (by colour) that a move draws its own way here: Ink Cloud's smog, Quake Stomp's shockwave. */
+const OWN_FX = new Set(['#4A4560', '#D9813B']);
 /** Ultimates whose charge gathers around the body (no orb at a weapon). */
 const BODY_ULT: MoveId[] = ['carapace-lock', 'quake-stomp'];
 /** How long Pounce / Dive Bomb leaps last (mirrors the sim's resolveMove). */
@@ -234,7 +236,7 @@ function mirrorShell(radius: number) {
 
 /** Shared bits for the per-bug status visuals and move props (built once). */
 const STATUS_GEO = {
-  hook: new THREE.TorusGeometry(0.2, 0.055, 5, 10, Math.PI),
+  hook: new THREE.TorusGeometry(0.32, 0.08, 5, 12, Math.PI),
   puff: new THREE.IcosahedronGeometry(1, 1),
   reticleRing: new THREE.RingGeometry(0.44, 0.52, 32),
   reticleTick: new THREE.PlaneGeometry(0.07, 0.26),
@@ -702,17 +704,17 @@ export class ArenaRenderer {
     group.add(ward);
     // Anchor Grip: six hooks round the feet (they drive down into the floor) on a steel ring.
     const anchor = new THREE.Group();
-    const hookMat = new THREE.MeshToonMaterial({ color: 0x9aa7bd });
+    const hookMat = new THREE.MeshToonMaterial({ color: 0xc3ccd9, emissive: 0x1c2230 });
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
       const hook = new THREE.Mesh(STATUS_GEO.hook, hookMat);
-      hook.position.set(Math.cos(a) * (r * 0.8 + 0.2), 0, Math.sin(a) * (r * 0.8 + 0.2));
+      hook.position.set(Math.cos(a) * (r + 0.42), 0, Math.sin(a) * (r + 0.42));
       hook.rotation.y = -a;
       anchor.add(hook);
     }
     const aring = new THREE.Mesh(
-      new THREE.RingGeometry(r * 0.8 + 0.1, r * 0.8 + 0.3, 36),
-      new THREE.MeshBasicMaterial({ color: 0x9aa7bd, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide }),
+      new THREE.RingGeometry(r + 0.34, r + 0.5, 36),
+      new THREE.MeshBasicMaterial({ color: 0xb8c3d4, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }),
     );
     aring.rotation.x = -Math.PI / 2;
     aring.position.y = 0.04;
@@ -1299,7 +1301,7 @@ export class ArenaRenderer {
   private droneParts = {
     body: new THREE.SphereGeometry(0.13, 8, 6),
     wing: new THREE.PlaneGeometry(0.3, 0.13),
-    thorn: new THREE.ConeGeometry(0.1, 0.75, 5).rotateX(Math.PI / 2),
+    thorn: new THREE.ConeGeometry(0.13, 1.05, 5).rotateX(Math.PI / 2),
     amber: new THREE.MeshToonMaterial({ color: 0xffc23f, emissive: 0x5a3500 }),
     dark: new THREE.MeshToonMaterial({ color: 0x2a2320 }),
     film: new THREE.MeshBasicMaterial({ color: 0xfff6d8, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide }),
@@ -1314,8 +1316,8 @@ export class ArenaRenderer {
     }
     this.sparks.forEach((m, i) => {
       const e = sim.effects[i];
-      m.visible = !!e;
-      if (!e) return;
+      m.visible = !!e && !OWN_FX.has(e.color);
+      if (!e || !m.visible) return;
       const mat = m.material as THREE.MeshBasicMaterial;
       mat.color.set(e.color);
       mat.opacity = Math.min(0.9, e.ttl * 3);
@@ -1497,8 +1499,8 @@ export class ArenaRenderer {
       this.burst(c, 14, 0xd9c4a0, 1.6);
       for (let i = 0; i < 16; i++) {
         const a = (i / 16) * Math.PI * 2 + Math.random() * 0.3;
-        const p = this.puff(c.clone().add(new THREE.Vector3(Math.cos(a) * 1.2, 0.25, Math.sin(a) * 1.2)), i % 2 ? 0xc9a77c : 0xa8885f, 1.2 + Math.random() * 0.6, 0.7, 0.9 + Math.random() * 0.4);
-        p.vel.set(Math.cos(a) * 11, 0.8 + Math.random(), Math.sin(a) * 11);
+        const p = this.puff(c.clone().add(new THREE.Vector3(Math.cos(a) * 1.6, 0.25, Math.sin(a) * 1.6)), i % 2 ? 0xc9a77c : 0xa8885f, 1.1 + Math.random() * 0.5, 0.5, 0.9 + Math.random() * 0.4);
+        p.vel.set(Math.cos(a) * 17, 0.8 + Math.random(), Math.sin(a) * 17);
       }
       this.cracks.position.copy(c).setY(0);
       this.cracks.rotation.y = Math.random() * Math.PI * 2;
@@ -1620,11 +1622,12 @@ export class ArenaRenderer {
         // A big rolling puff of black smog that hangs for a second.
         const c = toWorld(b.pos.x, b.pos.y, b.alt / CELL + 0.6);
         this.flash(c, 0x3a3450, 2.2, 0.3);
-        for (let i = 0; i < 14; i++) {
-          const a = (i / 14) * Math.PI * 2 + Math.random() * 0.4;
-          const out = 3.2 + Math.random() * 3.6;
-          const p = this.puff(c.clone().add(new THREE.Vector3(Math.cos(a) * 0.6, Math.random() * 0.6, Math.sin(a) * 0.6)), i % 3 ? 0x2b2838 : 0x4a4560, 1.4 + Math.random() * 0.5, 0.85, 1.05 + Math.random() * 0.35);
-          p.vel.set(Math.cos(a) * out, 0.4 + Math.random() * 0.8, Math.sin(a) * out);
+        // (Reaches about as far as the blinding does: ~6 units.)
+        for (let i = 0; i < 16; i++) {
+          const a = (i / 16) * Math.PI * 2 + Math.random() * 0.4;
+          const out = i % 2 ? 9 + Math.random() * 6 : 3 + Math.random() * 4;
+          const p = this.puff(c.clone().add(new THREE.Vector3(Math.cos(a) * 0.6, Math.random() * 0.8, Math.sin(a) * 0.6)), i % 3 ? 0x29253a : 0x4a4560, 1.7 + Math.random() * 0.7, 0.88, 1.1 + Math.random() * 0.4);
+          p.vel.set(Math.cos(a) * out, 0.5 + Math.random() * 1, Math.sin(a) * out);
         }
         this.burst(c, 8, 0x24202f, 1.2);
         break;
@@ -1735,7 +1738,7 @@ export class ArenaRenderer {
   private dust(at: THREE.Vector3, n: number, color: THREE.ColorRepresentation, size: number, life: number) {
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2 + Math.random();
-      const p = this.puff(at.clone().setY(0.3), color, size * (0.8 + Math.random() * 0.4), 0.6, life * (0.8 + Math.random() * 0.4));
+      const p = this.puff(at.clone().setY(0.3), color, size * (0.8 + Math.random() * 0.4), 0.42, life * (0.8 + Math.random() * 0.4));
       p.vel.set(Math.cos(a) * 3 * size, 0.6, Math.sin(a) * 3 * size);
     }
   }
@@ -1779,7 +1782,7 @@ export class ArenaRenderer {
             const m = Math.max(3, Math.min(10, Math.round(len / 0.5)));
             for (let j = 1; j <= m && n < arc.pts.length; j++) {
               const p = arc.pts[n++].copy(a).lerp(b, j / m);
-              if (j < m) p.add(this.tmpV.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(Math.min(0.8, len * 0.12)));
+              if (j < m) p.add(this.tmpV.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(Math.min(1, len * 0.2)));
             }
           }
           const pts = arc.pts.slice(0, n);
@@ -1959,16 +1962,16 @@ export class ArenaRenderer {
       });
       const ring = v.anchor.children[6] as THREE.Mesh;
       ring.scale.setScalar(1 + (1 - plant) * 0.4);
-      (ring.material as THREE.MeshBasicMaterial).opacity = 0.5 * plant * (1 - pull);
+      (ring.material as THREE.MeshBasicMaterial).opacity = 0.6 * plant * (1 - pull);
     }
     // Mark Prey: a pink reticle hovers over the marked bug, a pip for each sure crit left.
     v.markSnap = Math.max(0, v.markSnap - dt * 4);
     v.reticle.visible = bug.marked > 0 && !bug.dead && v.ghost > 0.2 && !sim.ult;
     if (v.reticle.visible) {
-      v.reticle.position.copy(v.group.position).setY(v.group.position.y + 2.75 + Math.sin(t * 3.4) * 0.06);
+      v.reticle.position.copy(v.group.position).setY(v.group.position.y + 2.15 + Math.sin(t * 3.4) * 0.06);
       v.reticle.quaternion.copy(this.camera.quaternion);
       v.reticle.children[0].rotation.z = -t * 1.6;
-      v.reticle.scale.setScalar((1 + v.markSnap * v.markSnap * 2.2) * Math.max(0.9, bug.radius / CELL / 2.2));
+      v.reticle.scale.setScalar(1 + v.markSnap * v.markSnap * 2.2);
       for (let i = 0; i < 3; i++) v.reticle.children[2 + i].visible = i < bug.marked;
       const mat = (v.reticle.children[1] as THREE.Mesh).material as THREE.MeshBasicMaterial;
       mat.opacity = (0.8 + Math.sin(t * 8) * 0.15) * Math.min(1, bug.markedT * 2);
@@ -2068,7 +2071,7 @@ export class ArenaRenderer {
       const off = ((i * 0.37) % 1) - 0.5;
       const len = 1.5 + ((i * 0.61) % 1) * 2.5;
       m.position.copy(base).addScaledVector(side, off * 2).addScaledVector(back, 1 + len / 2 + ((t * 9 + i * 0.3) % 1) * 1.2);
-      m.position.y = 0.3 + ((i * 0.53) % 1) * 1.3;
+      m.position.y = base.y + 0.3 + ((i * 0.53) % 1) * 1.3;
       m.scale.set(1, 1, len);
       faceAlong(m, back);
       const mat = m.material as THREE.MeshBasicMaterial;
@@ -2187,9 +2190,10 @@ export class ArenaRenderer {
         const away = Math.atan2(caster.pos.y - foe.pos.y, caster.pos.x - foe.pos.x) + 0.7 * side;
         const behind = new THREE.Vector3(Math.cos(away), 0, Math.sin(away));
         if (c.phase === 'charge') {
+          // (Side-rear three-quarter, so the raised abdomen reads in silhouette.)
           const push = smooth((p - 0.3) / 0.7);
-          shot = center.clone().addScaledVector(behind, r + (5 - push * 1.3) * K).add(new THREE.Vector3(0, 2.4 + 0.8 * K, 0));
-          aim = center.clone().add(new THREE.Vector3(0, 0.9, 0)).lerp(foeAt, 0.15);
+          shot = center.clone().addScaledVector(dirAt(Math.PI * 0.6 * side), r + (5.2 - push * 1.4) * K).add(new THREE.Vector3(0, 1.6 + 0.7 * K, 0));
+          aim = center.clone().add(new THREE.Vector3(0, 0.9, 0)).addScaledVector(dirAt(Math.PI), r * 0.3);
           fov = FOV - 5 * push;
         } else {
           const mid = center.clone().lerp(foeAt, 0.45);
@@ -2203,7 +2207,7 @@ export class ArenaRenderer {
         if (c.phase === 'charge') {
           const push = smooth((p - 0.5) / 0.4);
           shot = center.clone().addScaledVector(fwd, r + (5.2 - push * 1.2) * K).add(new THREE.Vector3(0, 0.55 + 0.4 * K, 0));
-          aim = center.clone().add(new THREE.Vector3(0, 1.3 + 0.5 * smooth(p / 0.7), 0));
+          aim = center.clone().add(new THREE.Vector3(0, 0.8 + 0.5 * smooth(p / 0.7), 0));
           fov = FOV - 6 * push;
         } else {
           const up = smooth(p / 0.6);
