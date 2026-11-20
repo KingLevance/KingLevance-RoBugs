@@ -225,7 +225,7 @@ The campaign (`src/game/opponents.ts`) is a scrolling map of 19 stops in three z
 
 **Optional bosses** (`optional: true`) sit off the main path, are harder than the stops around them, and pay out signature parts.
 
-**Balance check:** `npm test` plays the whole campaign in order with an auto-built player bug that picks up each stop's rewards. Current win rates for that auto-player: early stops 60–100%, bosses about 50–65%, optional bosses 30–45%, the finale 43%.
+**Balance check:** `npm test` plays the whole campaign in order with an auto-built player bug that picks up each stop's rewards. Current win rates for that auto-player (Nov 2026, after the moves-on-parts retune): the first two stops 70–100%, other regular stops 50–87% (each zone opens a little easier than it ends), bosses 57–67%, optional bosses 33–50%, the finale 43%. Rear-mounted ranged weapons on a kiting bug are very strong for the AI (a Lenswing with a rear stinger won 29 of 30), so opponents avoid them for now.
 
 Each opponent has:
 - `guaranteed: Reward[]` — given **once**, on first clear (parts).
