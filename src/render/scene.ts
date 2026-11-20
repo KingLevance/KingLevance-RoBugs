@@ -121,8 +121,8 @@ const MOVE_PART: Partial<Record<MoveId, { is: (p: PartDef) => boolean; reach: nu
   'hornet-swarm': { is: (p) => p.move === 'hornet-swarm', reach: 0 },
   'quake-stomp': { is: (p) => p.category === 'thorax', reach: 0 },
 };
-/** Sim effects (by colour) that a move draws its own way here: Ink Cloud's smog, Quake Stomp's shockwave. */
-const OWN_FX = new Set(['#4A4560', '#D9813B']);
+/** Sim effects (by colour) that a move draws its own way here: Ink Cloud's smog, Quake Stomp's shockwave, Rally Pulse's ring. */
+const OWN_FX = new Set(['#4A4560', '#D9813B', '#FFD23F']);
 /** Ultimates whose charge gathers around the body (no orb at a weapon). */
 const BODY_ULT: MoveId[] = ['carapace-lock', 'quake-stomp'];
 /** How long Pounce / Dive Bomb leaps last (mirrors the sim's resolveMove). */
@@ -1286,6 +1286,7 @@ export class ArenaRenderer {
       pivot.add(wing);
       g.add(pivot);
     }
+    g.scale.setScalar(1.3);
     g.visible = false;
     this.scene.add(g);
     return g;
