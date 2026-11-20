@@ -32,7 +32,7 @@ export default function RootLayout() {
             contentStyle: { backgroundColor: Colors.bg },
           }}>
           <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="garage" options={{ title: 'Garage' }} />
+          <Stack.Screen name="garage" options={{ headerShown: false }} />
           <Stack.Screen name="campaign" options={{ title: 'Campaign' }} />
           <Stack.Screen name="arena" options={{ headerShown: false, gestureEnabled: false, animation: 'fade' }} />
           <Stack.Screen name="rewards" options={{ headerShown: false, gestureEnabled: false, animation: 'fade' }} />

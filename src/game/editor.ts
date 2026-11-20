@@ -325,3 +325,51 @@ export function flipLayer(placements: Placement[], slot: Slot): { placements: Pl
   if (!canStack(getPart(part.partId).category, getPart(base.partId).category, z)) return null;
   return { placements: placements.map((p) => (p === part ? { ...p, z } : p)), at: { ...slot, z } };
 }
+
+/** A slot a part can go in, with how good a spot it is (0 best · 1 good · 2 possible). */
+export type Candidate = Slot & { score: number; tier: 0 | 1 | 2 };
+
+/**
+ * Every slot where this part could be added (touching the build, or stacked on
+ * a part that takes it), ranked, with tiers for the garage's glowing spots.
+ * On an empty grid every cell is allowed, the middle-front ones first.
+ */
+export function candidateSlots(placements: Placement[], partId: string): Candidate[] {
+  let ranked: (Slot & { score: number })[];
+  if (placements.length === 0) {
+    const best = rankSlots([], partId)[0];
+    ranked = [];
+    for (let y = 0; y < GRID_H; y++)
+      for (let x = 0; x < GRID_W; x++) ranked.push({ x, y, z: 0, score: -Math.hypot(x - best.x, y - best.y) });
+    ranked.sort((a, b) => b.score - a.score);
+  } else {
+    ranked = rankSlots(placements, partId);
+  }
+  if (!ranked.length) return [];
+  const top = ranked[0].score;
+  return ranked.map((s, i) => ({ ...s, tier: i === 0 ? 0 : i < 4 && s.score >= top - 12 ? 1 : 2 }));
+}
+
+/** Add a new part in a given slot (weapons point outward). Null if the slot isn't free or can't take it. */
+export function placeNew(placements: Placement[], partId: string, slot: Slot): Placement[] | null {
+  if (!inGrid(slot.x, slot.y)) return null;
+  if (slot.z) {
+    if (!stackSpot(placements, partId, slot.x, slot.y, slot.z)) return null;
+    return [...placements, { x: slot.x, y: slot.y, z: slot.z, partId }];
+  }
+  if (partAt(placements, slot.x, slot.y, 0)) return null;
+  return [...placements, faceOut(placements, { x: slot.x, y: slot.y, partId })];
+}
+
+/**
+ * Where a part held over a cell would go: a matching candidate on that cell
+ * (stacked layers first when the cell already holds a part that takes it).
+ */
+export function slotOnCell(cands: Candidate[], placements: Placement[], cell: { x: number; y: number }, hitLayer: Layer = 0): Candidate | null {
+  const here = cands.filter((c) => c.x === cell.x && c.y === cell.y);
+  if (!here.length) return null;
+  const exact = here.find((c) => c.z === hitLayer);
+  if (hitLayer !== 0 && exact) return exact;
+  if (partAt(placements, cell.x, cell.y, 0)) return here.find((c) => c.z !== 0) ?? null;
+  return here.find((c) => c.z === 0) ?? here[0];
+}

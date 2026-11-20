@@ -9,7 +9,7 @@ import { GRID_H, GRID_W, pkey, type Layer, type Placement } from '@/game/build';
 import { getPart } from '@/game/parts';
 
 import { createRenderer } from './gl';
-import { adjacentPairs, buildConnector, buildPart, IDLE, seatHeight, setHighlight, stackOffset, toonMaterial, toonMesh, UNDER_LIFT, UNDER_SCALE, type PartModel } from './models';
+import { adjacentPairs, buildConnector, buildPart, IDLE, seatHeight, setGhost, setHighlight, stackOffset, toonMaterial, toonMesh, UNDER_LIFT, UNDER_SCALE, type PartModel } from './models';
 
 const BG = 0x12151a;
 const MIDX = (GRID_W - 1) / 2;
@@ -43,6 +43,11 @@ const parseKey = (k: string): Slot => {
   return { x, y, z: k.endsWith(',top') ? 1 : k.endsWith(',under') ? -1 : 0 };
 };
 export type DragState = { cell: Cell | null; inside: boolean };
+/** A glowing "you can put it here" spot: tier 0 is the best spot, 1 good, 2 possible. */
+export type HintSlot = Slot & { tier: 0 | 1 | 2 };
+
+const HINT_COLORS = [0x3ddc97, 0x3ddc97, 0x9fe8c8] as const;
+const HINT_ALPHA = [0.55, 0.36, 0.16] as const;
 
 export class GarageRenderer {
   private renderer: THREE.WebGLRenderer;
@@ -58,8 +63,14 @@ export class GarageRenderer {
   private lifted = new Set<string>();
   private links: { a: string; b: string; obj: THREE.Group }[] = [];
   /** Green "good spot" tiles for the selected part. */
-  private hints: THREE.Mesh[] = [];
-  private hintMat = new THREE.MeshBasicMaterial({ color: 0x3ddc97, transparent: true, opacity: 0.4, depthWrite: false });
+  private hints: { mesh: THREE.Mesh; tier: 0 | 1 | 2 }[] = [];
+  private hintMats = HINT_COLORS.map((c, i) => new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: HINT_ALPHA[i], depthWrite: false }));
+  /** See-through preview of a part being placed. */
+  private ghost: { partId: string; model: PartModel; slot: Slot | null; ok: boolean } | null = null;
+  /** Rings that burst out where a part was just placed. */
+  private bursts: { mesh: THREE.Mesh; t: number }[] = [];
+  /** Models added after the first build (they pop in). */
+  private loaded = false;
   private hover: THREE.Mesh;
   private selRing: THREE.Mesh;
   /** Bobbing arrow over the selected part. */
@@ -204,6 +215,7 @@ export class GarageRenderer {
       this.bugBox = this.benchBox.slice();
     }
     this.fitDirty = true;
+    this.seen = new Set(placements.map((p) => `${slotKey(p)}:${p.partId}`));
     // Grid parts first (so we know how tall each one is), then stacked parts on top.
     this.baseTop.clear();
     for (const p of [...ground, ...placements.filter((q) => q.z)]) {
@@ -213,13 +225,20 @@ export class GarageRenderer {
         model = buildPart(p.partId, p.z ? 0 : Math.sign(p.x - MIDX), p.y);
         model.root.userData.partId = p.partId;
         model.root.userData.cellKey = k;
+        // Fresh parts pop in (stacked parts are rebuilt every time, so only when new to this slot).
+        if (this.loaded && !this.seen.has(`${k}:${p.partId}`)) model.root.userData.born = this.clock;
         this.bug.add(model.root);
         this.models.set(k, model);
       }
       this.seat(p.x, p.y, (p.z ?? 0) as Layer, model);
       model.root.rotation.y = -(p.r ?? 0) * (Math.PI / 2); // weapon facing
     }
+    this.loaded = true;
+    if (this.ghost) this.placeGhostModel();
   }
+
+  /** Part+slot keys currently on the bug (to tell which models are new). */
+  private seen = new Set<string>();
 
   /** Put a model in its cell and layer: on the grid (raised if something's slung under it), on top, or underneath. */
   private seat(x: number, y: number, z: Layer, model: PartModel) {
@@ -246,21 +265,86 @@ export class GarageRenderer {
     this.stackTest = fn;
   }
 
-  /** Light up recommended slots (best first). Pass [] to clear. Stacked slots glow on top of their base. */
-  setHints(slots: Slot[]) {
+  /** Light up the spots a part can go (best spot brightest). Pass [] to clear. Stacked slots glow on top of their base. */
+  setHints(slots: HintSlot[]) {
     while (this.hints.length < slots.length) {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.05, 0.9), this.hintMat);
-      this.scene.add(m);
-      this.hints.push(m);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.05, 0.9), this.hintMats[2]);
+      this.scene.add(mesh);
+      this.hints.push({ mesh, tier: 2 });
     }
-    this.hints.forEach((m, i) => {
-      m.visible = i < slots.length;
+    this.hints.forEach((h, i) => {
+      h.mesh.visible = i < slots.length;
       if (i >= slots.length) return;
       const s = slots[i];
-      m.position.copy(cellToWorld(s.x, s.y)).setY(this.slotY(s.x, s.y, s.z));
-      m.scale.setScalar(s.z === 1 ? 0.7 : s.z === -1 ? 0.5 : 1);
+      h.tier = s.tier;
+      h.mesh.material = this.hintMats[s.tier];
+      h.mesh.position.copy(cellToWorld(s.x, s.y)).setY(this.slotY(s.x, s.y, s.z) + (s.tier === 0 ? 0.01 : 0));
+      h.mesh.scale.setScalar((s.z === 1 ? 0.7 : s.z === -1 ? 0.5 : 1) * (s.tier === 2 ? 0.8 : 1));
     });
   }
+
+  /**
+   * Show a see-through preview of `partId` in `slot` (null slot hides it but keeps
+   * the model ready). `ok` false tints it red. Pass a null part to remove it.
+   */
+  setGhost(partId: string | null, slot: Slot | null = null, ok = true, r = 0) {
+    if (!partId) {
+      if (this.ghost) this.bug.remove(this.ghost.model.root);
+      this.ghost = null;
+      if (!this.dragging) this.hover.visible = false;
+      return;
+    }
+    if (!this.ghost || this.ghost.partId !== partId) {
+      if (this.ghost) this.bug.remove(this.ghost.model.root);
+      const model = buildPart(partId, slot ? Math.sign(slot.x - MIDX) : 0, slot?.y ?? 0);
+      setGhost(model.root, 0.55);
+      this.bug.add(model.root);
+      this.ghost = { partId, model, slot, ok };
+    }
+    this.ghost.slot = slot;
+    this.ghost.ok = ok;
+    this.ghost.model.root.rotation.y = -r * (Math.PI / 2);
+    this.placeGhostModel();
+  }
+
+  private placeGhostModel() {
+    const g = this.ghost;
+    if (!g) return;
+    g.model.root.visible = !!g.slot && g.ok;
+    if (!this.dragging) {
+      this.hover.visible = !!g.slot && !g.ok;
+      if (g.slot && !g.ok) {
+        (this.hover.material as THREE.MeshBasicMaterial).color.set(0xff5d5d);
+        this.hover.scale.setScalar(1);
+        this.hover.position.copy(cellToWorld(g.slot.x, g.slot.y)).setY(0.05);
+      }
+    }
+    if (!g.slot) return;
+    const { x, y, z } = g.slot;
+    g.model.root.position.copy(cellToWorld(x, y));
+    g.model.root.scale.setScalar(z === -1 ? UNDER_SCALE : 1);
+    g.model.root.position.y =
+      z === 1 ? stackOffset(g.model, this.baseTop.get(slotKey({ x, y })) ?? 0.9) : z === -1 ? 0.02 : this.lifted.has(slotKey({ x, y })) ? UNDER_LIFT : 0;
+    g.model.root.userData.baseY = g.model.root.position.y;
+  }
+
+  /** A ring bursts out of a slot (just placed something there). */
+  burst(slot: Slot, color = 0x3ddc97) {
+    const mesh = new THREE.Mesh(
+      new THREE.RingGeometry(0.42, 0.56, 28),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.copy(cellToWorld(slot.x, slot.y)).setY(this.slotY(slot.x, slot.y, slot.z) + 0.03);
+    this.scene.add(mesh);
+    this.bursts.push({ mesh, t: 0 });
+  }
+
+  /** Fade out the part in this slot (it's been lifted to move it). */
+  setLifted(slot: Slot | null) {
+    this.lifted_ = slot ? slotKey(slot) : null;
+  }
+  private lifted_: string | null = null;
 
   setSelected(slot: Slot | null) {
     this.selected = slot ? slotKey(slot) : null;
@@ -336,9 +420,41 @@ export class GarageRenderer {
         m.root.userData.hl = sel;
       }
       m.tint(this.selected && !sel ? 0.65 : 1, false, sel ? 0.2 + Math.sin(t * 6) * 0.1 : 0);
+      m.root.visible = k !== this.lifted_;
+      // Pop in: overshoot, then settle.
+      const born = m.root.userData.born as number | undefined;
+      if (born !== undefined && this.dragging?.key !== k) {
+        const a = (t - born) / 0.35;
+        const base = k.endsWith(',under') ? UNDER_SCALE : 1;
+        if (a >= 1) {
+          m.root.scale.setScalar(base);
+          delete m.root.userData.born;
+        } else {
+          m.root.scale.setScalar(base * (a < 0.6 ? 0.4 + (a / 0.6) * 0.8 : 1.2 - ((a - 0.6) / 0.4) * 0.2));
+        }
+      }
     }
 
-    this.hintMat.opacity = 0.32 + Math.sin(t * 4) * 0.14;
+    this.hintMats[0].opacity = 0.45 + Math.sin(t * 5) * 0.2;
+    this.hintMats[1].opacity = 0.3 + Math.sin(t * 4) * 0.08;
+    for (const h of this.hints) if (h.tier === 0 && h.mesh.visible) h.mesh.scale.x = h.mesh.scale.z = (h.mesh.scale.y = 1) * (1 + Math.sin(t * 5) * 0.04);
+    if (this.ghost?.slot) {
+      const r = this.ghost.model.root;
+      r.position.y = (r.userData.baseY as number) + 0.14 + Math.sin(t * 6) * 0.06;
+      this.ghost.model.animate({ t, ...IDLE });
+      this.ghost.model.tint(1, false, 0.35);
+    }
+    for (const b of this.bursts) {
+      b.t += dt;
+      const k = b.t / 0.45;
+      b.mesh.scale.setScalar(1 + k * 1.4);
+      (b.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.9 * (1 - k));
+      if (k >= 1) {
+        this.scene.remove(b.mesh);
+        b.mesh.geometry.dispose();
+      }
+    }
+    this.bursts = this.bursts.filter((b) => b.t < 0.45);
     const held = this.dragging?.key;
     for (const l of this.links) l.obj.visible = l.a !== held && l.b !== held;
     if (this.dragging) {

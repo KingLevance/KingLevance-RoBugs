@@ -1,7 +1,8 @@
 import { GLView, type ExpoWebGLRenderingContext } from 'expo-gl';
 import { router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,263 +13,171 @@ import {
   type GestureResponderEvent,
   type HostInstance,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { sfx, useMusic } from '@/audio/audio';
+import { FILTERS, PartsTab, type BinDrag, type FilterId } from '@/components/garage/parts-tab';
+import { buildChecks, Inspector, MovesTab, SavedTab, spareMoves, StatsTab, type InspectorAction } from '@/components/garage/panels';
 import { PartCell } from '@/components/part-cell';
-import { Button, Meter, Panel } from '@/components/ui';
+import { Button } from '@/components/ui';
 import { Colors, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
+import { availableFor, bugReady, computeStats, FACING_NAMES, facingsFor, fitToParts, MAX_MASS, resolve, shortParts, usage, type Placement } from '@/game/build';
 import {
-  availableFor,
-  bugReady,
-  computeStats,
-  connectedKeys,
-  FACING_NAMES,
-  facingsFor,
-  fitToParts,
-  MAX_MASS,
-  resolve,
-  shortParts,
-  usage,
-  validateBuild,
-  type BugStats,
-  type Placement,
-} from '@/game/build';
-import { autoBuild, autoPlace, dropLayer, flipLayer, movePart, partAt, rankSlots, removeAt, rotatePart, sameSlot, type Slot } from '@/game/editor';
-import { GROUPS, GUIDE } from '@/game/guide';
-import { getMove, movesOf, procChance } from '@/game/moves';
-import { getPart, PARTS, RARITY_COLOR, type Category, type PartDef } from '@/game/parts';
-import { CRIT, dodgeCooldown, maxPoise, reflex } from '@/game/sim';
+  autoBuild,
+  candidateSlots,
+  dropLayer,
+  flipLayer,
+  movePart,
+  partAt,
+  placeNew,
+  removeAt,
+  rotatePart,
+  sameSlot,
+  slotOnCell,
+  type Candidate,
+  type Slot,
+} from '@/game/editor';
+import { movesOf } from '@/game/moves';
+import { getPart } from '@/game/parts';
 import { GarageRenderer, type Cell, type ViewName } from '@/render/garage-scene';
 import { MAX_BUGS, MAX_SAVED, useGame } from '@/state/game-store';
 
-const CATALOG_ORDER = new Map(PARTS.map((p, i) => [p.id, i]));
 const DRAG_SLOP = 8;
-const VIEW_BUTTONS: [ViewName, string][] = [
+const VIEWS: [ViewName, string][] = [
   ['angle', 'Angle'],
   ['top', 'Top'],
   ['side', 'Side'],
   ['front', 'Front'],
 ];
+const UNDO_STEPS = 40;
+type Tab = 'parts' | 'moves' | 'stats' | 'saved';
 
-function PartDetails({ part, onRemove }: { part: PartDef; onRemove: () => void }) {
-  const lines: string[] = [`HP ${part.hp}`, `Mass ${part.mass}`];
-  lines.push(part.power < 0 ? `Supplies ${-part.power} power` : `Power ${part.power}`);
-  if (part.thrust) lines.push(`Thrust ${part.thrust}`);
-  if (part.grip) lines.push(`Grip +${part.grip}`);
-  if (part.lift) lines.push(`Lift ${part.lift}`);
-  if (part.weapon) {
-    const w = part.weapon;
-    lines.push(`Dmg ${w.damage} / ${w.cooldown}s`, `Reach ${w.range}`);
-    if (w.ramBonus) lines.push('Ram bonus');
-  }
-  const g = GUIDE[part.category];
-  return (
-    <View style={{ gap: Spacing.sm }}>
-      <View style={styles.detailRow}>
-        <PartCell part={part} size={52} />
-        <View style={{ flex: 1, gap: 2 }}>
-          <Text style={[styles.partName, { color: RARITY_COLOR[part.rarity] }]}>{part.name}</Text>
-          <Text style={styles.dim}>
-            {g.label} · <Text style={{ color: RARITY_COLOR[part.rarity], fontWeight: '700' }}>{part.rarity}</Text>
-          </Text>
-        </View>
-        <Button label="Remove" variant="danger" onPress={onRemove} />
-      </View>
-      <Text style={styles.guideLine}>
-        <Text style={styles.guideKey}>WHAT IT DOES  </Text>
-        {g.does}
-      </Text>
-      {part.move && (
-        <Text style={styles.guideLine}>
-          <Text style={[styles.guideKey, { color: getMove(part.move).color }]}>★ CARRIES {getMove(part.move).name.toUpperCase()}  </Text>
-          {getMove(part.move).description}
-        </Text>
-      )}
-      <Text style={styles.guideLine}>
-        <Text style={[styles.guideKey, { color: Colors.good }]}>WHERE IT GOES  </Text>
-        {g.where} Green tiles on the grid show good spots.
-      </Text>
-      <Text style={styles.statsLine}>{lines.join('  ·  ')}</Text>
-    </View>
-  );
-}
+/** A part in your hand: new from the bin, or lifted off the bug (`from`). */
+type Held = { partId: string; from?: Slot };
 
-type Check = { label: string; short: string; ok: boolean; optional?: boolean };
-
-/** The things a bug needs, as ticks: clearer than a list of errors. */
-function buildChecks(placements: Placement[], stats: BugStats): Check[] {
-  const parts = resolve(placements);
-  const count = (c: Category) => parts.filter((p) => p.part.category === c).length;
-  const linked = connectedKeys(parts).size === parts.length;
-  const weapons = parts.filter((p) => p.part.weapon).length;
-  return [
-    { label: count('head') > 1 ? 'Only 1 head' : 'Head', short: count('head') > 1 ? 'Only 1 head' : 'A head', ok: count('head') === 1 },
-    { label: 'Middle body (thorax)', short: 'A thorax', ok: count('thorax') >= 1 },
-    { label: 'Power core', short: 'A power core', ok: count('core') >= 1 },
-    { label: 'Legs or wings', short: 'Legs or wings', ok: stats.thrust > 0 },
-    { label: 'All parts touching', short: 'All parts touching', ok: linked },
-    { label: `Power ${stats.powerDraw}/${stats.powerSupply}`, short: `Less power (${stats.powerDraw}/${stats.powerSupply})`, ok: stats.powerDraw <= stats.powerSupply },
-    { label: `Weight ${stats.mass}/${MAX_MASS}`, short: `Less weight (${stats.mass}/${MAX_MASS})`, ok: stats.mass <= MAX_MASS },
-    { label: 'A weapon', short: 'A weapon', ok: weapons > 0, optional: true },
-    { label: 'Even legs', short: 'Even legs', ok: Math.abs(stats.thrustBias) <= 0.05, optional: true },
-  ];
-}
-
-function Checklist({ items }: { items: Check[] }) {
-  return (
-    <View style={styles.checklist}>
-      {items.map((it) => {
-        const color = it.ok ? Colors.good : it.optional ? Colors.accent : Colors.bad;
-        return (
-          <View key={it.label} style={[styles.check, { borderColor: color }]}>
-            <Text style={[styles.checkText, { color }]}>
-              {it.ok ? '✓' : it.optional ? '!' : '✗'} {it.label}
-            </Text>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
+/** What the current finger on the 3D editor is doing. */
 type Touch = {
   startX: number;
   startY: number;
   lastX: number;
   lastY: number;
-  /** Part under the finger at touch start; null means the touch spins the view. */
+  mode: 'orbit' | 'part' | 'held';
+  /** Part under the finger at touch start ('part' mode). */
   cell: Slot | null;
   dragging: boolean;
   last: { cell: Cell | null; inside: boolean };
+  /** Where the held part would go now ('held' mode). */
+  target: Candidate | null;
 };
 
-const UNDO_STEPS = 40;
-type Snapshot = { placements: Placement[] };
-/** Same parts (in any order) and the same moves. */
-function sameLoadout(b: Snapshot, placements: Placement[]) {
-  const key = (ps: Placement[]) => ps.map((p) => `${p.partId}@${p.x},${p.y},${p.z ?? 0},${p.r ?? 0}`).sort().join('|');
-  return key(b.placements) === key(placements);
-}
+const loadoutKey = (ps: Placement[]) =>
+  ps
+    .map((p) => `${p.partId}@${p.x},${p.y},${p.z ?? 0},${p.r ?? 0}`)
+    .sort()
+    .join('|');
 
 export default function Garage() {
   const game = useGame();
   useMusic('garage');
+  const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const [selected, setSelected] = useState<Slot | null>(null);
+  const [held, setHeld] = useState<Held | null>(null);
+  const [tab, setTab] = useState<Tab>('parts');
+  const [filter, setFilter] = useState<FilterId>('all');
   const [toast, setToast] = useState<string | null>(null);
+  const [view, setView] = useState(0);
+  const [menu, setMenu] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  /** Saved build waiting for a second tap to delete it. */
   const [confirmSaved, setConfirmSaved] = useState<number | null>(null);
-  /** Undo history for the bug being edited (cleared when you switch, add or scrap bugs). */
-  const [history, setHistory] = useState<{ bug: number; stack: Snapshot[] }>({ bug: -1, stack: [] });
+  /** Undo/redo for the bug being edited (cleared when you switch, add or scrap bugs). */
+  const [history, setHistory] = useState<{ bug: number; undo: Placement[][]; redo: Placement[][] }>({ bug: -1, undo: [], redo: [] });
   const [dragHint, setDragHint] = useState<'move' | 'remove' | null>(null);
+  /** A part being dragged out of the bin (follows the finger). */
+  const [binDrag, setBinDrag] = useState<{ partId: string; x: number; y: number; over: boolean } | null>(null);
   const renderer = useRef<GarageRenderer | null>(null);
   const raf = useRef(0);
   const box = useRef({ x: 0, y: 0, w: 1, h: 1 });
   const viewRef = useRef<HostInstance>(null);
   const touch = useRef<Touch | null>(null);
+  const binTarget = useRef<Candidate | null>(null);
+  const binId = useRef<string | null>(null);
 
   const placements = game.build.placements;
-  const undoStack = history.bug === game.active ? history.stack : [];
-  /** Remember the current parts + moves so the next change can be undone. */
-  const remember = () =>
-    setHistory({ bug: game.active, stack: [...undoStack, { placements }].slice(-UNDO_STEPS) });
-  const forgetHistory = () => setHistory({ bug: -1, stack: [] });
+  const mine = history.bug === game.active ? history : { bug: game.active, undo: [], redo: [] };
+  const forgetHistory = () => setHistory({ bug: -1, undo: [], redo: [] });
+
   /** Apply an edit to the build with a click: snap on, pop off, or turn. */
   const edit = (next: Placement[]) => {
-    if (JSON.stringify(next) === JSON.stringify(placements)) return;
-    remember();
+    if (loadoutKey(next) === loadoutKey(placements)) return;
+    setHistory({ bug: game.active, undo: [...mine.undo, placements].slice(-UNDO_STEPS), redo: [] });
     sfx(next.length < placements.length ? 'unsnap' : 'snap', { rate: next.length === placements.length ? 1.25 : 1 });
     game.setPlacements(next);
   };
   const undo = () => {
-    const last = undoStack[undoStack.length - 1];
+    const last = mine.undo[mine.undo.length - 1];
     if (!last) return;
-    setHistory({ bug: game.active, stack: undoStack.slice(0, -1) });
+    setHistory({ bug: game.active, undo: mine.undo.slice(0, -1), redo: [...mine.redo, placements] });
     sfx('unsnap', { rate: 0.85 });
-    game.setLoadout(last.placements);
+    game.setLoadout(last);
     setSelected(null);
-    setToast(undoStack.length > 1 ? `Undone · ${undoStack.length - 1} more step${undoStack.length > 2 ? 's' : ''} back` : 'Undone');
+    setHeld(null);
   };
-  const saveCurrent = () => {
-    if (!placements.length) {
-      setToast('Nothing to save yet: add some parts first');
-      return;
-    }
-    const base = game.build.name || 'Build';
-    const taken = new Set(game.saved.map((b) => b.name));
-    let name = base;
-    for (let k = 2; taken.has(name); k++) name = `${base} ${k}`;
-    if (!game.saved.some((b) => sameLoadout(b, placements)) && !game.saveBuild(name)) {
-      setToast(`Saved builds are full (${MAX_SAVED}). Remove one below first.`);
-      return;
-    }
-    sfx('star', { gap: 0 });
-    setToast(`Saved "${name}" · load it from Saved builds below`);
-  };
-  const loadSaved = (i: number) => {
-    const b = game.saved[i];
-    if (!b) return;
-    remember();
-    sfx('snap', { gap: 0 });
-    // Only parts this bug can have: anything your other bugs are using stays on them.
-    const { kept, dropped } = fitToParts(b.placements, availableFor(game.inventory, game.bugs, game.active));
-    game.setLoadout(kept);
+  const redo = () => {
+    const next = mine.redo[mine.redo.length - 1];
+    if (!next) return;
+    setHistory({ bug: game.active, undo: [...mine.undo, placements], redo: mine.redo.slice(0, -1) });
+    sfx('snap', { rate: 1.1 });
+    game.setLoadout(next);
     setSelected(null);
-    setConfirmSaved(null);
-    setToast(dropped ? `Loaded "${b.name}" minus ${dropped} part${dropped > 1 ? 's' : ''} your other bugs are using` : `Loaded "${b.name}" · ↶ to go back`);
+    setHeld(null);
   };
+
   const used = usage(placements);
-  /** The moves this bug's parts carry. */
-  const bugMoves = movesOf(placements.map((p) => getPart(p.partId)));
   /** Parts this bug may use: what you own minus what your other bugs use. */
   const avail = availableFor(game.inventory, game.bugs, game.active);
+  const free = (id: string) => Math.max(0, (avail[id] ?? 0) - (used[id] ?? 0));
+  const onOthers = (id: string) => (game.inventory[id] ?? 0) - Math.max(0, avail[id] ?? 0);
   const short = shortParts(game.inventory, game.bugs, game.active);
   const holder = (id: string) => game.bugs.find((b, i) => i !== game.active && b.placements.some((p) => p.partId === id))?.name || 'another bug';
-  const stats = computeStats(resolve(placements));
-  const errors = validateBuild(placements);
-  /** This bug is your lead, so it has first claim on shared parts: only its own build can block it. */
-  const blocked = errors.length > 0;
   const sharedWith = [...new Set(Object.keys(short).map(holder))];
+  const stats = computeStats(resolve(placements));
   const checks = buildChecks(placements, stats);
   // The power line is redundant while there's no core at all (adding one fixes both).
   const noCore = !checks[2].ok;
   const missing = checks.filter((c) => !c.ok && !c.optional && !(noCore && c.short.startsWith('Less power')));
   const tips = checks.filter((c) => !c.ok && c.optional);
+  const needs = [...new Set(missing.map((c) => c.filter).filter((f): f is FilterId => !!f && FILTERS.some((x) => x.id === f)))];
+  const bugMoves = movesOf(placements.map((p) => getPart(p.partId)));
+
   const editorW = Math.min(width, MaxContentWidth);
-  const editorH = Math.min(editorW * 1.05, height * 0.44);
+  const editorH = Math.round(Math.max(230, Math.min(editorW * 0.95, (height - insets.top) * 0.43)));
   const selPart = selected ? partAt(placements, selected.x, selected.y, selected.z) : undefined;
-  const binW = Math.floor((editorW - Spacing.lg * 2 - Spacing.sm * 3) / 4);
 
-  const owned = Object.entries(game.inventory)
-    .filter(([, n]) => n > 0)
-    .sort(([a], [b]) => (CATALOG_ORDER.get(a) ?? 0) - (CATALOG_ORDER.get(b) ?? 0));
+  /** Where the held part can go. Moving a part: the build without it. */
+  const heldBase = held?.from ? removeAt(placements, held.from) : placements;
+  const cands: Candidate[] = held
+    ? candidateSlots(heldBase, held.partId).filter((c) => !held.from || !(c.x === held.from.x && c.y === held.from.y && c.z === held.from.z))
+        .map((c, i) => (i === 0 ? { ...c, tier: 0 as const } : c))
+    : [];
+  const heldPartId = held?.partId ?? null;
 
+  // --- renderer sync
   useEffect(() => {
     renderer.current?.setPlacements(placements);
   }, [placements]);
-
   useEffect(() => {
-    renderer.current?.setSelected(selPart ? selected : null);
-  }, [selected, selPart]);
-
-  // Light up the best slots for the selected part (as if it were lifted off the bug).
+    renderer.current?.setSelected(selPart && !held ? selected : null);
+  }, [selected, selPart, held]);
   useEffect(() => {
     const r = renderer.current;
     if (!r) return;
-    if (!selected || !selPart) {
-      r.setHints([]);
-      return;
-    }
-    const others = selected.z ? removeAt(placements, selected) : placements.filter((p) => p !== selPart);
-    r.setHints(
-      rankSlots(others, selPart.partId)
-        .slice(0, 3)
-        .filter((c) => !sameSlot(c, selected)),
-    );
-  }, [selected, selPart, placements]);
-
-  // While dragging, tell the renderer which layer a drop on a cell would land in.
+    r.setHints(held ? cands : []);
+    r.setLifted(held?.from ?? null);
+    r.setGhost(heldPartId, held ? (cands[0] ?? null) : null);
+    // (cands is derived from held + placements)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [held, placements]);
   useEffect(() => {
     renderer.current?.setStackTest((cell) => {
       const t = touch.current;
@@ -284,13 +193,11 @@ export default function Garage() {
       ) ?? 0;
     });
   }, [placements]);
-
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 2200);
+    const t = setTimeout(() => setToast(null), 2300);
     return () => clearTimeout(t);
   }, [toast]);
-
   useEffect(
     () => () => {
       cancelAnimationFrame(raf.current);
@@ -318,25 +225,143 @@ export default function Garage() {
       box.current = { x, y, w: w || 1, h: h || 1 };
     });
   }
+  const toNorm = (pageX: number, pageY: number) => ({ nx: (pageX - box.current.x) / box.current.w, ny: (pageY - box.current.y) / box.current.h });
+  const insideEditor = (pageX: number, pageY: number) => {
+    const { nx, ny } = toNorm(pageX, pageY);
+    return nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1;
+  };
 
-  const norm = (e: GestureResponderEvent) => ({
-    nx: (e.nativeEvent.pageX - box.current.x) / box.current.w,
-    ny: (e.nativeEvent.pageY - box.current.y) / box.current.h,
-  });
+  /** The slot under a screen point for the held part (null if it can't go there). */
+  function heldSlotAt(nx: number, ny: number, list: Candidate[], base: Placement[]): Candidate | null {
+    const hit = renderer.current?.pick(nx, ny).cell;
+    if (!hit) return null;
+    return slotOnCell(list, base, hit, hit.z);
+  }
 
+  // --- placing
+  function pickUp(partId: string) {
+    if (free(partId) <= 0) {
+      const part = getPart(partId);
+      setToast(onOthers(partId) > 0 ? `No ${part.name} spare: ${holder(partId)} is using it` : `All your ${part.name} are on the bug`);
+      return;
+    }
+    if (held && !held.from && held.partId === partId) {
+      setHeld(null);
+      return;
+    }
+    sfx('tap', { rate: 1.2 });
+    setSelected(null);
+    setHeld({ partId });
+    if (!candidateSlots(placements, partId).length) setToast('No free spot touching the bug');
+  }
+
+  function placeAt(slot: Candidate | null, h: Held | null = held) {
+    if (!h) return;
+    if (!slot) {
+      setToast('Pick a glowing spot');
+      return;
+    }
+    const part = getPart(h.partId);
+    if (h.from) {
+      const res = movePart(placements, h.from, slot);
+      if (!res) {
+        setToast("Can't move it there");
+        return;
+      }
+      edit(res.placements);
+      setHeld(null);
+      setSelected(res.at);
+      renderer.current?.burst(res.at);
+      return;
+    }
+    const next = placeNew(placements, h.partId, slot);
+    if (!next) {
+      setToast("Can't put it there");
+      return;
+    }
+    edit(next);
+    renderer.current?.burst(slot);
+    setHeld(null);
+    setSelected({ x: slot.x, y: slot.y, z: slot.z });
+    setToast(
+      slot.z === 1
+        ? `${part.name} stacked on top`
+        : slot.z === -1
+          ? `${part.name} slung underneath, safe from weapons`
+          : `${part.name} attached`,
+    );
+  }
+
+  // --- bin drag (press-and-hold a card, drag it onto the bug)
+  const drag: BinDrag = {
+    start: (partId, x, y) => {
+      measure();
+      // (Don't switch the drawer to the inspector mid-drag: the card holding the touch must stay mounted.)
+      setSelected(null);
+      setHeld(null);
+      binTarget.current = null;
+      const list = candidateSlots(placements, partId);
+      renderer.current?.setHints(list);
+      renderer.current?.setGhost(partId, list[0] ?? null);
+      binId.current = partId;
+      setBinDrag({ partId, x, y, over: false });
+    },
+    move: (x, y) => {
+      const over = insideEditor(x, y);
+      setBinDrag((d) => (d ? { ...d, x, y, over } : d));
+      const id = binId.current;
+      if (!id) return;
+      const list = candidateSlots(placements, id);
+      const { nx, ny } = toNorm(x, y);
+      const slot = over ? heldSlotAt(nx, ny, list, placements) : null;
+      binTarget.current = slot;
+      const r = renderer.current;
+      if (!r) return;
+      if (over) {
+        const hit = r.pick(nx, ny).cell;
+        r.setGhost(id, slot ?? (hit ? { ...hit } : null), !!slot);
+      } else {
+        r.setGhost(id, list[0] ?? null);
+      }
+    },
+    end: (x, y) => {
+      const id = binId.current;
+      binId.current = null;
+      setBinDrag(null);
+      if (!id) return;
+      const slot = insideEditor(x, y) ? binTarget.current : null;
+      if (slot) placeAt(slot, { partId: id });
+      else {
+        // Missed (or dropped back on the drawer): keep holding it, so a tap on a spot places it.
+        if (insideEditor(x, y)) setToast('Drop it on a glowing spot');
+        setHeld({ partId: id });
+        renderer.current?.setGhost(id, candidateSlots(placements, id)[0] ?? null);
+      }
+    },
+    cancel: () => {
+      binId.current = null;
+      setBinDrag(null);
+      renderer.current?.setHints([]);
+      renderer.current?.setGhost(null);
+    },
+  };
+
+  // --- editor touches
   function onGrant(e: GestureResponderEvent) {
-    const { nx, ny } = norm(e);
     measure();
-    const cell = renderer.current?.pick(nx, ny).cell ?? null;
-    touch.current = {
-      startX: e.nativeEvent.pageX,
-      startY: e.nativeEvent.pageY,
-      lastX: e.nativeEvent.pageX,
-      lastY: e.nativeEvent.pageY,
-      cell: cell && partAt(placements, cell.x, cell.y, cell.z) ? cell : null,
-      dragging: false,
-      last: { cell, inside: !!cell },
-    };
+    const { pageX, pageY } = e.nativeEvent;
+    const { nx, ny } = toNorm(pageX, pageY);
+    const hit = renderer.current?.pick(nx, ny).cell ?? null;
+    let mode: Touch['mode'] = 'orbit';
+    let target: Candidate | null = null;
+    if (held) {
+      target = hit ? slotOnCell(cands, heldBase, hit, hit.z) : null;
+      if (target) mode = 'held';
+    }
+    const onPart = hit && partAt(placements, hit.x, hit.y, hit.z) ? hit : null;
+    if (mode === 'orbit' && onPart && !held) mode = 'part';
+    touch.current = { startX: pageX, startY: pageY, lastX: pageX, lastY: pageY, mode, cell: onPart, dragging: false, last: { cell: hit, inside: !!hit }, target };
+    if (mode === 'held') renderer.current?.setGhost(held!.partId, target, true);
   }
 
   function onMove(e: GestureResponderEvent) {
@@ -344,21 +369,30 @@ export default function Garage() {
     const r = renderer.current;
     if (!t || !r) return;
     const { pageX, pageY } = e.nativeEvent;
-    if (!t.cell) {
-      // Empty space: spin the view.
+    const far = Math.hypot(pageX - t.startX, pageY - t.startY) >= DRAG_SLOP;
+    if (t.mode === 'orbit') {
       r.orbit(pageX - t.lastX, pageY - t.lastY);
       t.lastX = pageX;
       t.lastY = pageY;
-      if (Math.hypot(pageX - t.startX, pageY - t.startY) >= DRAG_SLOP) t.dragging = true;
+      if (far) t.dragging = true;
       return;
     }
-    if (!t.dragging) {
-      const moved = Math.hypot(pageX - t.startX, pageY - t.startY);
-      if (moved < DRAG_SLOP) return;
-      t.dragging = r.startDrag(t.cell);
-      setSelected(t.cell);
+    const { nx, ny } = toNorm(pageX, pageY);
+    if (t.mode === 'held') {
+      if (far) t.dragging = true;
+      t.target = heldSlotAt(nx, ny, cands, heldBase);
+      const hit = r.pick(nx, ny).cell;
+      r.setGhost(held!.partId, t.target ?? (hit ? { ...hit } : null), !!t.target);
+      return;
     }
-    const { nx, ny } = norm(e);
+    // Dragging a part already on the bug.
+    if (!t.dragging) {
+      if (!far) return;
+      t.dragging = r.startDrag(t.cell!);
+      setSelected(t.cell);
+      const moving = partAt(placements, t.cell!.x, t.cell!.y, t.cell!.z);
+      if (moving) r.setHints(candidateSlots(removeAt(placements, t.cell!), moving.partId).map((c) => ({ ...c, tier: c.tier === 0 ? 1 : c.tier })));
+    }
     t.last = r.dragTo(nx, ny);
     setDragHint(t.last.inside ? 'move' : 'remove');
   }
@@ -368,14 +402,31 @@ export default function Garage() {
     touch.current = null;
     setDragHint(null);
     if (!t) return;
-    if (!t.cell && t.dragging) return; // finished spinning the view
-    if (!t.dragging) {
-      // Tap: select / deselect a part.
-      const same = t.cell && selected && sameSlot(t.cell, selected);
-      setSelected(t.cell && !same ? t.cell : null);
+    if (t.mode === 'held') {
+      if (t.target) placeAt(t.target);
+      else {
+        setToast('Pick a glowing spot');
+        renderer.current?.setGhost(heldPartId, cands[0] ?? null);
+      }
       return;
     }
-    renderer.current?.endDrag();
+    if (t.mode === 'orbit') {
+      if (!t.dragging) {
+        // Tap on empty space: let go of whatever's selected.
+        if (selected) setSelected(null);
+        else if (held) setToast('Tap a glowing spot to place it, or ✕ to put it back');
+      }
+      return;
+    }
+    if (!t.dragging) {
+      const same = t.cell && selected && sameSlot(t.cell, selected);
+      setSelected(t.cell && !same ? t.cell : null);
+      if (t.cell && !same) sfx('tap');
+      return;
+    }
+    const r = renderer.current;
+    r?.endDrag();
+    r?.setHints([]);
     const from = t.cell!;
     const moving = partAt(placements, from.x, from.y, from.z);
     if (t.last.inside && t.last.cell) {
@@ -386,6 +437,7 @@ export default function Garage() {
       }
       edit(res.placements);
       setSelected(res.at);
+      if (!sameSlot(res.at, from)) r?.burst(res.at);
       if (res.at.z && moving) setToast(`${getPart(moving.partId).name} ${res.at.z === 1 ? 'stacked on top' : 'slung underneath'}`);
     } else {
       edit(removeAt(placements, from));
@@ -394,30 +446,18 @@ export default function Garage() {
     }
   }
 
-  function addPart(id: string) {
-    const free = (avail[id] ?? 0) - (used[id] ?? 0);
-    const part = getPart(id);
-    if (free <= 0) {
-      const elsewhere = (game.inventory[id] ?? 0) - Math.max(0, avail[id] ?? 0);
-      setToast(elsewhere > 0 ? `No ${part.name} left: ${holder(id)} is using it` : `All your ${part.name} are already on the bug`);
-      return;
-    }
-    const spot = autoPlace(placements, id);
-    if (!spot) {
-      setToast('No free slot touching the bug');
-      return;
-    }
-    edit([...placements, spot]);
-    setSelected({ x: spot.x, y: spot.y, z: spot.z ?? 0 });
-    setToast(
-      spot.z === 1
-        ? `${part.name} stacked on top. Drag it to move it.`
-        : spot.z === -1
-          ? `${part.name} slung underneath, safe from weapons. Drag it to move it.`
-          : `${part.name} attached. Drag it to move it.`,
-    );
+  // --- selected part actions
+  function removeSelected() {
+    if (!selected || !selPart) return;
+    edit(removeAt(placements, selected));
+    setToast(`${getPart(selPart.partId).name} back in the bin`);
+    setSelected(null);
   }
-
+  function rotateSelected() {
+    if (!selected) return;
+    const next = rotatePart(placements, selected);
+    if (next) edit(next);
+  }
   function flipSelected() {
     if (!selected) return;
     const res = flipLayer(placements, selected);
@@ -428,105 +468,190 @@ export default function Garage() {
     edit(res.placements);
     setSelected(res.at);
   }
-
-  function rotateSelected() {
-    if (!selected) return;
-    const next = rotatePart(placements, selected);
-    if (!next) return;
-    edit(next); // (the selected chip shows the new facing)
-  }
-
-  function removeSelected() {
-    if (!selected || !selPart) return;
-    edit(removeAt(placements, selected));
-    setToast(`${getPart(selPart.partId).name} back in the bin`);
+  function autoBuildNow() {
+    // Only from parts your other bugs aren't using.
+    edit(autoBuild(Object.fromEntries(Object.entries(avail).map(([id, n]) => [id, Math.max(0, n)]))));
     setSelected(null);
+    setHeld(null);
+    setToast('Built from your best spare parts. Tweak away!');
   }
+
+  // --- saved builds
+  const saveCurrent = () => {
+    if (!placements.length) {
+      setToast('Nothing to save yet: add some parts first');
+      return;
+    }
+    const base = game.build.name || 'Build';
+    const taken = new Set(game.saved.map((b) => b.name));
+    let name = base;
+    for (let k = 2; taken.has(name); k++) name = `${base} ${k}`;
+    if (game.saved.some((b) => loadoutKey(b.placements) === loadoutKey(placements))) {
+      setToast('This build is already saved');
+      return;
+    }
+    if (!game.saveBuild(name)) {
+      setToast(`Saved builds are full (${MAX_SAVED}). Delete one first.`);
+      return;
+    }
+    sfx('star', { gap: 0 });
+    setToast(`Saved "${name}"`);
+  };
+  const loadSaved = (i: number) => {
+    const b = game.saved[i];
+    if (!b) return;
+    setHistory({ bug: game.active, undo: [...mine.undo, placements].slice(-UNDO_STEPS), redo: [] });
+    sfx('snap', { gap: 0 });
+    // Only parts this bug can have: anything your other bugs are using stays on them.
+    const { kept, dropped } = fitToParts(b.placements, availableFor(game.inventory, game.bugs, game.active));
+    game.setLoadout(kept);
+    setSelected(null);
+    setHeld(null);
+    setConfirmSaved(null);
+    setToast(dropped ? `Loaded "${b.name}" minus ${dropped} part${dropped > 1 ? 's' : ''} your other bugs are using` : `Loaded "${b.name}" · ↶ to go back`);
+  };
+
+  const switchBug = (i: number) => {
+    game.selectBug(i);
+    setSelected(null);
+    setHeld(null);
+    setConfirmDelete(false);
+    forgetHistory();
+  };
+
+  // --- drawer
+  let drawer: ReactNode;
+  if (held) {
+    const part = getPart(held.partId);
+    const best = cands[0] ?? null;
+    drawer = (
+      <Inspector
+        part={part}
+        title={held.from ? 'MOVING' : `PLACING · ${free(held.partId)} SPARE`}
+        hint={cands.length ? 'Tap a glowing spot on the bug (the brightest is the best fit), or drag the ghost part around.' : 'No free spot touching the bug.'}
+        actions={[
+          ...(best ? [{ label: '✓ Best spot', variant: 'go' as const, onPress: () => placeAt(best) }] : []),
+          { label: 'Cancel', onPress: () => setHeld(null) },
+        ]}
+        onClose={() => setHeld(null)}
+      />
+    );
+  } else if (selected && selPart) {
+    const part = getPart(selPart.partId);
+    const facings = facingsFor(part.category);
+    const actions: InspectorAction[] = [];
+    if (facings.length > 1) actions.push({ label: `↻ Faces ${FACING_NAMES[selPart.r ?? 0]}`, onPress: rotateSelected });
+    if (selected.z !== 0 && part.category === 'core') actions.push({ label: selected.z === -1 ? '⤒ Put on top' : '⤓ Sling under', onPress: flipSelected });
+    actions.push({ label: '✥ Move', onPress: () => setHeld({ partId: selPart.partId, from: selected }) });
+    if (free(part.id) > 0) actions.push({ label: '＋ Add another', onPress: () => pickUp(part.id) });
+    actions.push({ label: 'Remove', variant: 'danger', onPress: removeSelected });
+    drawer = (
+      <Inspector
+        part={part}
+        title={selected.z === 1 ? 'ON YOUR BUG · STACKED ON TOP' : selected.z === -1 ? 'ON YOUR BUG · SLUNG UNDERNEATH' : 'ON YOUR BUG'}
+        actions={actions}
+        onClose={() => setSelected(null)}
+      />
+    );
+  } else if (tab === 'parts') {
+    drawer = (
+      <PartsTab
+        inventory={game.inventory}
+        free={free}
+        onOthers={onOthers}
+        filter={filter}
+        setFilter={setFilter}
+        needs={needs}
+        heldId={heldPartId}
+        width={editorW}
+        onPick={pickUp}
+        drag={drag}
+        scrollEnabled={!binDrag}
+        onAutoBuild={autoBuildNow}
+      />
+    );
+  } else if (tab === 'moves') {
+    drawer = <MovesTab placements={placements} spareMoveParts={spareMoves(placements, free)} onPick={pickUp} />;
+  } else if (tab === 'stats') {
+    drawer = <StatsTab stats={stats} checks={checks} />;
+  } else {
+    drawer = (
+      <SavedTab
+        saved={game.saved}
+        max={MAX_SAVED}
+        isCurrent={(b) => loadoutKey(b.placements) === loadoutKey(placements)}
+        confirm={confirmSaved}
+        onSave={saveCurrent}
+        onLoad={loadSaved}
+        onDelete={(i) => {
+          if (confirmSaved !== i) {
+            setConfirmSaved(i);
+            return;
+          }
+          game.deleteSaved(i);
+          setConfirmSaved(null);
+        }}
+      />
+    );
+  }
+
+  const hint =
+    dragHint === 'remove'
+      ? 'Let go to put it back in the bin'
+      : dragHint === 'move'
+        ? 'Let go to drop it here (swaps if taken)'
+        : (toast ??
+          (held
+            ? 'Tap a glowing spot to place it'
+            : placements.length === 0
+              ? 'Empty bug: tap a part below to add it'
+              : selected
+                ? 'Drag it to move · drag it off the grid to remove'
+                : 'Tap a part · drag to move · drag empty space to spin'));
 
   return (
-    <View style={styles.root}>
-      <View style={[styles.top, { width: editorW }]}>
-        {/* Your bugs: tap to switch, + to add, ⧉ to copy, 🗑 to scrap. */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bugTabs}>
-          {game.bugs.map((b, i) => {
-            const on = i === game.active;
-            const ready = bugReady(game.inventory, game.bugs, i, game.active);
-            const squad = game.squad.includes(i);
-            return (
+    <View style={[styles.root, { paddingTop: insets.top }]}>
+      <View style={[styles.column, { width: editorW }]}>
+        {/* Header: back, your bugs (tap to switch, tap the current one for options), menu. */}
+        <View style={styles.header}>
+          <Pressable accessibilityLabel="Back" onPress={() => router.back()} style={styles.hBtn}>
+            <Text style={styles.hBtnText}>‹</Text>
+          </Pressable>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bugTabs} style={{ flex: 1 }}>
+            {game.bugs.map((b, i) => {
+              const on = i === game.active;
+              const ready = bugReady(game.inventory, game.bugs, i, game.active);
+              return (
+                <Pressable key={i} onPress={() => (on ? setMenu(true) : switchBug(i))} style={[styles.bugTab, on && styles.bugTabOn]}>
+                  <View style={[styles.bugDot, { backgroundColor: ready ? Colors.good : Colors.bad }]} />
+                  <Text style={[styles.bugTabText, on && { color: Colors.bg }]} numberOfLines={1}>
+                    {b.name || 'Unnamed'}
+                  </Text>
+                  {game.squad.includes(i) && <Text style={[styles.bugTag, on && { color: Colors.bg }]}>SQUAD</Text>}
+                  {on && <Text style={[styles.bugTabText, { color: Colors.bg, fontSize: 11 }]}>▾</Text>}
+                </Pressable>
+              );
+            })}
+            {game.bugs.length < MAX_BUGS && (
               <Pressable
-                key={i}
                 onPress={() => {
-                  if (on) return;
-                  game.selectBug(i);
-                  setSelected(null);
-                  setConfirmDelete(false);
+                  game.addBug();
                   forgetHistory();
+                  setSelected(null);
+                  setHeld(null);
+                  setToast('New bug: tap parts below, or Auto-build');
                 }}
-                style={[styles.bugTab, on && styles.bugTabOn]}>
-                <View style={[styles.bugDot, { backgroundColor: ready ? Colors.good : Colors.bad }]} />
-                <Text style={[styles.bugTabText, on && { color: Colors.bg }]} numberOfLines={1}>
-                  {b.name || 'Unnamed'}
-                </Text>
-                {squad && <Text style={[styles.bugTabTag, on && { color: Colors.bg }]}>SQUAD</Text>}
+                style={[styles.bugTab, styles.bugTabAdd]}>
+                <Text style={[styles.bugTabText, { color: Colors.accent }]}>＋</Text>
               </Pressable>
-            );
-          })}
-          {game.bugs.length < MAX_BUGS && (
-            <Pressable
-              onPress={() => {
-                game.addBug();
-                forgetHistory();
-                setSelected(null);
-                setToast('New bug: tap parts in the bin or Auto-build');
-              }}
-              style={[styles.bugTab, styles.bugTabAdd]}>
-              <Text style={[styles.bugTabText, { color: Colors.accent }]}>＋ New bug</Text>
-            </Pressable>
-          )}
-        </ScrollView>
-        <View style={styles.nameRow}>
-          <TextInput
-            value={game.build.name}
-            onChangeText={(t) => game.setBugName(t.slice(0, 18))}
-            style={[styles.nameInput, { flex: 1 }]}
-            placeholder="Name your bug"
-            placeholderTextColor={Colors.textDim}
-          />
-          {game.bugs.length < MAX_BUGS && (
-            <Pressable
-              accessibilityLabel="Copy this bug"
-              onPress={() => {
-                // The copy only gets parts you have spare: parts sit on one bug at a time.
-                const { dropped } = fitToParts(placements, availableFor(game.inventory, [...game.bugs, { placements: [] }], game.bugs.length));
-                game.addBug(game.active);
-                forgetHistory();
-                setSelected(null);
-                setToast(dropped ? `Copied without ${dropped} part${dropped > 1 ? 's' : ''} you don't have spare` : 'Copied. Tweak away!');
-              }}
-              style={styles.iconBtn}>
-              <Text style={styles.iconBtnText}>⧉</Text>
-            </Pressable>
-          )}
-          {game.bugs.length > 1 && (
-            <Pressable
-              accessibilityLabel="Scrap this bug"
-              onPress={() => {
-                if (!confirmDelete) {
-                  setConfirmDelete(true);
-                  return;
-                }
-                game.deleteBug(game.active);
-                setConfirmDelete(false);
-                forgetHistory();
-                setSelected(null);
-              }}
-              style={[styles.iconBtn, confirmDelete && { borderColor: Colors.bad, backgroundColor: '#3A1A1D', paddingHorizontal: 10 }]}>
-              <Text style={[styles.iconBtnText, confirmDelete && { color: Colors.bad, fontSize: 13, fontWeight: '800' }]}>
-                {confirmDelete ? 'Scrap it?' : '🗑'}
-              </Text>
-            </Pressable>
-          )}
+            )}
+          </ScrollView>
+          <Pressable accessibilityLabel="Bug options" onPress={() => setMenu(true)} style={styles.hBtn}>
+            <Text style={[styles.hBtnText, { fontSize: 20 }]}>⋯</Text>
+          </Pressable>
         </View>
+
+        {/* The 3D editor. */}
         <View ref={viewRef} onLayout={measure} style={{ width: editorW, height: editorH }}>
           <GLView
             style={StyleSheet.absoluteFill}
@@ -539,295 +664,232 @@ export default function Garage() {
             onResponderRelease={onRelease}
             onResponderTerminate={onRelease}
           />
-          <View pointerEvents="box-none" style={styles.editorTools}>
+          <View pointerEvents="box-none" style={styles.toolsLeft}>
+            <ToolBtn icon="↶" label="UNDO" disabled={!mine.undo.length} onPress={undo} />
+            <ToolBtn icon="↷" label="REDO" disabled={!mine.redo.length} onPress={redo} />
+          </View>
+          <View pointerEvents="box-none" style={styles.toolsRight}>
             <Pressable
-              accessibilityLabel="Undo"
-              disabled={!undoStack.length}
-              onPress={undo}
-              style={[styles.toolBtn, !undoStack.length && { opacity: 0.35 }]}>
-              <Text style={styles.toolBtnText}>↶</Text>
-              {undoStack.length > 0 && <Text style={styles.toolBtnLabel}>UNDO</Text>}
+              onPress={() => {
+                const v = (view + 1) % VIEWS.length;
+                setView(v);
+                renderer.current?.setView(VIEWS[v][0]);
+              }}
+              style={styles.viewBtn}>
+              <Text style={styles.viewBtnText}>👁 {VIEWS[view][1]}</Text>
             </Pressable>
-            <Pressable accessibilityLabel="Save this build" onPress={saveCurrent} style={styles.toolBtn}>
-              <Text style={styles.toolBtnText}>💾</Text>
-              <Text style={styles.toolBtnLabel}>SAVE</Text>
-            </Pressable>
+            <MiniMeter label="⚡" value={stats.powerDraw} max={Math.max(1, stats.powerSupply)} bad={stats.powerDraw > stats.powerSupply} />
+            <MiniMeter label="⚖" value={stats.mass} max={MAX_MASS} bad={stats.mass > MAX_MASS} />
           </View>
-          <View pointerEvents="box-none" style={styles.editorOverlay}>
-            <View style={styles.views} pointerEvents="box-none">
-              {VIEW_BUTTONS.map(([name, label]) => (
-                <Pressable key={name} onPress={() => renderer.current?.setView(name)} style={styles.viewBtn}>
-                  <Text style={styles.viewBtnText}>{label}</Text>
-                </Pressable>
-              ))}
+          <View pointerEvents="none" style={styles.hintWrap}>
+            <Text style={[styles.hint, dragHint === 'remove' && { color: Colors.bad }, held && !toast && { color: Colors.good }]}>{hint}</Text>
+          </View>
+          {placements.length === 0 && !held && (
+            <View pointerEvents="box-none" style={styles.emptyWrap}>
+              <Button label="⚡ Auto-build" onPress={autoBuildNow} />
             </View>
-            {selPart && !dragHint && !toast ? (
-              <View style={styles.selChip}>
-                <PartCell part={getPart(selPart.partId)} size={34} />
-                <View style={{ flexShrink: 1 }}>
-                  <Text style={styles.selLabel}>SELECTED</Text>
-                  <Text style={styles.selName} numberOfLines={1}>
-                    {getPart(selPart.partId).name}
-                  </Text>
-                </View>
-                {facingsFor(getPart(selPart.partId).category).length > 1 && (
-                  <Pressable onPress={rotateSelected} style={[styles.selBtn, { borderColor: Colors.accent }]}>
-                    <Text style={[styles.selBtnText, { color: Colors.accent }]}>↻ {FACING_NAMES[selPart.r ?? 0]}</Text>
-                  </Pressable>
-                )}
-                <Pressable onPress={removeSelected} style={[styles.selBtn, { borderColor: Colors.bad }]}>
-                  <Text style={[styles.selBtnText, { color: Colors.bad }]}>Remove</Text>
-                </Pressable>
-                <Pressable accessibilityLabel="Deselect" onPress={() => setSelected(null)} style={styles.selBtn}>
-                  <Text style={styles.selBtnText}>✕</Text>
-                </Pressable>
-              </View>
-            ) : (
-              <Text pointerEvents="none" style={[styles.hint, dragHint === 'remove' && { color: Colors.bad }]}>
-                {dragHint === 'remove'
-                  ? 'Release to put it back in the bin'
-                  : dragHint === 'move'
-                    ? 'Release to drop it here (swaps if taken)'
-                    : toast ?? 'Tap a part to select it · drag to move · drag empty space to spin'}
-              </Text>
-            )}
-          </View>
+          )}
         </View>
+
         {/* Always-visible build status, so what's missing never scrolls away. */}
         {missing.length > 0 ? (
           <View style={[styles.status, styles.statusBad]}>
-            <Text style={[styles.statusTitle, { color: Colors.bad }]}>STILL NEEDS</Text>
-            <View style={styles.statusItems}>
+            <Text style={[styles.statusTitle, { color: Colors.bad }]}>NEEDS</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusItems}>
               {missing.map((c) => (
-                <Text key={c.label} style={[styles.statusItem, { color: Colors.text, borderColor: Colors.bad }]}>
-                  {c.short}
-                </Text>
+                <Pressable
+                  key={c.label}
+                  onPress={() => {
+                    if (c.filter && FILTERS.some((f) => f.id === c.filter)) {
+                      setFilter(c.filter as FilterId);
+                      setTab('parts');
+                      setSelected(null);
+                      setHeld(null);
+                    }
+                  }}>
+                  <Text style={styles.statusItem}>{c.short}</Text>
+                </Pressable>
               ))}
-            </View>
-
+            </ScrollView>
           </View>
         ) : (
           <View style={[styles.status, styles.statusGood]}>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.statusTitle, { color: Colors.good }]}>✓ READY TO FIGHT</Text>
-              {sharedWith.length > 0 && (
-                <Text style={[styles.statusTip, { color: '#FFD23F' }]}>
-                  Shares {Object.values(short).reduce((a, n) => a + n, 0) > 1 ? 'parts' : 'a part'} with {sharedWith.join(' and ')}, so {sharedWith.length > 1 ? 'they' : 'it'} {"can't"} fight alongside this bug. Tap Auto-build to rebuild this one from spare parts.
+              <Text style={[styles.statusTitle, { color: Colors.good }]}>✓ READY · {bugMoves.length} MOVE{bugMoves.length === 1 ? '' : 'S'}</Text>
+              {sharedWith.length > 0 ? (
+                <Text style={[styles.statusTip, { color: '#FFD23F' }]} numberOfLines={2}>
+                  Shares parts with {sharedWith.join(' and ')}, so {sharedWith.length > 1 ? 'they' : 'it'} {"can't"} fight alongside this bug.
                 </Text>
+              ) : (
+                tips.length > 0 && (
+                  <Text style={styles.statusTip} numberOfLines={1}>
+                    Tip: {tips.map((c) => c.short.toLowerCase()).join(', ')} would help
+                  </Text>
+                )
               )}
-              {tips.length > 0 && <Text style={styles.statusTip}>Tip: {tips.map((c) => c.short.toLowerCase()).join(', ')} would help</Text>}
             </View>
-            <Button label="Fight" size="sm" variant="go" onPress={() => router.dismissTo('/campaign')} />
+            <Button label="Fight ▸" size="sm" variant="go" onPress={() => router.dismissTo('/campaign')} />
           </View>
         )}
-      </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
-        {selPart && (
-          <Panel>
-            <PartDetails part={getPart(selPart.partId)} onRemove={removeSelected} />
-            {selected && selected.z !== 0 && getPart(selPart.partId).category === 'core' && (
-              <View style={{ marginTop: Spacing.sm, gap: 4 }}>
-                <Text style={styles.dim}>
-                  {selected.z === -1
-                    ? 'Slung underneath: weapons can’t reach it while the part above survives, but acid and crash landings hit it first.'
-                    : 'On top: easy to see, and easy to hit (especially from above).'}
-                </Text>
-                <Button label={selected.z === -1 ? 'Move on top' : 'Move underneath'} variant="secondary" onPress={flipSelected} />
-              </View>
-            )}
-          </Panel>
-        )}
-
-        <Panel style={{ gap: Spacing.sm }}>
-          <Text style={styles.section}>{blocked ? 'YOUR BUG STILL NEEDS' : 'READY TO FIGHT'}</Text>
-          <Checklist items={checks} />
-          {!selPart && <Text style={styles.dim}>Tap a part on the bug to see what it does and where it goes.</Text>}
-        </Panel>
-
-        <Panel style={{ gap: Spacing.sm }}>
-          <Meter
-            label="POWER"
-            value={stats.powerDraw}
-            max={Math.max(stats.powerSupply, 1)}
-            color={stats.powerDraw > stats.powerSupply ? Colors.bad : Colors.good}
-            display={`${stats.powerDraw} / ${stats.powerSupply}`}
-          />
-          <Meter label="WEIGHT" value={stats.mass} max={MAX_MASS} color={stats.mass > MAX_MASS ? Colors.bad : Colors.accent} />
-          <View style={styles.statGrid}>
-            <Text style={styles.stat}>Speed {Math.round(stats.topSpeed)}</Text>
-            <Text style={styles.stat}>Turn {stats.turnRate.toFixed(1)}</Text>
-            <Text style={styles.stat}>HP {stats.totalHp}</Text>
-            <Text style={styles.stat}>DPS {stats.dps.toFixed(1)}</Text>
-            <Text style={styles.stat}>Reach ×{stats.reach.toFixed(1)}</Text>
-            <Text style={styles.stat}>Crit {Math.round((CRIT.base + stats.crit) * 100)}%</Text>
-            <Text style={styles.stat}>
-              Dodge {Math.round(reflex(stats) * 100)}% · {dodgeCooldown(stats).toFixed(1)}s
-            </Text>
-            <Text style={styles.stat}>Poise {Math.round(maxPoise(stats))}</Text>
-            {Math.abs(stats.thrustBias) > 0.05 && (
-              <Text style={[styles.stat, { color: Colors.bad }]}>Pulls {stats.thrustBias > 0 ? 'left' : 'right'}</Text>
-            )}
-          </View>
-        </Panel>
-
-        <Text style={styles.section}>PARTS BIN · TAP A PART TO ATTACH IT</Text>
-        {GROUPS.map((group) => {
-          const items = owned.filter(([id]) => GUIDE[getPart(id).category].group === group.id);
-          if (items.length === 0) return null;
-          return (
-            <View key={group.id} style={{ gap: Spacing.sm }}>
-              <View>
-                <Text style={styles.groupTitle}>{group.title}</Text>
-                <Text style={styles.dim}>{group.blurb}</Text>
-              </View>
-              <View style={styles.bin}>
-                {items.map(([id, count]) => {
-                  const part = getPart(id);
-                  const free = Math.max(0, (avail[id] ?? 0) - (used[id] ?? 0));
-                  const onOthers = count - Math.max(0, avail[id] ?? 0);
-                  return (
-                    <Pressable
-                      key={id}
-                      onPress={() => addPart(id)}
-                      style={({ pressed }) => [styles.binItem, { width: binW }, pressed && styles.binSelected]}>
-                      <View>
-                        <PartCell part={part} size={binW - 16} dim={free <= 0} />
-                        <View style={[styles.countBadge, free <= 0 && { backgroundColor: Colors.border }]}>
-                          <Text style={styles.countText}>
-                            {free}/{count}
-                          </Text>
-                        </View>
-                      </View>
-                      <Text style={styles.binType}>{GUIDE[part.category].label}</Text>
-                      <Text style={styles.binName} numberOfLines={2}>
-                        {part.name}
-                      </Text>
-                      <Text style={[styles.binRarity, { color: RARITY_COLOR[part.rarity] }]}>{part.rarity.toUpperCase()}</Text>
-                      {part.move && (
-                        <Text style={[styles.binMove, { color: getMove(part.move).color }]} numberOfLines={1}>
-                          ★ {getMove(part.move).name}
-                        </Text>
-                      )}
-                      {onOthers > 0 && <Text style={styles.binOther}>{onOthers} on other bugs</Text>}
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-          );
-        })}
-
-        <Text style={styles.section}>SIGNATURE MOVES · {bugMoves.length} ON THIS BUG</Text>
-        <Text style={styles.dim}>
-          Moves live on parts: attach a part marked ★ and your bug has its move. In a fight each move rolls a chance to go off when the moment is
-          right; more parts carrying the same move, more often. Lose the part, lose the move.
-        </Text>
-        <View style={{ gap: Spacing.sm }}>
-          {bugMoves.map(({ id, carriers }) => {
-            const m = getMove(id);
-            const from = [...new Set(placements.map((p) => getPart(p.partId)).filter((p) => p.move === id).map((p) => p.name))];
+        {/* Drawer tabs. */}
+        <View style={styles.tabs}>
+          {(
+            [
+              ['parts', 'Parts'],
+              ['moves', `Moves ${bugMoves.length}`],
+              ['stats', 'Stats'],
+              ['saved', 'Saved'],
+            ] as [Tab, string][]
+          ).map(([id, label]) => {
+            const on = tab === id && !held && !selPart;
             return (
-              <View key={id} style={[styles.moveRow, { borderColor: m.color, backgroundColor: Colors.panelHi }]}>
-                <View style={[styles.moveDot, { backgroundColor: m.color, borderColor: m.color }]} />
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text style={[styles.partName, { color: m.color, fontSize: 15 }]}>
-                    {m.name}{' '}
-                    <Text style={styles.dim}>
-                      · {Math.round(procChance(id, carriers) * 100)}% proc · {m.cooldown}s cd{m.ultimate ? ` · ultimate (${m.cost} charge)` : ''}
-                    </Text>
-                  </Text>
-                  <Text style={styles.dim}>{m.description}</Text>
-                  <Text style={[styles.dim, { color: Colors.text }]}>
-                    ★ From {from.join(', ')}
-                    {carriers > 1 ? ` (×${carriers})` : ''}
-                  </Text>
-                </View>
-              </View>
+              <Pressable
+                key={id}
+                onPress={() => {
+                  sfx('tap');
+                  setTab(id);
+                  setSelected(null);
+                  setHeld(null);
+                }}
+                style={[styles.tab, on && styles.tabOn]}>
+                <Text style={[styles.tabText, on && { color: Colors.accent }]}>{label}</Text>
+              </Pressable>
             );
           })}
-          {bugMoves.length === 0 && <Text style={styles.dim}>No moves yet. Parts marked ★ in the bin carry one.</Text>}
         </View>
+      </View>
+      <View style={[styles.drawer, { width: editorW, paddingBottom: insets.bottom }]}>{drawer}</View>
 
-        <View style={{ gap: Spacing.sm }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <Text style={styles.section}>SAVED BUILDS</Text>
-            <Text style={styles.dim}>
-              {game.saved.length}/{MAX_SAVED}
-            </Text>
-          </View>
-          {game.saved.length === 0 ? (
-            <Text style={styles.dim}>{"Tap 💾 on the editor to save this bug's parts and moves. Load a saved build onto any bug later."}</Text>
-          ) : (
-            game.saved.map((b, i) => {
-              const ok = validateBuild(b.placements).length === 0;
-              const current = sameLoadout(b, placements);
-              return (
-                <View key={`${b.name}-${i}`} style={[styles.savedRow, current && { borderColor: Colors.accent }]}>
-                  <Pressable onPress={() => loadSaved(i)} style={{ flex: 1, gap: 2 }}>
-                    <Text style={styles.savedName} numberOfLines={1}>
-                      {b.name}
-                      {current ? <Text style={{ color: Colors.accent }}> · on this bug</Text> : null}
-                    </Text>
-                    <Text style={styles.dim} numberOfLines={1}>
-                      {b.placements.length} parts · {movesOf(b.placements.map((p) => getPart(p.partId))).map((m) => getMove(m.id).name).join(', ') || 'no moves'}
-                      {ok ? '' : ' · unfinished'}
-                    </Text>
-                  </Pressable>
-                  {!current && <Button label="Load" size="sm" variant="secondary" onPress={() => loadSaved(i)} />}
-                  <Pressable
-                    accessibilityLabel="Remove saved build"
-                    onPress={() => {
-                      if (confirmSaved !== i) {
-                        setConfirmSaved(i);
-                        return;
-                      }
-                      game.deleteSaved(i);
-                      setConfirmSaved(null);
-                    }}
-                    style={[styles.iconBtn, confirmSaved === i && { borderColor: Colors.bad, backgroundColor: '#3A1A1D', paddingHorizontal: 10 }]}>
-                    <Text style={[styles.iconBtnText, confirmSaved === i && { color: Colors.bad, fontSize: 13, fontWeight: '800' }]}>
-                      {confirmSaved === i ? 'Remove?' : '✕'}
-                    </Text>
-                  </Pressable>
-                </View>
-              );
-            })
-          )}
+      {/* A part being dragged out of the bin. */}
+      {binDrag && !binDrag.over && (
+        <View pointerEvents="none" style={[styles.floating, { left: binDrag.x - 34, top: binDrag.y - 80 }]}>
+          <PartCell part={getPart(binDrag.partId)} size={68} />
         </View>
+      )}
 
-        <View style={styles.actions}>
-          <Button label="Clear" variant="secondary" onPress={() => edit([])} style={{ flex: 0.8, paddingHorizontal: 4 }} />
-          <Button
-            label="Auto-build"
-            variant="secondary"
-            onPress={() => {
-              // Only from parts your other bugs aren't using.
-              edit(autoBuild(Object.fromEntries(Object.entries(avail).map(([id, n]) => [id, Math.max(0, n)]))));
-              setSelected(null);
-              setToast('Built from your best parts. Drag things around to tweak it.');
-            }}
-            style={{ flex: 1.3, paddingHorizontal: 4 }}
-          />
-          <Button label="Campaign" disabled={blocked} onPress={() => router.dismissTo('/campaign')} style={{ flex: 1.3, paddingHorizontal: 4 }} />
-        </View>
-      </ScrollView>
+      {/* Bug options. */}
+      <Modal visible={menu} transparent animationType="fade" onRequestClose={() => setMenu(false)}>
+        <Pressable style={styles.scrim} onPress={() => setMenu(false)}>
+          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + Spacing.lg }]} onPress={() => {}}>
+            <Text style={styles.sheetLabel}>BUG NAME</Text>
+            <TextInput
+              value={game.build.name}
+              onChangeText={(t) => game.setBugName(t.slice(0, 18))}
+              style={styles.nameInput}
+              placeholder="Name your bug"
+              placeholderTextColor={Colors.textDim}
+            />
+            <View style={styles.sheetGrid}>
+              <Button
+                label="⚡ Auto-build"
+                variant="secondary"
+                onPress={() => {
+                  autoBuildNow();
+                  setMenu(false);
+                }}
+                style={styles.sheetBtn}
+              />
+              <Button
+                label="💾 Save build"
+                variant="secondary"
+                onPress={() => {
+                  saveCurrent();
+                  setMenu(false);
+                }}
+                style={styles.sheetBtn}
+              />
+              {game.bugs.length < MAX_BUGS && (
+                <Button
+                  label="⧉ Copy bug"
+                  variant="secondary"
+                  onPress={() => {
+                    const { dropped } = fitToParts(placements, availableFor(game.inventory, [...game.bugs, { placements: [] }], game.bugs.length));
+                    game.addBug(game.active);
+                    forgetHistory();
+                    setSelected(null);
+                    setMenu(false);
+                    setToast(dropped ? `Copied without ${dropped} part${dropped > 1 ? 's' : ''} you don't have spare` : 'Copied. Tweak away!');
+                  }}
+                  style={styles.sheetBtn}
+                />
+              )}
+              <Button
+                label="Clear parts"
+                variant="secondary"
+                onPress={() => {
+                  edit([]);
+                  setSelected(null);
+                  setMenu(false);
+                }}
+                style={styles.sheetBtn}
+              />
+              {game.bugs.length > 1 && (
+                <Button
+                  label={confirmDelete ? 'Tap again to scrap' : '🗑 Scrap bug'}
+                  variant="danger"
+                  onPress={() => {
+                    if (!confirmDelete) {
+                      setConfirmDelete(true);
+                      return;
+                    }
+                    game.deleteBug(game.active);
+                    setConfirmDelete(false);
+                    forgetHistory();
+                    setSelected(null);
+                    setMenu(false);
+                  }}
+                  style={styles.sheetBtn}
+                />
+              )}
+            </View>
+            <Button label="Done" onPress={() => setMenu(false)} />
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+function ToolBtn({ icon, label, disabled, onPress }: { icon: string; label: string; disabled?: boolean; onPress: () => void }) {
+  return (
+    <Pressable accessibilityLabel={label} disabled={disabled} onPress={onPress} style={[styles.toolBtn, disabled && { opacity: 0.3 }]}>
+      <Text style={styles.toolBtnText}>{icon}</Text>
+      <Text style={styles.toolBtnLabel}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function MiniMeter({ label, value, max, bad }: { label: string; value: number; max: number; bad: boolean }) {
+  return (
+    <View style={styles.mini}>
+      <Text style={styles.miniLabel}>{label}</Text>
+      <View style={styles.miniTrack}>
+        <View style={[styles.miniFill, { width: `${Math.min(1, value / max) * 100}%`, backgroundColor: bad ? Colors.bad : Colors.good }]} />
+      </View>
+      <Text style={[styles.miniText, bad && { color: Colors.bad }]}>
+        {value}/{max}
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.bg },
-  top: { alignSelf: 'center' },
-  content: {
-    padding: Spacing.lg,
-    gap: Spacing.lg,
-    width: '100%',
-    maxWidth: MaxContentWidth,
-    alignSelf: 'center',
-    paddingBottom: Spacing.xl * 2,
+  root: { flex: 1, backgroundColor: Colors.bg, alignItems: 'center' },
+  column: { alignSelf: 'center' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: Spacing.sm, paddingVertical: 6 },
+  hBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.panel,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
-  bugTabs: { gap: 6, paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm },
+  hBtnText: { color: Colors.text, fontSize: 26, lineHeight: 30, fontWeight: '700' },
+  bugTabs: { gap: 6, alignItems: 'center', paddingRight: 4 },
   bugTab: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -837,173 +899,121 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderRadius: 999,
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    maxWidth: 170,
+    paddingVertical: 7,
+    maxWidth: 190,
   },
   bugTabOn: { backgroundColor: Colors.accent, borderColor: Colors.accent },
-  bugTabAdd: { borderStyle: 'dashed', borderColor: Colors.accent, backgroundColor: 'transparent' },
-  bugTabText: { color: Colors.text, fontFamily: Fonts.display, fontSize: 14 },
-  bugTabTag: { color: '#58C7FF', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  bugTabAdd: { borderStyle: 'dashed', borderColor: Colors.accent, backgroundColor: 'transparent', paddingHorizontal: 14 },
+  bugTabText: { color: Colors.text, fontFamily: Fonts.display, fontSize: 15 },
+  bugTag: { color: '#58C7FF', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
   bugDot: { width: 8, height: 8, borderRadius: 4 },
-  nameRow: { flexDirection: 'row', alignItems: 'center', paddingRight: Spacing.lg, gap: 6 },
-  iconBtn: {
-    minWidth: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.panel,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  iconBtnText: { color: Colors.text, fontSize: 17 },
-  nameInput: {
-    color: Colors.text,
-    fontFamily: Fonts.display,
-    fontSize: 26,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-  },
-  selChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: 'rgba(12,14,18,0.9)',
-    borderColor: Colors.accent,
-    borderWidth: 1.5,
-    borderRadius: 16,
-    paddingVertical: 5,
-    paddingHorizontal: 8,
-    marginHorizontal: Spacing.md,
-  },
-  selLabel: { color: Colors.accent, fontSize: 9, fontWeight: '900', letterSpacing: 1.4 },
-  selName: { color: Colors.text, fontFamily: Fonts.display, fontSize: 16 },
-  selBtn: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
-  selBtnText: { color: Colors.text, fontSize: 12, fontWeight: '800' },
-  status: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    marginHorizontal: Spacing.lg,
-    marginTop: Spacing.xs,
-    paddingVertical: 7,
-    paddingHorizontal: Spacing.md,
-    borderRadius: 14,
-    borderWidth: 1.5,
-  },
-  statusBad: { borderColor: Colors.bad, backgroundColor: '#2A1719', flexWrap: 'wrap' },
-  statusGood: { borderColor: Colors.good, backgroundColor: '#13261E' },
-  statusTitle: { fontSize: 11, fontWeight: '900', letterSpacing: 1.4 },
-  statusItems: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, flexShrink: 1 },
-  statusItem: { fontSize: 12, fontWeight: '800', borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, overflow: 'hidden' },
-  statusTip: { color: Colors.textDim, fontSize: 11, marginTop: 1 },
-  editorTools: { position: 'absolute', left: Spacing.sm, top: 48, gap: 8, zIndex: 3 },
+  toolsLeft: { position: 'absolute', left: Spacing.sm, top: Spacing.sm, gap: 6 },
+  toolsRight: { position: 'absolute', right: Spacing.sm, top: Spacing.sm, gap: 5, alignItems: 'flex-end' },
   toolBtn: {
-    width: 48,
-    paddingVertical: 5,
+    width: 46,
+    paddingVertical: 4,
     borderRadius: 12,
     alignItems: 'center',
     backgroundColor: 'rgba(15,18,24,0.85)',
     borderWidth: 1.5,
     borderColor: Colors.border,
   },
-  toolBtnText: { color: Colors.text, fontSize: 20, lineHeight: 24 },
-  toolBtnLabel: { color: Colors.textDim, fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
-  binMove: { fontSize: 10, fontWeight: '900' },
-  binOther: { color: Colors.textDim, fontSize: 10, fontWeight: '700' },
-  savedRow: {
+  toolBtnText: { color: Colors.text, fontSize: 19, lineHeight: 22 },
+  toolBtnLabel: { color: Colors.textDim, fontSize: 8.5, fontWeight: '900', letterSpacing: 0.5 },
+  viewBtn: {
+    backgroundColor: 'rgba(15,18,24,0.85)',
+    borderColor: Colors.border,
+    borderWidth: 1.5,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+  },
+  viewBtnText: { color: Colors.text, fontSize: 12, fontWeight: '800' },
+  mini: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    padding: 10,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    backgroundColor: Colors.panel,
-  },
-  savedName: { color: Colors.text, fontSize: 15, fontWeight: '800' },
-  editorOverlay: { ...StyleSheet.absoluteFill, justifyContent: 'space-between', alignItems: 'center', paddingVertical: Spacing.sm },
-  views: { flexDirection: 'row', gap: 6 },
-  viewBtn: {
-    backgroundColor: 'rgba(20,23,28,0.8)',
-    borderColor: Colors.border,
-    borderWidth: 1,
+    gap: 5,
+    backgroundColor: 'rgba(15,18,24,0.8)',
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
   },
-  viewBtnText: { color: Colors.text, fontSize: 12, fontWeight: '700' },
+  miniLabel: { color: Colors.text, fontSize: 11 },
+  miniTrack: { width: 44, height: 6, borderRadius: 3, backgroundColor: Colors.bgDeep, overflow: 'hidden' },
+  miniFill: { height: '100%', borderRadius: 3 },
+  miniText: { color: Colors.textDim, fontSize: 10.5, fontWeight: '800', fontVariant: ['tabular-nums'], minWidth: 42, textAlign: 'right' },
+  hintWrap: { position: 'absolute', left: 0, right: 0, bottom: Spacing.sm, alignItems: 'center', paddingHorizontal: Spacing.md },
   hint: {
     color: Colors.text,
-    fontSize: 12,
+    fontSize: 12.5,
+    fontWeight: '600',
     textAlign: 'center',
-    backgroundColor: 'rgba(20,23,28,0.75)',
+    backgroundColor: 'rgba(15,18,24,0.82)',
     paddingHorizontal: Spacing.md,
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderRadius: 999,
     overflow: 'hidden',
   },
-  detailRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
-  statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  stat: {
+  emptyWrap: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  status: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.md,
+    marginTop: 6,
+    paddingVertical: 6,
+    paddingHorizontal: Spacing.md,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    minHeight: 44,
+  },
+  statusBad: { borderColor: Colors.bad, backgroundColor: '#2A1719' },
+  statusGood: { borderColor: Colors.good, backgroundColor: '#13261E' },
+  statusTitle: { fontSize: 11, fontWeight: '900', letterSpacing: 1.3 },
+  statusItems: { gap: 5, alignItems: 'center' },
+  statusItem: {
     color: Colors.text,
     fontSize: 12,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-    backgroundColor: Colors.panelHi,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
+    fontWeight: '800',
+    borderWidth: 1,
+    borderColor: Colors.bad,
     borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     overflow: 'hidden',
   },
-  error: { color: Colors.bad, fontSize: 13 },
-  partName: { fontSize: 16, fontWeight: '800' },
-  dim: { color: Colors.textDim, fontSize: 13, fontWeight: '400' },
-  statsLine: { color: Colors.text, fontSize: 12, marginTop: 2 },
-  section: { color: Colors.accent, fontSize: 11, fontWeight: '900', letterSpacing: 1.6 },
-  bin: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  binItem: {
-    alignItems: 'center',
-    gap: 3,
-    paddingVertical: Spacing.sm,
-    borderRadius: 16,
+  statusTip: { color: Colors.textDim, fontSize: 11, marginTop: 1 },
+  tabs: { flexDirection: 'row', marginTop: 6, borderBottomWidth: 1, borderBottomColor: Colors.border, paddingHorizontal: Spacing.sm },
+  tab: { flex: 1, alignItems: 'center', paddingVertical: 9, borderBottomWidth: 2.5, borderBottomColor: 'transparent' },
+  tabOn: { borderBottomColor: Colors.accent },
+  tabText: { color: Colors.textDim, fontFamily: Fonts.display, fontSize: 15 },
+  drawer: { flex: 1, backgroundColor: Colors.bgDeep },
+  floating: { position: 'absolute', opacity: 0.92, transform: [{ scale: 1.05 }] },
+  scrim: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: Colors.panel,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    width: '100%',
+    maxWidth: MaxContentWidth,
+    alignSelf: 'center',
     borderWidth: 1,
     borderColor: Colors.border,
-    borderTopColor: Colors.panelEdge,
-    backgroundColor: Colors.panel,
   },
-  binSelected: { borderColor: Colors.accent, backgroundColor: Colors.panelHi },
-  binName: { color: Colors.textDim, fontSize: 10, textAlign: 'center', minHeight: 26, paddingHorizontal: 2 },
-  binRarity: { fontSize: 9, fontWeight: '900', letterSpacing: 1 },
-  binType: { color: Colors.text, fontSize: 11, fontWeight: '800' },
-  groupTitle: { color: Colors.text, fontFamily: Fonts.display, fontSize: 18, letterSpacing: 0.4 },
-  guideLine: { color: Colors.text, fontSize: 13, lineHeight: 18 },
-  guideKey: { color: Colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
-  checklist: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  check: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3 },
-  checkText: { fontSize: 12, fontWeight: '700' },
-  countBadge: {
-    position: 'absolute',
-    top: -5,
-    right: -7,
-    backgroundColor: Colors.accent,
-    borderRadius: 999,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderWidth: 1.5,
-    borderColor: Colors.panel,
-  },
-  countText: { color: Colors.bg, fontSize: 10, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  actions: { flexDirection: 'row', gap: Spacing.sm },
-  moveRow: {
-    flexDirection: 'row',
-    gap: Spacing.md,
-    alignItems: 'flex-start',
-    padding: Spacing.md,
-    borderRadius: 16,
-    borderWidth: 1.5,
+  sheetLabel: { color: Colors.accent, fontSize: 11, fontWeight: '900', letterSpacing: 1.4 },
+  nameInput: {
+    color: Colors.text,
+    fontFamily: Fonts.display,
+    fontSize: 24,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.bgDeep,
+    borderRadius: 12,
+    borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: Colors.panel,
   },
-  moveDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, marginTop: 2 },
+  sheetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  sheetBtn: { flexGrow: 1, minWidth: '45%' },
 });
