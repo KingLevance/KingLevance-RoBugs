@@ -136,19 +136,6 @@ type Touch = {
   last: { cell: Cell | null; inside: boolean };
 };
 
-/** One line per part another bug is using, or one line per bug when that bug holds several. */
-function sharedNotes(short: Record<string, number>, holder: (id: string) => string): string[] {
-  const byHolder = new Map<string, [string, number][]>();
-  for (const [id, n] of Object.entries(short)) byHolder.set(holder(id), [...(byHolder.get(holder(id)) ?? []), [id, n]]);
-  const out: string[] = [];
-  for (const [who, list] of byHolder) {
-    const total = list.reduce((a, [, n]) => a + n, 0);
-    if (list.length > 2) out.push(`${total} parts are on ${who}`);
-    else for (const [id, n] of list) out.push(`${n > 1 ? `${n}× ` : ''}${getPart(id).name} ${n > 1 ? 'are' : 'is'} on ${who}`);
-  }
-  return out;
-}
-
 const UNDO_STEPS = 40;
 type Snapshot = { placements: Placement[]; equipped: MoveId[] };
 /** Same parts (in any order) and the same moves. */
